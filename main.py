@@ -1,8 +1,15 @@
 
+import yaml
+from performance_models import Service, Edge, System, QueueingNetworkType
 
 def main():
-    print("Hello, World!")
-    
+
+    with open("workload.yaml", "r") as file:
+        workload = yaml.safe_load(file)
+
+    service_spec = workload['services']
+
+    system = System('STELAR', [], service_spec, QueueingNetworkType.OPEN)
 
 
 if __name__ == "__main__":
