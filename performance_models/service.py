@@ -2,14 +2,25 @@ from performance_models.edge import Edge
 
 
 class Service():
+    __num_of_services = 0
+
+
     def __init__(self, parent_system, name,gamma = 0, mu=0, replicas=1):
-        
+        self.__id = Service.__num_of_services
         self.__parent_system = parent_system
         self.__name = name
         self.__adjacency_list = []
         self.__gamma = gamma
         self.__mu = mu   
         self.__replicas = replicas
+
+        Service.__num_of_services += 1
+
+    def set_replicas(self, replicas):
+        self.__replicas = replicas
+
+    def get_id(self):
+        return self.__id
 
     def register_edges(self, edges_spec):
         total_probabiliy = 0
@@ -49,10 +60,3 @@ class Service():
     
     def add_edge(self, edge : Edge):
         self.get_adjacency_list().append(edge)
-
-class ServiceGraph():
-    def __init__(self, services):
-        self.__services = services
-
-    def get_services(self):
-        return self.__services

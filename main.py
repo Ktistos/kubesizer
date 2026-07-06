@@ -9,7 +9,9 @@ def main():
 
     service_spec = workload['services']
 
-    system = System('STELAR', [], service_spec, QueueingNetworkType.OPEN)
+    system = System('STELAR', service_spec, QueueingNetworkType.OPEN)
+
+    print(system.solve())
 
 
 if __name__ == "__main__":
