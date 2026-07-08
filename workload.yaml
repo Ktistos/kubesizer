@@ -1,22 +1,40 @@
 services:
   api:
-    gamma: 10.0
-    mu: 40.0
-    replicas: 2
+    gamma: 20.0
+    mu: 100.0
+    replicas: 3
     routes:
-      auth: 0.25
-      db: 0.65
+      auth: 0.20
+      db: 0.60
+      cache: 0.10
+      worker: 0.05
 
   auth:
     gamma: 0.0
-    mu: 25.0
-    replicas: 1
+    mu: 50.0
+    replicas: 2
     routes:
       db: 0.80
+      cache: 0.05
 
   db:
     gamma: 0.0
-    mu: 18.0
-    replicas: 1
+    mu: 5.0
+    replicas: 5
     routes:
-      api: 0.05
+      cache: 0.05
+
+  cache:
+    gamma: 0.0
+    mu: 80.0
+    replicas: 2
+    routes:
+      worker: 0.05
+
+  worker:
+    gamma: 0.0
+    mu: 50.0
+    replicas: 2
+    routes:
+      db: 0.80
+      cache: 0.05

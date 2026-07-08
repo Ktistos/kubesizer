@@ -18,6 +18,8 @@ class System():
         #type refers to either open or closed system
         self.__type = type
         self.__services = {}
+        self.__r_min=0
+        self.__is_stable = False
 
         for service in service_spec:
 
@@ -27,6 +29,9 @@ class System():
 
         for service, service_component in self.get_services().items():
             service_component.register_edges(service_spec[service].get('routes', {}))
+
+        self.__utilizations = [ 0 for _ in range(len(self.get_services())) ]
+        self.__latencies = [0 for _ in range(len(self.get_services()))]
 
     def __initialize_system_input(self):
         num_of_services = len(self.get_services())
@@ -66,13 +71,13 @@ class System():
         }
 
 
-    def __is_stable(self, utilizations):
+    def is_stable(self, utilizations):
         for utilization in utilizations:
             if utilization >= 1.0:
                 return False
         return True
     
-    def __get_bottleneck_service(self, utilizations):
+    def get_bottleneck_service(self, utilizations):
         max_index = np.argmax(utilizations)
         return list(self.get_services().values())[max_index].get_name()
     
@@ -120,11 +125,43 @@ class System():
     
     def get_services(self):
         return self.__services
+    
+    def get_r_min(self):
+        return self.__r_min
 
+    def get_system_replicas(self):
+        replicas = [ 0 for _ in range(len(self.get_services())) ]
+        for service in self.get_services().values():
+            service_id = service.get_id()
+            replicas[service_id] = service.get_replicas()
+        return replicas
+    
+    def configure_system_replicas(self, replicas_config):
+        for service in self.get_services().values():
+            service_id = service.get_id()
+            service.set_replicas(replicas_config[service_id])
+    
+    def get_utilizations(self):
+        return self.__utilizations
+
+    def get_latencies(self):
+        return self.__latencies
+    
+    def get_stability(self):
+        return self.__is_stable
+    
+    def set_stability(self, stability):
+        self.__is_stable = stability
+
+    def setUtilizations(self, utilizations):
+        self.__utilizations = utilizations
+
+    def setLatencies(self, latencies):
+        self.__latencies = latencies
 
     def configure_system_replicas(self, replicas_config):
         for service in self.get_services().values():
-            service_id = service.get_name().get_id()
+            service_id = service.get_id()
             service.set_replicas(replicas_config[service_id])
 
     def solve(self):
@@ -150,11 +187,13 @@ class System():
         capacities = replicas * mus
         utilizations = lambdas / capacities
 
+        self.__r_min = np.sum((lambdas / gammas.sum()) * (1 / mus))
+
         system_metrics = {}
 
-        system_metrics["stable"] = self.__is_stable(utilizations)
-        system_metrics["bottleneck_service"] = self.__get_bottleneck_service(utilizations)
-        system_metrics["services"] = {}
+        self.set_stability(self.is_stable(utilizations))
+        system_metrics["bottleneck_service"] = self.get_bottleneck_service(utilizations)
+        system_metrics["services"] = [0 for _ in range(num_of_services)]
 
         lambdas = lambdas.tolist()
         mus = mus.tolist()
@@ -163,20 +202,9 @@ class System():
         capacities = capacities.tolist()
         utilizations = utilizations.tolist()
 
-        for service_name in self.get_services():
-            service_index = self.get_service(service_name).get_id()
-            service_latency = self.__mmc_latency(lambdas[service_index], mus[service_index], replicas[service_index])
-            system_metrics["services"][service_name] = {
-                "arrival_rate": lambdas[service_index],
-                "external_arrival_rate": gammas[service_index],
-                "service_rate_per_replica": mus[service_index],
-                "replicas": replicas[service_index],
-                "capacity": capacities[service_index],
-                "utilization": utilizations[service_index],
-                "service_latency": service_latency
-            }
+        self.setUtilizations(utilizations)
+        self.setLatencies([self.__mmc_latency(lambdas[i], mus[i], replicas[i]) for i in range(num_of_services)])
 
-        return system_metrics
 
 
 
