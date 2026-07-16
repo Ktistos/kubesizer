@@ -23,7 +23,7 @@ def main():
 
     services = system.get_services()
 
-    
+    system.simulate(100000)
     
     system.solve()
 
@@ -31,7 +31,7 @@ def main():
     
     print(system.get_system_replicas())
 
-
+    """
     while not stop_optimization(damage):
 
         system.solve()
@@ -80,8 +80,7 @@ def main():
         replicas[min_damage_index] = (replicas[min_damage_index] - 1) if (replicas[min_damage_index] >1) else 1
 
         system.configure_system_replicas(replicas)
-
-    print(replicas)
+    """
 
 
 

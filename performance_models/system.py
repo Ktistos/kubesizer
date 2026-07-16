@@ -1,7 +1,9 @@
 from enum import Enum
 import math
-
+import simpy
 from performance_models.service import Service
+
+import random
 
 import numpy as np
 
@@ -20,6 +22,8 @@ class System():
         self.__services = {}
         self.__r_min=0
         self.__is_stable = False
+        self.__external_traffic_services = []
+
 
         for service in service_spec:
 
@@ -46,6 +50,10 @@ class System():
             order_index = service.get_id()
             service_replicas = service.get_replicas()
             service_gamma = service.get_gamma()
+
+            if service_gamma > 0:
+                self.get_external_traffic_services().append(service)
+
             service_mu = service.get_mu()
             gammas.append(service_gamma)
             mus.append(service_mu)
@@ -69,6 +77,10 @@ class System():
             "replicas": replicas,
             "routing_probability_matrix": routing_probability_matrix
         }
+
+    def get_external_traffic_services(self):
+        return self.__external_traffic_services
+
 
 
     def is_stable(self, utilizations):
@@ -164,6 +176,7 @@ class System():
             service_id = service.get_id()
             service.set_replicas(replicas_config[service_id])
 
+ 
     def solve(self):
 
         system_input = self.__initialize_system_input()
@@ -206,6 +219,14 @@ class System():
         self.setLatencies([self.__mmc_latency(lambdas[i], mus[i], replicas[i]) for i in range(num_of_services)])
 
 
+    def simulate(self, sim_duration ):
+        env = simpy.Environment()
 
+
+        for service in self.get_services().values():
+            service.set_active_simulation_resource(simpy.Resource(env,capacity = service.get_replicas()))
+            env.process(service.generate_external_traffic(env))
+
+        env.run(until = sim_duration)
 
 
