@@ -1,4 +1,4 @@
-from performance_models.edge import Edge
+from .edge import Edge
 import random
 
 class Service():

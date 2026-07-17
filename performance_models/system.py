@@ -1,7 +1,8 @@
-from enum import Enum
 import math
 import simpy
-from performance_models.service import Service
+from enum import Enum
+from .service import Service
+from metrics import Metrics
 
 import random
 
@@ -15,27 +16,23 @@ class QueueingNetworkType(str, Enum):
 
 class System():
 
-    def __init__(self, name,service_spec, type : QueueingNetworkType):
+    def __init__(self, name,workload, type : QueueingNetworkType):
         self.__name = name
         #type refers to either open or closed system
         self.__type = type
         self.__services = {}
-        self.__r_min=0
-        self.__is_stable = False
         self.__external_traffic_services = []
 
 
-        for service in service_spec:
+        for service in workload:
 
-            service_component = Service(self, service, service_spec[service]['gamma'], service_spec[service]['mu'], service_spec[service]['replicas'])
+            service_component = Service(self, service, workload[service]['gamma'], workload[service]['mu'], workload[service]['replicas'])
 
             self.add_service(service,service_component)
 
         for service, service_component in self.get_services().items():
-            service_component.register_edges(service_spec[service].get('routes', {}))
+            service_component.register_edges(workload[service].get('routes', {}))
 
-        self.__utilizations = [ 0 for _ in range(len(self.get_services())) ]
-        self.__latencies = [0 for _ in range(len(self.get_services()))]
 
     def __initialize_system_input(self):
         num_of_services = len(self.get_services())
@@ -78,10 +75,13 @@ class System():
             "routing_probability_matrix": routing_probability_matrix
         }
 
+
+
+    def get_type(self):
+        return self.__type
+
     def get_external_traffic_services(self):
         return self.__external_traffic_services
-
-
 
     def is_stable(self, utilizations):
         for utilization in utilizations:
@@ -89,9 +89,6 @@ class System():
                 return False
         return True
     
-    def get_bottleneck_service(self, utilizations):
-        max_index = np.argmax(utilizations)
-        return list(self.get_services().values())[max_index].get_name()
     
     def __mmc_latency(self,service_lambda, per_replica_mu, replicas):
         if per_replica_mu <= 0 or replicas <= 0:
@@ -126,9 +123,6 @@ class System():
     def get_name(self):
         return self.__name
 
-    def get_type(self):
-        return self.__type
-
     def add_service(self, name, component):
         self.__services[name] = component
 
@@ -137,9 +131,6 @@ class System():
     
     def get_services(self):
         return self.__services
-    
-    def get_r_min(self):
-        return self.__r_min
 
     def get_system_replicas(self):
         replicas = [ 0 for _ in range(len(self.get_services())) ]
@@ -153,23 +144,6 @@ class System():
             service_id = service.get_id()
             service.set_replicas(replicas_config[service_id])
     
-    def get_utilizations(self):
-        return self.__utilizations
-
-    def get_latencies(self):
-        return self.__latencies
-    
-    def get_stability(self):
-        return self.__is_stable
-    
-    def set_stability(self, stability):
-        self.__is_stable = stability
-
-    def setUtilizations(self, utilizations):
-        self.__utilizations = utilizations
-
-    def setLatencies(self, latencies):
-        self.__latencies = latencies
 
     def configure_system_replicas(self, replicas_config):
         for service in self.get_services().values():
@@ -199,29 +173,19 @@ class System():
         #calculating the capacities and utilizations for each service
         capacities = replicas * mus
         utilizations = lambdas / capacities
-
-        self.__r_min = np.sum((lambdas / gammas.sum()) * (1 / mus))
-
-        system_metrics = {}
-
-        self.set_stability(self.is_stable(utilizations))
-        system_metrics["bottleneck_service"] = self.get_bottleneck_service(utilizations)
-        system_metrics["services"] = [0 for _ in range(num_of_services)]
-
+  
         lambdas = lambdas.tolist()
         mus = mus.tolist()
-        gammas = gammas.tolist()
         replicas = replicas.tolist()
-        capacities = capacities.tolist()
         utilizations = utilizations.tolist()
 
-        self.setUtilizations(utilizations)
-        self.setLatencies([self.__mmc_latency(lambdas[i], mus[i], replicas[i]) for i in range(num_of_services)])
+        latencies = [self.__mmc_latency(lambdas[i], mus[i], replicas[i]) for i in range(num_of_services)]
+    
+        return Metrics(utilizations,latencies, self.is_stable(latencies))
 
-
-    def simulate(self, sim_duration ):
+    def simulate(self, sim_duration):
         env = simpy.Environment()
-
+        
 
         for service in self.get_services().values():
             service.set_active_simulation_resource(simpy.Resource(env,capacity = service.get_replicas()))
