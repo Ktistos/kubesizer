@@ -2,7 +2,7 @@ import math
 import simpy
 from enum import Enum
 from .service import Service
-from metrics import Metrics
+from metrics import Metrics, SimulationMetricsCollector
 
 import random
 
@@ -24,9 +24,16 @@ class System():
         self.__external_traffic_services = []
 
 
-        for service in workload:
+        for service_id, service in enumerate(workload):
 
-            service_component = Service(self, service, workload[service]['gamma'], workload[service]['mu'], workload[service]['replicas'])
+            service_component = Service(
+                self,
+                service,
+                workload[service]['gamma'],
+                workload[service]['mu'],
+                workload[service]['replicas'],
+                service_id=service_id,
+            )
 
             self.add_service(service,service_component)
 
@@ -178,20 +185,21 @@ class System():
         return Metrics(utilizations, latencies, self.__is_stable(utilizations))
 
     def simulate(self, sim_duration):
+        analytical_metrics = self.solve()
+        if not analytical_metrics.get_stability():
+            return analytical_metrics
+
         env = simpy.Environment()
-        metrics = Metrics.for_simulation(len(self.get_services()))
+        metrics_collector = SimulationMetricsCollector(len(self.get_services()))
 
         for service in self.get_services().values():
             service.set_active_simulation_resource(simpy.Resource(env,capacity = service.get_replicas()))
-            env.process(service.generate_external_traffic(env, metrics))
+            env.process(service.generate_external_traffic(env, metrics_collector))
 
         env.run(until = sim_duration)
 
-        solver_metrics = self.solve()
-        metrics.finalize_simulation(
+        return metrics_collector.finalize(
             sim_duration,
             self.get_system_replicas(),
-            solver_metrics.get_stability(),
+            analytical_metrics.get_stability(),
         )
-        return metrics
-

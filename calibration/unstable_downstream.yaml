@@ -1,0 +1,11 @@
+gateway:
+  gamma: 8.0
+  mu: 30.0
+  replicas: 2
+  routes:
+    database: 0.8
+
+database:
+  gamma: 0.0
+  mu: 4.0
+  replicas: 1

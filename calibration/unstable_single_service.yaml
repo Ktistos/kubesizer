@@ -1,0 +1,4 @@
+api:
+  gamma: 12.0
+  mu: 5.0
+  replicas: 2

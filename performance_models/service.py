@@ -5,8 +5,20 @@ class Service():
     __num_of_services = 0
 
 
-    def __init__(self, parent_system, name,gamma = 0, mu=0, replicas=1):
-        self.__id = Service.__num_of_services
+    def __init__(
+        self,
+        parent_system,
+        name,
+        gamma=0,
+        mu=0,
+        replicas=1,
+        service_id=None,
+    ):
+        if service_id is None:
+            service_id = Service.__num_of_services
+            Service.__num_of_services += 1
+
+        self.__id = service_id
         self.__parent_system = parent_system
         self.__name = name
         self.__adjacency_list = []
@@ -14,8 +26,6 @@ class Service():
         self.__mu = mu   
         self.__replicas = replicas
         self.__active_simulation_resource = None
-
-        Service.__num_of_services += 1
 
     def set_active_simulation_resource(self,resource):
         self.__active_simulation_resource = resource
@@ -70,7 +80,7 @@ class Service():
         self.get_adjacency_list().append(edge)
 
 
-    def generate_external_traffic(self, env, metrics):
+    def generate_external_traffic(self, env, metrics_collector):
         
         sim_resource = self.get_active_simulation_resource()
 
@@ -80,23 +90,22 @@ class Service():
             successive_arrival_interval = random.expovariate(gamma)
             yield env.timeout(successive_arrival_interval)
             
-            env.process(self.serve_request(env, metrics))
+            env.process(self.serve_request(env, metrics_collector))
 
-    def serve_request(self, env, metrics):
+    def serve_request(self, env, metrics_collector):
         arrival_time = env.now
         sim_resource = self.get_active_simulation_resource()
         with sim_resource.request() as req:
             #request enters the queue
             yield req
 
-            metrics.record_service_start(self.get_id(), env.now)
-
             #request is served
             job_service_time = random.expovariate(self.get_mu())
+            metrics_collector.record_service_start(self.get_id(), env.now)
             
             yield env.timeout(job_service_time)
 
-            metrics.record_request_completion(
+            metrics_collector.record_request_completion(
                 self.get_id(), env.now - arrival_time, env.now
             )
 
@@ -112,4 +121,4 @@ class Service():
             route_service = random.choices(possible_routes, weights=route_probabilities, k=1)[0]
 
             if route_service is not None:
-                env.process(route_service.serve_request(env, metrics))
+                env.process(route_service.serve_request(env, metrics_collector))

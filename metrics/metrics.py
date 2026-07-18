@@ -16,67 +16,6 @@ class Metrics:
         self.__p95_latencies = list(p95_latencies or [])
         self.__p99_latencies = list(p99_latencies or [])
 
-        service_count = len(self.__mean_utilizations)
-        self.__response_times = [[] for _ in range(service_count)]
-        self.__busy_counts = [0 for _ in range(service_count)]
-        self.__busy_areas = [0.0 for _ in range(service_count)]
-        self.__last_busy_updates = [0.0 for _ in range(service_count)]
-
-    @classmethod
-    def for_simulation(cls, service_count):
-        empty_metrics = [0.0 for _ in range(service_count)]
-        return cls(
-            empty_metrics,
-            empty_metrics,
-            stability=False,
-            p95_latencies=empty_metrics,
-            p99_latencies=empty_metrics,
-        )
-
-    @staticmethod
-    def __percentile(values, percentile):
-        if not values:
-            return 0.0
-
-        sorted_values = sorted(values)
-        position = (len(sorted_values) - 1) * percentile / 100
-        lower = int(position)
-        upper = min(lower + 1, len(sorted_values) - 1)
-        weight = position - lower
-        return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
-
-    def __update_busy_area(self, service_id, timestamp):
-        elapsed = timestamp - self.__last_busy_updates[service_id]
-        self.__busy_areas[service_id] += self.__busy_counts[service_id] * elapsed
-        self.__last_busy_updates[service_id] = timestamp
-
-    def record_service_start(self, service_id, timestamp):
-        self.__update_busy_area(service_id, timestamp)
-        self.__busy_counts[service_id] += 1
-
-    def record_request_completion(self, service_id, response_time, timestamp):
-        self.__update_busy_area(service_id, timestamp)
-        self.__busy_counts[service_id] -= 1
-        self.__response_times[service_id].append(response_time)
-
-    def finalize_simulation(self, simulation_duration, service_capacities, stability):
-        for service_id, capacity in enumerate(service_capacities):
-            self.__update_busy_area(service_id, simulation_duration)
-
-            response_times = self.__response_times[service_id]
-            self.__mean_utilizations[service_id] = (
-                self.__busy_areas[service_id] / (capacity * simulation_duration)
-                if capacity > 0 and simulation_duration > 0
-                else 0.0
-            )
-            self.__mean_latencies[service_id] = (
-                sum(response_times) / len(response_times) if response_times else 0.0
-            )
-            self.__p95_latencies[service_id] = self.__percentile(response_times, 95)
-            self.__p99_latencies[service_id] = self.__percentile(response_times, 99)
-
-        self.__stability = stability
-
     def is_nearly_equal(
         self,
         other,

@@ -1,0 +1,13 @@
+frontend:
+  gamma: 3.0
+  mu: 20.0
+  replicas: 1
+  routes:
+    worker: 0.8
+
+worker:
+  gamma: 0.0
+  mu: 3.0
+  replicas: 1
+  routes:
+    frontend: 0.4
