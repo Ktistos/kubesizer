@@ -70,7 +70,7 @@ class Service():
         self.get_adjacency_list().append(edge)
 
 
-    def generate_external_traffic(self,env):
+    def generate_external_traffic(self, env, metrics):
         
         sim_resource = self.get_active_simulation_resource()
 
@@ -80,18 +80,25 @@ class Service():
             successive_arrival_interval = random.expovariate(gamma)
             yield env.timeout(successive_arrival_interval)
             
-            env.process(self.serve_request(env))
+            env.process(self.serve_request(env, metrics))
 
-    def serve_request(self,env):
+    def serve_request(self, env, metrics):
+        arrival_time = env.now
         sim_resource = self.get_active_simulation_resource()
         with sim_resource.request() as req:
             #request enters the queue
             yield req
 
+            metrics.record_service_start(self.get_id(), env.now)
+
             #request is served
             job_service_time = random.expovariate(self.get_mu())
             
             yield env.timeout(job_service_time)
+
+            metrics.record_request_completion(
+                self.get_id(), env.now - arrival_time, env.now
+            )
 
             possible_routes=[]
             route_probabilities = []
@@ -105,5 +112,4 @@ class Service():
             route_service = random.choices(possible_routes, weights=route_probabilities, k=1)[0]
 
             if route_service is not None:
-                env.process(route_service.serve_request(env))
-
+                env.process(route_service.serve_request(env, metrics))

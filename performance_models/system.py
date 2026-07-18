@@ -76,20 +76,14 @@ class System():
         }
 
 
-
-    def get_type(self):
-        return self.__type
-
-    def get_external_traffic_services(self):
-        return self.__external_traffic_services
-
-    def is_stable(self, utilizations):
+    def __is_stable(self, utilizations):
         for utilization in utilizations:
             if utilization >= 1.0:
                 return False
         return True
-    
-    
+
+
+
     def __mmc_latency(self,service_lambda, per_replica_mu, replicas):
         if per_replica_mu <= 0 or replicas <= 0:
             return float("inf")
@@ -120,11 +114,15 @@ class System():
 
         return response_time
 
+
+    def get_type(self):
+        return self.__type
+
+    def get_external_traffic_services(self):
+        return self.__external_traffic_services
+
     def get_name(self):
         return self.__name
-
-    def add_service(self, name, component):
-        self.__services[name] = component
 
     def get_service(self, name):
         return self.__services.get(name, None)
@@ -143,14 +141,10 @@ class System():
         for service in self.get_services().values():
             service_id = service.get_id()
             service.set_replicas(replicas_config[service_id])
-    
 
-    def configure_system_replicas(self, replicas_config):
-        for service in self.get_services().values():
-            service_id = service.get_id()
-            service.set_replicas(replicas_config[service_id])
+    def add_service(self, name, component):
+        self.__services[name] = component
 
- 
     def solve(self):
 
         system_input = self.__initialize_system_input()
@@ -181,16 +175,23 @@ class System():
 
         latencies = [self.__mmc_latency(lambdas[i], mus[i], replicas[i]) for i in range(num_of_services)]
     
-        return Metrics(utilizations,latencies, self.is_stable(latencies))
+        return Metrics(utilizations, latencies, self.__is_stable(utilizations))
 
     def simulate(self, sim_duration):
         env = simpy.Environment()
-        
+        metrics = Metrics.for_simulation(len(self.get_services()))
 
         for service in self.get_services().values():
             service.set_active_simulation_resource(simpy.Resource(env,capacity = service.get_replicas()))
-            env.process(service.generate_external_traffic(env))
+            env.process(service.generate_external_traffic(env, metrics))
 
         env.run(until = sim_duration)
 
+        solver_metrics = self.solve()
+        metrics.finalize_simulation(
+            sim_duration,
+            self.get_system_replicas(),
+            solver_metrics.get_stability(),
+        )
+        return metrics
 
