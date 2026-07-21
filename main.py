@@ -1,79 +1,55 @@
+import random
 
 import yaml
-from performance_models import Service, Edge, System, QueueingNetworkType, service
-import math
+
+from optimization import AStarOptimizer, ReplicaSizingProblem
+from performance_models import QueueingNetworkType, System
 
 
-def stop_optimization(damage=[]):
-    
-    for i in range(len(damage)):
-        if damage[i] != math.inf:
-            return False
-    return True
+SIMULATION_DURATION = 300
+REQUEST_CLASS_SLOS = {"api": 1.0}  # End-to-end p95 limits, in seconds.
+MAX_REPLICAS_PER_SERVICE = 10
 
 
 def main():
+    random.seed(42)
 
-    with open("workload.yaml", "r") as file:
+    with open("workload.yaml", "r", encoding="utf-8") as file:
         workload = yaml.safe_load(file)
 
-    
+    system = System("STELAR", workload, QueueingNetworkType.OPEN)
+    problem = ReplicaSizingProblem(
+        system=system,
+        simulation_duration=SIMULATION_DURATION,
+        request_class_slos=REQUEST_CLASS_SLOS,
+        max_replicas=MAX_REPLICAS_PER_SERVICE,
+    )
+    result = AStarOptimizer().optimize(problem)
 
-    system = System('STELAR', workload, QueueingNetworkType.OPEN)
+    # The search evaluates many configurations, so explicitly apply its result.
+    system.configure_system_replicas(result.configuration)
 
-    services = system.get_services()
+    evaluation = result.metrics
+    service_names = tuple(system.get_services())
+    replicas = dict(zip(service_names, result.configuration))
+    utilizations = dict(
+        zip(
+            service_names,
+            evaluation.analytical_metrics.get_mean_utilizations(),
+        )
+    )
 
-    
-    damage = [0 for _ in range(len(services))]
-    
-
-    while not stop_optimization(damage):
-
-        metrics = system.solve()
-        replicas = system.get_system_replicas()
-        latencies = metrics.get_mean_latencies()
-
-        for service in services.values():
-            service_id = service.get_id()
-
-            before_latency = latencies[service_id]
-            replicas[service_id] = replicas[service_id] - 1
-
-            if replicas[service_id]==0:
-                replicas[service_id] = 1
-                system.configure_system_replicas(replicas)
-                damage[service_id] = math.inf
-                continue
-
-            system.configure_system_replicas(replicas)
-
-            metrics = system.solve()
-
-            stability = metrics.get_stability()
-
-            if not stability:
-                replicas[service_id] = replicas[service_id] + 1
-                system.configure_system_replicas(replicas)
-                damage[service_id]=math.inf
-                continue
-
-            after_latency = metrics.get_mean_latencies()[service_id]
-            
-            replicas[service_id] = replicas[service_id] + 1
-            
-            system.configure_system_replicas(replicas)
-            
-            damage[service_id]=(after_latency - before_latency)
-
-
-        min_damage_index =damage.index(min(damage))
-
-        replicas[min_damage_index] = (replicas[min_damage_index] - 1) if (replicas[min_damage_index] >1) else 1
-
-        system.configure_system_replicas(replicas)
-    
-    print(system.get_system_replicas())
-
+    print("Replica configuration:", replicas)
+    print("Total replicas:", evaluation.cost)
+    print("Replicas added from the initial state:", result.cost)
+    print(
+        "Request-class p95 latencies:",
+        evaluation.simulation_metrics.get_request_class_p95_latencies(),
+    )
+    print("Worst normalized p95 ratio:", evaluation.tie_breaker)
+    print("Analytical utilizations:", utilizations)
+    print("Explored states:", result.explored_states)
+    print("Search path:", result.path)
 
 if __name__ == "__main__":
     main()

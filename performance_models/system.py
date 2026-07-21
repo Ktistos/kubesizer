@@ -43,6 +43,7 @@ class System():
 
     def __initialize_system_input(self):
         num_of_services = len(self.get_services())
+        self.__external_traffic_services = []
         gammas = []
         mus = []
         replicas = []
@@ -88,6 +89,18 @@ class System():
             if utilization >= 1.0:
                 return False
         return True
+
+    def __calculate_effective_arrival_rates(self, system_input):
+        num_of_services = len(self.get_services())
+        gammas = np.array(system_input["gammas"], dtype=float)
+        routing_probability_matrix = np.array(
+            system_input["routing_probability_matrix"], dtype=float
+        )
+        identity_matrix = np.eye(num_of_services)
+        return np.linalg.solve(
+            identity_matrix - routing_probability_matrix.T,
+            gammas,
+        )
 
 
 
@@ -143,6 +156,11 @@ class System():
             service_id = service.get_id()
             replicas[service_id] = service.get_replicas()
         return replicas
+
+    def get_effective_arrival_rates(self):
+        """Return analytical per-service arrival rates in service-ID order."""
+        system_input = self.__initialize_system_input()
+        return self.__calculate_effective_arrival_rates(system_input).tolist()
     
     def configure_system_replicas(self, replicas_config):
         for service in self.get_services().values():
@@ -160,16 +178,10 @@ class System():
         
         num_of_services = len(self.get_services())
 
-        gammas = np.array(system_input["gammas"], dtype=float)
         mus = np.array(system_input["mus"], dtype=float)
         replicas = np.array(system_input["replicas"], dtype=int)
-        routing_probability_matrix = np.array(system_input["routing_probability_matrix"], dtype=float)
-        
-        identity_matrix = np.eye(num_of_services)
-
-
         #getting the lambdas for each service by solving the linear system of equations
-        lambdas = np.linalg.solve(identity_matrix - routing_probability_matrix.T, gammas)
+        lambdas = self.__calculate_effective_arrival_rates(system_input)
 
         #calculating the capacities and utilizations for each service
         capacities = replicas * mus
@@ -184,8 +196,14 @@ class System():
     
         return Metrics(utilizations, latencies, self.__is_stable(utilizations))
 
-    def simulate(self, sim_duration):
-        analytical_metrics = self.solve()
+    def simulate(self, sim_duration, analytical_metrics=None):
+        """Run a stable configuration and return simulation metrics.
+
+        A caller that already evaluated the current configuration may provide
+        its analytical metrics to avoid solving the same configuration twice.
+        """
+        if analytical_metrics is None:
+            analytical_metrics = self.solve()
         if not analytical_metrics.get_stability():
             return analytical_metrics
 

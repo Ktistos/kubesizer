@@ -89,10 +89,14 @@ class Service():
         while True and ( sim_resource is not None) and (gamma > 0):
             successive_arrival_interval = random.expovariate(gamma)
             yield env.timeout(successive_arrival_interval)
-            
-            env.process(self.serve_request(env, metrics_collector))
 
-    def serve_request(self, env, metrics_collector):
+            request_context = metrics_collector.start_external_request(
+                self.get_name(),
+                env.now,
+            )
+            env.process(self.serve_request(env, metrics_collector, request_context))
+
+    def serve_request(self, env, metrics_collector, request_context=None):
         arrival_time = env.now
         sim_resource = self.get_active_simulation_resource()
         with sim_resource.request() as req:
@@ -121,4 +125,15 @@ class Service():
             route_service = random.choices(possible_routes, weights=route_probabilities, k=1)[0]
 
             if route_service is not None:
-                env.process(route_service.serve_request(env, metrics_collector))
+                env.process(
+                    route_service.serve_request(
+                        env,
+                        metrics_collector,
+                        request_context,
+                    )
+                )
+            elif request_context is not None:
+                metrics_collector.record_external_request_completion(
+                    request_context,
+                    env.now,
+                )
