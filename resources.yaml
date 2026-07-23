@@ -1,0 +1,19 @@
+nodes:
+  - name: skube01
+    allocatable_cpu_millicores: 15800
+    allocatable_memory_bytes: 17179869184
+    communication_latency_seconds:
+      skube02: 0.0012
+      skube03: 0.0015
+  - name: skube02
+    allocatable_cpu_millicores: 12400
+    allocatable_memory_bytes: 12884901888
+    communication_latency_seconds:
+      skube01: 0.0014
+      skube03: 0.0009
+  - name: skube03
+    allocatable_cpu_millicores: 19600
+    allocatable_memory_bytes: 25769803776
+    communication_latency_seconds:
+      skube01: 0.0010
+      skube02: 0.0009
