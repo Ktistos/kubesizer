@@ -146,6 +146,13 @@ class System():
 
     def get_service(self, name):
         return self.__services.get(name, None)
+
+    def get_service_by_id(self, service_id):
+        """Return the service assigned to ``service_id``, or ``None`` if absent."""
+        for service in self.__services.values():
+            if service.get_id() == service_id:
+                return service
+        return None
     
     def get_services(self):
         return self.__services
