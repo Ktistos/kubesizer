@@ -5,6 +5,7 @@ class Node():
         self.__allocatable_cpu = allocatable_cpu
         self.__allocatable_memory = allocatable_memory
         self.__node_communication_latencies = node_communication_latencies
+        self.__service_placements = {}
 
     def set_name(self, name):
         self.__name = name
@@ -17,6 +18,23 @@ class Node():
 
     def set_node_communication_latencies(self, node_communication_latencies):
         self.__node_communication_latencies = node_communication_latencies
+
+    def set_service_placements(self,service_placements):
+        self.__service_placements = service_placements
+
+    def add_service_replica(self, service):
+        service_name = service.get_name()
+        service_exists = self.__service_placements.get(service_name, None)
+
+        if service_exists:
+            self.__service_placements[service_name] = self.__service_placements[service_name] + 1
+        else :
+            self.__service_placements[service_name] = 1
+        
+    
+
+    def get_service_placements(self):
+        return self.__service_placements
 
     def get_node_communication_latencies(self):
         return self.__node_communication_latencies

@@ -1,5 +1,5 @@
 from .node import Node
-
+from itertools import cycle
 
 class Cluster():
 
@@ -12,7 +12,16 @@ class Cluster():
             self.__nodes[node["name"]] = Node(node["name"], node["allocatable_cpu_millicores"], node["allocatable_memory_bytes"], node["communication_latency_seconds"])
 
         
+        self.__init_node_placement(system)
+        
+    def __init_node_placement(self, system):
+        for service in system.get_services().values():
+        
+            node_cycle = cycle(self.__nodes.items())
 
+            for _ in range(service.get_replicas()):
+                current_node = next(node_cycle)
+                current_node.add_service_replica(service)
 
 
     def set_name(self,name):
