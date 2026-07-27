@@ -3,7 +3,7 @@ import random
 import yaml
 
 from optimization import AStarOptimizer, ReplicaSizingProblem
-from performance_models import QueueingNetworkType, System
+from performance_models import QueueingNetworkType, System, Cluster
 
 
 SIMULATION_DURATION = 300
@@ -17,6 +17,10 @@ def main():
     with open("workload.yaml", "r", encoding="utf-8") as file:
         workload = yaml.safe_load(file)
 
+    with open("resources.yaml", "r", encoding="utf-8") as file:
+        resources = yaml.safe_load(file)
+
+
     system = System("STELAR", workload, QueueingNetworkType.OPEN)
     problem = ReplicaSizingProblem(
         system=system,
@@ -26,9 +30,19 @@ def main():
     )
     result = AStarOptimizer().optimize(problem)
 
-    # The search evaluates many configurations, so explicitly apply its result.
+
+    cluster = Cluster("okeanos",resources, system)
+
+    print(cluster.get_node_config())
+
+
     system.configure_system_replicas(result.configuration)
 
+
+
+    """
+        # The search evaluates many configurations, so explicitly apply its result.
+    
     evaluation = result.metrics
     service_names = tuple(system.get_services())
     replicas = dict(zip(service_names, result.configuration))
@@ -50,6 +64,7 @@ def main():
     print("Analytical utilizations:", utilizations)
     print("Explored states:", result.explored_states)
     print("Search path:", result.path)
+    """
 
 if __name__ == "__main__":
     main()

@@ -20,9 +20,18 @@ class Cluster():
             node_cycle = cycle(self.__nodes.items())
 
             for _ in range(service.get_replicas()):
-                current_node = next(node_cycle)
+                current_node = next(node_cycle)[1]
                 current_node.add_service_replica(service)
 
+                
+    def get_node_config(self):
+
+        node_config = {}
+
+        for node_name , node in self.get_nodes().items():
+            node_config[node_name] = node.get_service_placements()
+
+        return node_config
 
     def set_name(self,name):
         self.__name = name
