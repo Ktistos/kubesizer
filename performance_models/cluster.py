@@ -5,6 +5,7 @@ class Cluster():
 
     def __init__(self, name, resources, system):
         self.__name = name
+        self.__system = system
 
         self.__nodes = {}
 
@@ -38,6 +39,9 @@ class Cluster():
 
     def get_name(self):
         return self.__name
+
+    def get_system(self):
+        return self.__system
 
     def get_node_by_name(self, node_name):
         return self.__nodes.get(node_name)
