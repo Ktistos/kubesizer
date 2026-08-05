@@ -23,23 +23,17 @@ class System():
         self.__services = {}
         self.__external_traffic_services = []
 
+        self.__request_classes = list(workload.keys())
 
-        for service_id, service in enumerate(workload):
+        for request_class_name, request_class in workload.items():
 
-            service_component = Service(
-                self,
-                service,
-                workload[service]['gamma'],
-                workload[service]['mu'],
-                workload[service]['replicas'],
-                service_id=service_id,
-            )
-
-            self.add_service(service,service_component)
-
-        for service, service_component in self.get_services().items():
-            service_component.register_edges(workload[service].get('routes', {}))
-
+            for service_name, service_data in request_class.items():
+                service = self.get_service(service_name)
+                if service is None:
+                    service = Service(self, service_name, {}, service_data.get('mu', 0))
+                    self.add_service(service_name,service)
+                service.add_gamma(request_class_name, service_data.get('gamma', 0))
+                service.register_edges(request_class_name, service_data.get('routes', {}))
 
     def __initialize_system_input(self):
         num_of_services = len(self.get_services())
