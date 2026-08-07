@@ -269,6 +269,28 @@ class System:
         request_class_rates = self.__calculate_request_class_arrival_rates()
         return self.__calculate_aggregate_arrival_rates(request_class_rates).tolist()
 
+    def get_minimum_stable_replicas(self):
+        """Return the minimum per-service replicas for strict stability.
+
+        Replica counts are returned in service-ID order. For each service the
+        smallest positive integer ``c`` satisfying ``arrival_rate < c * mu``
+        is ``floor(arrival_rate / mu) + 1``.
+        """
+        arrival_rates = self.get_effective_arrival_rates()
+        minimum_replicas = [0 for _ in range(len(self.get_services()))]
+
+        for service in self.get_services().values():
+            service_rate = service.get_mu()
+            if service_rate <= 0:
+                raise ValueError("Service rates must be greater than zero.")
+
+            service_id = service.get_id()
+            minimum_replicas[service_id] = (
+                math.floor(arrival_rates[service_id] / service_rate) + 1
+            )
+
+        return minimum_replicas
+
     def get_request_class_effective_arrival_rates(self):
         """Return analytical arrival rates by class and service-ID order."""
         return {
