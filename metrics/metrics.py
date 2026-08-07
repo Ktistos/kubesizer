@@ -53,23 +53,19 @@ class Metrics:
 
     def get_mean_utilizations(self):
         return self.__mean_utilizations
-    
+
     def get_mean_latencies(self):
         return self.__mean_latencies
-    
+
     def get_stability(self):
         return self.__stability
-        
+
     def get_p95_latencies(self):
         return self.__p95_latencies
-    
+
     def get_p99_latencies(self):
         return self.__p99_latencies
 
     def get_request_class_p95_latencies(self):
-        """Return measured end-to-end p95 values keyed by request class.
-
-        The current simulator does not yet populate this mapping; its existing
-        p95 vector remains per-service latency.
-        """
+        """Return measured end-to-end p95 values keyed by request class."""
         return self.__request_class_p95_latencies

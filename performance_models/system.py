@@ -8,57 +8,89 @@ import random
 
 import numpy as np
 
+
 class QueueingNetworkType(str, Enum):
     OPEN = "open"
     CLOSED = "closed"
     HYBRID = "hybrid"
 
 
-class System():
+class System:
 
-    def __init__(self, name,workload, type : QueueingNetworkType):
+    def __init__(self, name, workload, type: QueueingNetworkType):
         self.__name = name
-        #type refers to either open or closed system
+        # type refers to either open or closed system
         self.__type = type
         self.__services = {}
         self.__external_traffic_services = []
 
-        self.__request_classes = list(workload.keys())
+        if not workload:
+            raise ValueError("At least one request class is required.")
+        self.__request_classes = tuple(workload.keys())
 
-        for request_class_name, request_class in workload.items():
-
+        # Build the union of services before registering routes, so targets can
+        # be resolved regardless of declaration order or request class.
+        for request_class in workload.values():
             for service_name, service_data in request_class.items():
                 service = self.get_service(service_name)
+                service_mu = service_data.get("mu", 0)
                 if service is None:
-                    service = Service(self, service_name, {}, service_data.get('mu', 0))
-                    self.add_service(service_name,service)
-                service.add_gamma(request_class_name, service_data.get('gamma', 0))
-                service.register_edges(request_class_name, service_data.get('routes', {}))
+                    service = Service(
+                        self,
+                        service_name,
+                        mu=service_mu,
+                        service_id=len(self.__services),
+                    )
+                    self.add_service(service_name, service)
+                elif service.get_mu() != service_mu:
+                    raise ValueError(
+                        f"Service '{service_name}' must use the same mu in "
+                        "every request class."
+                    )
 
-    def __initialize_system_input(self):
+        for request_class_name, request_class in workload.items():
+            for service_name, service_data in request_class.items():
+                service = self.get_service(service_name)
+                service.add_gamma(
+                    request_class_name,
+                    service_data.get("gamma", 0),
+                )
+                service.register_edges(
+                    request_class_name,
+                    service_data.get("routes", {}),
+                )
+
+        self.__external_traffic_services = [
+            service
+            for service in self.get_services().values()
+            if any(
+                service.get_gamma(request_class) > 0
+                for request_class in self.get_request_classes()
+            )
+        ]
+
+    def __initialize_system_input(self, request_class_name):
         num_of_services = len(self.get_services())
-        self.__external_traffic_services = []
-        gammas = []
-        mus = []
-        replicas = []
-        
-        routing_probability_matrix = [[0 for _ in range(num_of_services)] for _ in range(num_of_services)]
+        gammas = [0.0 for _ in range(num_of_services)]
+        mus = [0.0 for _ in range(num_of_services)]
+        replicas = [0 for _ in range(num_of_services)]
+
+        routing_probability_matrix = [
+            [0 for _ in range(num_of_services)] for _ in range(num_of_services)
+        ]
 
         for service_name in self.get_services():
             service = self.get_service(service_name)
             order_index = service.get_id()
             service_replicas = service.get_replicas()
-            service_gamma = service.get_gamma()
-
-            if service_gamma > 0:
-                self.get_external_traffic_services().append(service)
+            service_gamma = service.get_gamma(request_class_name)
 
             service_mu = service.get_mu()
-            gammas.append(service_gamma)
-            mus.append(service_mu)
-            replicas.append(service_replicas)
+            gammas[order_index] = service_gamma
+            mus[order_index] = service_mu
+            replicas[order_index] = service_replicas
 
-            adjacency_list = service.get_adjacency_list()
+            adjacency_list = service.get_adjacency_list(request_class_name)
 
             for edge in adjacency_list:
                 target_service = edge.get_target()
@@ -67,16 +99,16 @@ class System():
                 if target_service is not None:
                     outgoing_service_index = target_service.get_id()
 
-                    routing_probability_matrix[order_index][outgoing_service_index] = routing_probability
-                
-        
+                    routing_probability_matrix[order_index][
+                        outgoing_service_index
+                    ] = routing_probability
+
         return {
             "gammas": gammas,
             "mus": mus,
             "replicas": replicas,
-            "routing_probability_matrix": routing_probability_matrix
+            "routing_probability_matrix": routing_probability_matrix,
         }
-
 
     def __is_stable(self, utilizations):
         for utilization in utilizations:
@@ -96,9 +128,21 @@ class System():
             gammas,
         )
 
+    def __calculate_request_class_arrival_rates(self):
+        return {
+            request_class: self.__calculate_effective_arrival_rates(
+                self.__initialize_system_input(request_class)
+            )
+            for request_class in self.get_request_classes()
+        }
 
+    def __calculate_aggregate_arrival_rates(self, request_class_rates):
+        aggregate = np.zeros(len(self.get_services()), dtype=float)
+        for arrival_rates in request_class_rates.values():
+            aggregate += arrival_rates
+        return aggregate
 
-    def __mmc_latency(self,service_lambda, per_replica_mu, replicas):
+    def __mmc_latency(self, service_lambda, per_replica_mu, replicas):
         if per_replica_mu <= 0 or replicas <= 0:
             return float("inf")
 
@@ -114,9 +158,9 @@ class System():
 
         sum_terms = 0.0
         for n in range(replicas):
-            sum_terms += (a ** n) / math.factorial(n)
+            sum_terms += (a**n) / math.factorial(n)
 
-        last_term = ((a ** replicas) / math.factorial(replicas)) * (1 / (1 - rho))
+        last_term = ((a**replicas) / math.factorial(replicas)) * (1 / (1 - rho))
 
         p0 = 1 / (sum_terms + last_term)
 
@@ -128,6 +172,68 @@ class System():
 
         return response_time
 
+    def solve(self):
+        request_class_rates = self.__calculate_request_class_arrival_rates()
+        lambdas = self.__calculate_aggregate_arrival_rates(request_class_rates)
+
+        num_of_services = len(self.get_services())
+        system_input = self.__initialize_system_input(self.__request_classes[0])
+        mus = np.array(system_input["mus"], dtype=float)
+        replicas = np.array(system_input["replicas"], dtype=int)
+
+        capacities = replicas * mus
+        utilizations = lambdas / capacities
+
+        lambdas = lambdas.tolist()
+        mus = mus.tolist()
+        replicas = replicas.tolist()
+        utilizations = utilizations.tolist()
+
+        latencies = [
+            self.__mmc_latency(lambdas[i], mus[i], replicas[i])
+            for i in range(num_of_services)
+        ]
+
+        return Metrics(
+            utilizations,
+            latencies,
+            self.__is_stable(utilizations),
+        )
+
+    def simulate(self, sim_duration, analytical_metrics=None):
+        """Run a stable configuration and return simulation metrics.
+
+        A caller that already evaluated the current configuration may provide
+        its analytical metrics to avoid solving the same configuration twice.
+        """
+        if analytical_metrics is None:
+            analytical_metrics = self.solve()
+        if not analytical_metrics.get_stability():
+            return analytical_metrics
+
+        env = simpy.Environment()
+        metrics_collector = SimulationMetricsCollector(len(self.get_services()))
+
+        for service in self.get_services().values():
+            service.set_active_simulation_resource(
+                simpy.Resource(env, capacity=service.get_replicas())
+            )
+            request_classes = self.get_request_classes()
+
+            for class_name in request_classes:
+
+                env.process(service.generate_external_traffic(env, metrics_collector, class_name))
+
+        env.run(until=sim_duration)
+
+        return metrics_collector.finalize(
+            sim_duration,
+            self.get_system_replicas(),
+            analytical_metrics.get_stability(),
+        )
+
+    def get_request_classes(self):
+        return self.__request_classes
 
     def get_type(self):
         return self.__type
@@ -147,22 +253,29 @@ class System():
             if service.get_id() == service_id:
                 return service
         return None
-    
+
     def get_services(self):
         return self.__services
 
     def get_system_replicas(self):
-        replicas = [ 0 for _ in range(len(self.get_services())) ]
+        replicas = [0 for _ in range(len(self.get_services()))]
         for service in self.get_services().values():
             service_id = service.get_id()
             replicas[service_id] = service.get_replicas()
         return replicas
 
     def get_effective_arrival_rates(self):
-        """Return analytical per-service arrival rates in service-ID order."""
-        system_input = self.__initialize_system_input()
-        return self.__calculate_effective_arrival_rates(system_input).tolist()
-    
+        """Return aggregate analytical arrival rates in service-ID order."""
+        request_class_rates = self.__calculate_request_class_arrival_rates()
+        return self.__calculate_aggregate_arrival_rates(request_class_rates).tolist()
+
+    def get_request_class_effective_arrival_rates(self):
+        """Return analytical arrival rates by class and service-ID order."""
+        return {
+            request_class: arrival_rates.tolist()
+            for request_class, arrival_rates in self.__calculate_request_class_arrival_rates().items()
+        }
+
     def configure_system_replicas(self, replicas_config):
         for service in self.get_services().values():
             service_id = service.get_id()
@@ -170,55 +283,3 @@ class System():
 
     def add_service(self, name, component):
         self.__services[name] = component
-
-    def solve(self):
-
-        system_input = self.__initialize_system_input()
-
-        #gathering the system input data for the solver
-        
-        num_of_services = len(self.get_services())
-
-        mus = np.array(system_input["mus"], dtype=float)
-        replicas = np.array(system_input["replicas"], dtype=int)
-        #getting the lambdas for each service by solving the linear system of equations
-        lambdas = self.__calculate_effective_arrival_rates(system_input)
-
-        #calculating the capacities and utilizations for each service
-        capacities = replicas * mus
-        utilizations = lambdas / capacities
-  
-        lambdas = lambdas.tolist()
-        mus = mus.tolist()
-        replicas = replicas.tolist()
-        utilizations = utilizations.tolist()
-
-        latencies = [self.__mmc_latency(lambdas[i], mus[i], replicas[i]) for i in range(num_of_services)]
-    
-        return Metrics(utilizations, latencies, self.__is_stable(utilizations))
-
-    def simulate(self, sim_duration, analytical_metrics=None):
-        """Run a stable configuration and return simulation metrics.
-
-        A caller that already evaluated the current configuration may provide
-        its analytical metrics to avoid solving the same configuration twice.
-        """
-        if analytical_metrics is None:
-            analytical_metrics = self.solve()
-        if not analytical_metrics.get_stability():
-            return analytical_metrics
-
-        env = simpy.Environment()
-        metrics_collector = SimulationMetricsCollector(len(self.get_services()))
-
-        for service in self.get_services().values():
-            service.set_active_simulation_resource(simpy.Resource(env,capacity = service.get_replicas()))
-            env.process(service.generate_external_traffic(env, metrics_collector))
-
-        env.run(until = sim_duration)
-
-        return metrics_collector.finalize(
-            sim_duration,
-            self.get_system_replicas(),
-            analytical_metrics.get_stability(),
-        )
