@@ -115,8 +115,11 @@ class Service:
         arrival_time = env.now
         sim_resource = self.get_active_simulation_resource()
         with sim_resource.request() as req:
-            # request enters the queue
+            # The request either acquires a replica immediately or joins the queue.
+            metrics_collector.record_service_state(self.get_id(), env.now)
             yield req
+            # A queued request may have acquired a replica after another release.
+            metrics_collector.record_service_state(self.get_id(), env.now)
 
             # request is served
             job_service_time = random.expovariate(self.get_mu())
@@ -155,3 +158,7 @@ class Service:
                     request_context,
                     env.now,
                 )
+
+        # Exiting the context releases the replica. A queued request may acquire
+        # it later at the same simulation timestamp.
+        metrics_collector.record_service_state(self.get_id(), env.now)

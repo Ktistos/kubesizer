@@ -1,8 +1,9 @@
+import copy
 import math
-import simpy
 from enum import Enum
 from .service import Service
-from metrics import Metrics, SimulationMetricsCollector
+from metrics import Metrics
+from native_backend import get_native_backend
 
 import random
 
@@ -19,6 +20,7 @@ class System:
 
     def __init__(self, name, workload, type: QueueingNetworkType):
         self.__name = name
+        self.__workload_spec = copy.deepcopy(workload)
         # type refers to either open or closed system
         self.__type = type
         self.__services = {}
@@ -200,36 +202,118 @@ class System:
             self.__is_stable(utilizations),
         )
 
-    def simulate(self, sim_duration, analytical_metrics=None):
-        """Run a stable configuration and return simulation metrics.
+    def simulate(
+        self,
+        sim_duration,
+        analytical_metrics=None,
+        metrics_collector=None,
+        warmup_duration=None,
+        *,
+        seed=None,
+    ):
+        """Run one fixed-horizon replication in the mandatory C++ backend.
 
-        A caller that already evaluated the current configuration may provide
-        its analytical metrics to avoid solving the same configuration twice.
+        This preserves the existing fixed-horizon API. Requests entering before
+        ``warmup_duration`` affect the system but are excluded from request-class
+        latency. Use ``simulate_measurement_replications`` for the uncensored
+        ``[W, W + M)`` measurement-arrival window and drain semantics.
         """
         if analytical_metrics is None:
             analytical_metrics = self.solve()
         if not analytical_metrics.get_stability():
             return analytical_metrics
 
-        env = simpy.Environment()
-        metrics_collector = SimulationMetricsCollector(len(self.get_services()))
+        sim_duration = float(sim_duration)
+        if not math.isfinite(sim_duration) or sim_duration <= 0:
+            raise ValueError("sim_duration must be finite and greater than zero.")
 
-        for service in self.get_services().values():
-            service.set_active_simulation_resource(
-                simpy.Resource(env, capacity=service.get_replicas())
+        if warmup_duration is None:
+            effective_warmup = (
+                metrics_collector.get_latency_collection_start()
+                if metrics_collector is not None
+                else 0.0
             )
-            request_classes = self.get_request_classes()
+        else:
+            effective_warmup = float(warmup_duration)
+            if (
+                not math.isfinite(effective_warmup)
+                or effective_warmup < 0
+                or effective_warmup > sim_duration
+            ):
+                raise ValueError("warmup_duration must lie within the simulation.")
+            if (
+                metrics_collector is not None
+                and metrics_collector.get_latency_collection_start()
+                != effective_warmup
+            ):
+                raise ValueError(
+                    "The collector and simulation warm-up durations must match."
+                )
 
-            for class_name in request_classes:
+        if seed is None:
+            seed = random.getrandbits(63)
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            raise ValueError("seed must be a non-negative integer.")
 
-                env.process(service.generate_external_traffic(env, metrics_collector, class_name))
+        native_result = get_native_backend().simulate(
+            self,
+            seed=seed,
+            horizon=sim_duration,
+            warmup_duration=effective_warmup,
+            capture_state=metrics_collector is not None,
+        )
+        if metrics_collector is not None:
+            metrics_collector.load_native_state(
+                native_result,
+                self.get_system_replicas(),
+            )
 
-        env.run(until=sim_duration)
-
-        return metrics_collector.finalize(
-            sim_duration,
-            self.get_system_replicas(),
+        native_metrics = native_result["metrics"]
+        return Metrics(
+            native_metrics["mean_utilizations"],
+            native_metrics["mean_latencies"],
             analytical_metrics.get_stability(),
+            native_metrics["p95_latencies"],
+            native_metrics["p99_latencies"],
+            native_metrics["request_class_p95_latencies"],
+        )
+
+    def run_warmup_ensemble(self, *, seeds, horizon, bucket_width, workers=1):
+        """Run native empty-start replications and aggregate buckets online."""
+        if not self.solve().get_stability():
+            raise ValueError("Warm-up pilots require a stable replica configuration.")
+        return get_native_backend().warmup_ensemble(
+            self,
+            seeds=seeds,
+            horizon=horizon,
+            bucket_width=bucket_width,
+            workers=workers,
+        )
+
+    def simulate_measurement_replications(
+        self,
+        *,
+        warmup_duration,
+        measurement_duration,
+        seeds,
+        workers=1,
+        maximum_drain_time=10_000.0,
+    ):
+        """Run independent ``[W, W + M)`` cohorts and drain tagged requests.
+
+        Background traffic continues after the tagging window until the final
+        tagged request exits. Each returned record contains one request-class
+        p95 per replication, suitable for across-replication inference.
+        """
+        if not self.solve().get_stability():
+            raise ValueError("Measurement replications require a stable configuration.")
+        return get_native_backend().measurement_replications(
+            self,
+            seeds=seeds,
+            warmup_duration=warmup_duration,
+            measurement_duration=measurement_duration,
+            workers=workers,
+            maximum_drain_time=maximum_drain_time,
         )
 
     def get_request_classes(self):
@@ -243,6 +327,10 @@ class System:
 
     def get_name(self):
         return self.__name
+
+    def get_workload_spec(self):
+        """Return an isolated copy suitable for constructing another System."""
+        return copy.deepcopy(self.__workload_spec)
 
     def get_service(self, name):
         return self.__services.get(name, None)

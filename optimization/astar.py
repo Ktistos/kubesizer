@@ -39,8 +39,12 @@ class AStarOptimizer(Optimizer):
                 break
 
             explored_states += 1
-            if problem.is_feasible(state):
-                evaluation = problem.evaluate(state)
+            if hasattr(problem, "evaluate_and_check"):
+                evaluation, state_is_feasible = problem.evaluate_and_check(state)
+            else:
+                state_is_feasible = problem.is_feasible(state)
+                evaluation = problem.evaluate(state) if state_is_feasible else None
+            if state_is_feasible:
                 tie_breaker = getattr(evaluation, "tie_breaker", 0.0)
                 candidate_rank = (queued_g, tie_breaker)
                 if best_goal is None or candidate_rank < best_goal[:2]:

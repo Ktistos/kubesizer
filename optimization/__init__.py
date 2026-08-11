@@ -3,6 +3,7 @@ from .base import GraphSearchProblem, OptimizationProblem, Optimizer
 from .exceptions import (
     NoFeasibleConfigurationError,
     RequestClassMetricsUnavailableError,
+    StatisticalEvaluationError,
 )
 from .exhaustive_node_placement import (
     ExhaustiveNodePlacementOptimizer,
@@ -13,9 +14,24 @@ from .node_placement import (
     NodePlacementEvaluation,
     NodePlacementProblem,
 )
+from .simulation_evaluation import (
+    CalibratedConfigurationEvaluator,
+    ConfigurationEvaluation,
+    SequentialLookResult,
+    SimulationClassification,
+)
+from .replica_validation import (
+    CalibratedFinalValidationResult,
+    FinalValidationClassification,
+    FinalReplicaValidationError,
+    FinalReplicaValidationResult,
+    validate_selected_replica_configuration,
+    validate_final_configuration,
+)
 from .result import OptimizationResult
 from .replica_sizing import (
     AnalyticalStabilityHeuristic,
+    CalibratedReplicaSizingProblem,
     ReplicaSizingEvaluation,
     ReplicaSizingProblem,
     zero_heuristic,
@@ -24,8 +40,13 @@ from .replica_sizing import (
 __all__ = [
     "AStarOptimizer",
     "AnalyticalStabilityHeuristic",
+    "CalibratedReplicaSizingProblem",
     "DEFAULT_COST_WEIGHTS",
     "ExhaustiveNodePlacementOptimizer",
+    "CalibratedFinalValidationResult",
+    "FinalValidationClassification",
+    "FinalReplicaValidationError",
+    "FinalReplicaValidationResult",
     "GraphSearchProblem",
     "NoFeasibleConfigurationError",
     "NodePlacementEvaluation",
@@ -35,7 +56,14 @@ __all__ = [
     "OptimizationResult",
     "Optimizer",
     "RequestClassMetricsUnavailableError",
+    "StatisticalEvaluationError",
     "ReplicaSizingEvaluation",
     "ReplicaSizingProblem",
+    "validate_selected_replica_configuration",
+    "validate_final_configuration",
+    "CalibratedConfigurationEvaluator",
+    "ConfigurationEvaluation",
+    "SequentialLookResult",
+    "SimulationClassification",
     "zero_heuristic",
 ]
