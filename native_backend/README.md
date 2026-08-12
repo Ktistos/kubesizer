@@ -114,6 +114,42 @@ measurement replication additionally returns raw class latency and arrival-time
 arrays so shorter valid arrival cohorts can be derived without rerunning the
 kernel.
 
+## Weighted concurrent request classes
+
+The weighted workload schema is:
+
+```yaml
+read_heavy:
+  concurrency_weight: 0.7
+  services:
+    api:
+      gamma: 20.0
+      mu: 100.0
+```
+
+All request classes still run concurrently and share the same FIFO queues and
+replicas. A weight controls external traffic mixture only; it does not reserve
+capacity or give a class queueing priority. Weights must be finite, positive,
+and sum to one.
+
+Let `G` be the sum of all configured external `gamma` values, `w_k` the weight
+of class `k`, and `G_k_raw` that class's configured external total. The class
+target and per-entry effective rates are:
+
+```text
+G_k = w_k * G
+gamma_effective[k,i] = G_k * gamma_configured[k,i] / G_k_raw
+```
+
+Thus weighting preserves both the total offered traffic and the relative split
+between multiple entry services inside one class. The repository workload uses
+weights 0.7, 0.2, and 0.1, so its original total rate of 33 becomes class rates
+23.1, 6.6, and 3.3.
+
+Legacy in-code workload dictionaries remain supported. Their weights are
+derived from their existing external rates, making their effective rates
+unchanged. A workload cannot mix legacy and weighted class shapes.
+
 ## Frozen execution semantics
 
 - exponential external interarrival and service times;
@@ -136,7 +172,7 @@ reproducible within this backend.
 ## Protocol and failures
 
 The adapter sends one JSON request on standard input and expects one JSON
-response on standard output. Protocol version 2 supports:
+response on standard output. Protocol version 3 supports:
 
 - `simulate`;
 - `warmup_ensemble`;
@@ -157,3 +193,39 @@ The backend suite covers reproducibility, state invariants, online bucket
 equivalence, measurement gates and draining, multiple entry streams, routing
 loops, structured failures, and M/M/1 statistical sanity. It is also run against
 the ASan/UBSan build during validation.
+
+## Analytical consistency validation
+
+Run the dedicated native-versus-analytical matrix with:
+
+```bash
+pytest -q tests/test_native_analytical_consistency.py
+```
+
+Every case uses 30 independent native replications with fixed, disjoint seeds.
+The matrix covers M/M/1 at 25%, 50%, 75%, 90%, and 95% utilization, M/M/2 at
+60%, M/M/3 at 85%, a multiclass feed-forward network with multiple external
+entry streams, and a feedback network with repeated visits.
+
+The checks compare the native results with the independent analytical traffic
+and M/M/c calculations for:
+
+- external-arrival and completed-request throughput;
+- per-service utilization;
+- time-weighted queue length;
+- time-weighted number in system using Little's law;
+- single-service mean response time;
+- routed request-class mean end-to-end latency using analytical visit ratios;
+- M/M/1 p95 against its closed-form distribution in the backend sanity suite.
+
+Mean-latency agreement treats complete replications as the independent units
+and accepts a difference no larger than four estimated standard errors or a 3%
+practical-error floor. State checks use documented absolute/relative floors.
+Late state buckets exclude the empty-start half of each pilot, and the 95%
+utilization case deliberately uses a longer horizon because its queue mixes
+slowly.
+
+This is stochastic regression evidence, not a mathematical proof of the kernel.
+It applies to the stationary exponential, FIFO, fixed-routing model implemented
+here. Arbitrary-network p95 has no corresponding closed form in the analytical
+model and is validated through independent simulation replications instead.

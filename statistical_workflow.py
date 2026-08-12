@@ -16,9 +16,9 @@ from calibration import (
     validate_profile_for_experiment,
 )
 from optimization import (
-    AStarOptimizer,
     CalibratedConfigurationEvaluator,
     CalibratedReplicaSizingProblem,
+    UniformCostReplicaOptimizer,
     validate_final_configuration as _validate_final_configuration,
 )
 
@@ -52,6 +52,22 @@ class CalibratedOptimizationResult:
     @property
     def evaluations(self):
         return dict(self.configuration_evaluations)
+
+    @property
+    def minimality_proven(self):
+        return bool(
+            getattr(self.optimization_result, "minimality_proven", False)
+        )
+
+    @property
+    def unresolved_lower_cost_states(self):
+        return tuple(
+            getattr(
+                self.optimization_result,
+                "unresolved_lower_cost_states",
+                (),
+            )
+        )
 
 
 def _maximum_configuration(system, maximum_replicas):
@@ -211,7 +227,11 @@ def optimize_with_calibrated_simulation(
     heuristic=None,
     workers=1,
 ):
-    """Run replica sizing; only statistically feasible states are goals."""
+    """Run cost-ordered replica sizing; only reliable feasibility is a goal.
+
+    The default is uniform-cost search from the calibrated stable anchor.
+    ``heuristic`` is retained only for callers injecting a custom A* optimizer.
+    """
     validate_profile_for_experiment(
         calibration_profile,
         system,
@@ -224,7 +244,7 @@ def optimize_with_calibrated_simulation(
         heuristic=heuristic,
         simulation_workers=workers,
     )
-    raw_result = (optimizer or AStarOptimizer()).optimize(problem)
+    raw_result = (optimizer or UniformCostReplicaOptimizer()).optimize(problem)
     return CalibratedOptimizationResult(
         optimization_result=raw_result,
         configuration_evaluations=tuple(

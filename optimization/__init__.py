@@ -1,4 +1,5 @@
 from .astar import AStarOptimizer
+from .uniform_cost import ReplicaOptimizationResult, UniformCostReplicaOptimizer
 from .base import GraphSearchProblem, OptimizationProblem, Optimizer
 from .exceptions import (
     NoFeasibleConfigurationError,
@@ -39,6 +40,8 @@ from .replica_sizing import (
 
 __all__ = [
     "AStarOptimizer",
+    "UniformCostReplicaOptimizer",
+    "ReplicaOptimizationResult",
     "AnalyticalStabilityHeuristic",
     "CalibratedReplicaSizingProblem",
     "DEFAULT_COST_WEIGHTS",

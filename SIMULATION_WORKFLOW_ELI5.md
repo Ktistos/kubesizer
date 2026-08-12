@@ -354,6 +354,28 @@ The interval still overlaps the SLO at `R_max`.
 
 Inconclusive does not mean proven infeasible, but it is never silently accepted as feasible. The optimizer may continue to a larger replica configuration.
 
+### How configurations are searched
+
+The optimizer begins with the minimum analytically stable replica configuration
+and uses uniform-cost search. Think of configurations as shelves ordered by how
+many replicas were added:
+
+```text
+shelf 0: add no replicas
+shelf 1: add one replica
+shelf 2: add two replicas
+...
+```
+
+It finishes cheaper shelves before considering more expensive ones. Analytical
+utilization only decides which box to open first on the same shelf. It does not
+pretend to predict how many replicas remain before an SLO will pass.
+
+If every cheaper box is definitively infeasible, the first feasible shelf proves
+the minimum replica cost. If a cheaper box remains `INCONCLUSIVE`, the larger
+candidate may be validated as feasible, but the report says that minimality is
+not proven and lists the unresolved cheaper configurations.
+
 ### Failure
 
 Simulation or calibration failures stop calibrated optimization explicitly. They are not disguised as ordinary infeasibility.

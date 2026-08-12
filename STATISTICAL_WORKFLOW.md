@@ -87,8 +87,24 @@ configuration is statistically feasible only when every upper bound is at or
 below its SLO. One lower bound above its SLO is statistically infeasible.
 Overlapping intervals cause another fixed batch until `R_max`, then remain
 `INCONCLUSIVE`. Analytical instability, simulation failure and calibration
-failure are separate classifications. The graph search accepts only
+failure are separate classifications. The replica search accepts only
 `STATISTICALLY_FEASIBLE` as a goal.
+
+Replica sizing uses uniform-cost search from the minimum analytically stable
+configuration. Since every transition adds exactly one replica, states are
+examined by the number of replicas added; heterogeneous replica costs can use
+the same algorithm with their actual non-negative step costs. Analytical
+bottleneck utilization orders candidates only within one cost level and is not
+an A* heuristic. After finding a goal, the search finishes that cost level to
+select the feasible configuration with the best confidence-bound/SLO margin.
+It never expands a feasible state.
+
+A feasible candidate is a proven minimum-cost result only when every cheaper
+state was definitively classified. If a cheaper state reached `R_max` as
+`INCONCLUSIVE`, optimization may still return a larger validated candidate, but
+`minimality_proven` is false and `unresolved_lower_cost_states` records the
+barrier. Final fresh-seed validation proves feasibility of the selected
+candidate; it does not resolve those cheaper configurations.
 
 ## Stage C: final validation
 

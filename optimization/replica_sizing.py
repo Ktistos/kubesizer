@@ -372,17 +372,17 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         self.__initial = tuple(calibration_profile.minimum_replica_configuration)
         if len(self.__maximum) != self.__service_count:
             raise ValueError("Calibration profile does not match service count.")
-        self.__heuristic = (
-            heuristic
-            if heuristic is not None
-            else AnalyticalStabilityHeuristic.from_system(system)
-        )
+        # The calibrated anchor is already strictly stable, so stability adds
+        # no remaining-cost information. Keep a zero heuristic only for callers
+        # that explicitly inject the legacy A* optimizer.
+        self.__heuristic = heuristic if heuristic is not None else zero_heuristic
         self.__evaluator = evaluator or CalibratedConfigurationEvaluator(
             system,
             calibration_profile,
             workers=simulation_workers,
         )
         self.__evaluation_history = {}
+        self.__search_order_cache = {}
 
     @property
     def configuration_evaluations(self):
@@ -432,7 +432,27 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         return 1
 
     def heuristic(self, state):
+        """Retain compatibility for callers that explicitly inject A*."""
         return self.__heuristic(self.__normalize(state))
+
+    def search_tie_breaker(self, configuration):
+        """Order equal-cost states by lower analytical bottleneck utilization."""
+        configuration = self.__normalize(configuration)
+        cached = self.__search_order_cache.get(configuration)
+        if cached is not None:
+            return cached
+        self.__system.configure_system_replicas(configuration)
+        analytical = self.__system.solve()
+        utilizations = tuple(analytical.get_mean_utilizations())
+        if not analytical.get_stability() or not utilizations:
+            raise ValueError(
+                "Calibrated uniform-cost search requires stable bounded states."
+            )
+        ordering = max(float(value) for value in utilizations)
+        if not math.isfinite(ordering) or ordering < 0:
+            raise ValueError("Analytical utilization ordering must be finite.")
+        self.__search_order_cache[configuration] = ordering
+        return ordering
 
     def evaluate(self, configuration):
         configuration = self.__normalize(configuration)

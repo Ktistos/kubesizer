@@ -114,6 +114,12 @@ def report_replica_result(system, result):
     print("Sequential looks:", evaluation.configuration_evaluation.look_count)
     print("Explored states:", result.explored_states)
     print("Search path:", result.path)
+    print("Minimum replica cost proven:", result.minimality_proven)
+    if result.unresolved_lower_cost_states:
+        print(
+            "Lower-cost inconclusive configurations:",
+            result.unresolved_lower_cost_states,
+        )
 
 
 def report_final_validation(validation):

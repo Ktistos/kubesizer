@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 2
-SIMULATOR_SEMANTICS_VERSION = "native-event-kernel-cohort-v2"
+PROTOCOL_VERSION = 3
+SIMULATOR_SEMANTICS_VERSION = "native-event-kernel-weighted-cohort-v3"
 
 
 class NativeBackendError(RuntimeError):
@@ -127,6 +127,8 @@ class CppSimulationBackend:
             sorted(system.get_services().values(), key=lambda item: item.get_id())
         )
         request_classes = []
+        concurrency_weights = system.get_request_class_concurrency_weights()
+        configured_arrival_rates = system.get_configured_external_arrival_rates()
         for request_class in system.get_request_classes():
             routing = []
             for service in services:
@@ -140,12 +142,18 @@ class CppSimulationBackend:
                         }
                     )
                 routing.append(routes)
-            request_classes.append({"name": request_class, "routing": routing})
+            request_classes.append(
+                {
+                    "name": request_class,
+                    "concurrency_weight": concurrency_weights[request_class],
+                    "routing": routing,
+                }
+            )
 
         external_streams = []
         for service in services:
             for class_id, request_class in enumerate(system.get_request_classes()):
-                arrival_rate = service.get_gamma(request_class)
+                arrival_rate = configured_arrival_rates[request_class][service.get_id()]
                 if arrival_rate > 0:
                     external_streams.append(
                         {

@@ -1,94 +1,87 @@
 read_heavy:
-  api:
-    gamma: 20.0
-    mu: 100.0
-    routes:
-      auth: 0.20
-      db: 0.60
-      cache: 0.10
-      worker: 0.05
-
-  auth:
-    gamma: 0.0
-    mu: 50.0
-    routes:
-      db: 0.80
-      cache: 0.05
-
-  db:
-    gamma: 0.0
-    mu: 5.0
-    routes:
-      cache: 0.05
-
-  cache:
-    gamma: 0.0
-    mu: 80.0
-    routes:
-      worker: 0.05
-
-  worker:
-    gamma: 0.0
-    mu: 50.0
-    routes:
-      db: 0.80
-      cache: 0.05
-
+  concurrency_weight: 0.7
+  services:
+    api:
+      gamma: 20.0
+      mu: 100.0
+      routes:
+        auth: 0.2
+        db: 0.6
+        cache: 0.1
+        worker: 0.05
+    auth:
+      gamma: 0.0
+      mu: 50.0
+      routes:
+        db: 0.8
+        cache: 0.05
+    db:
+      gamma: 0.0
+      mu: 5.0
+      routes:
+        cache: 0.05
+    cache:
+      gamma: 0.0
+      mu: 80.0
+      routes:
+        worker: 0.05
+    worker:
+      gamma: 0.0
+      mu: 50.0
+      routes:
+        db: 0.8
+        cache: 0.05
 write_heavy:
-  api:
-    gamma: 8.0
-    mu: 100.0
-    routes:
-      auth: 0.15
-      db: 0.45
-      worker: 0.30
-
-  auth:
-    gamma: 0.0
-    mu: 50.0
-    routes:
-      db: 0.70
-      worker: 0.20
-
-  db:
-    gamma: 0.0
-    mu: 5.0
-    routes:
-      worker: 0.20
-
-  worker:
-    gamma: 0.0
-    mu: 50.0
-    routes:
-      db: 0.10
-
+  concurrency_weight: 0.2
+  services:
+    api:
+      gamma: 8.0
+      mu: 100.0
+      routes:
+        auth: 0.15
+        db: 0.45
+        worker: 0.3
+    auth:
+      gamma: 0.0
+      mu: 50.0
+      routes:
+        db: 0.7
+        worker: 0.2
+    db:
+      gamma: 0.0
+      mu: 5.0
+      routes:
+        worker: 0.2
+    worker:
+      gamma: 0.0
+      mu: 50.0
+      routes:
+        db: 0.1
 compute_heavy:
-  api:
-    gamma: 5.0
-    mu: 100.0
-    routes:
-      auth: 0.10
-      worker: 0.80
-
-  auth:
-    gamma: 0.0
-    mu: 50.0
-    routes:
-      worker: 0.85
-
-  worker:
-    gamma: 0.0
-    mu: 50.0
-    routes:
-      cache: 0.25
-      db: 0.10
-
-  cache:
-    gamma: 0.0
-    mu: 80.0
-    routes:
-      db: 0.05
-
-  db:
-    gamma: 0.0
-    mu: 5.0
+  concurrency_weight: 0.1
+  services:
+    api:
+      gamma: 5.0
+      mu: 100.0
+      routes:
+        auth: 0.1
+        worker: 0.8
+    auth:
+      gamma: 0.0
+      mu: 50.0
+      routes:
+        worker: 0.85
+    worker:
+      gamma: 0.0
+      mu: 50.0
+      routes:
+        cache: 0.25
+        db: 0.1
+    cache:
+      gamma: 0.0
+      mu: 80.0
+      routes:
+        db: 0.05
+    db:
+      gamma: 0.0
+      mu: 5.0

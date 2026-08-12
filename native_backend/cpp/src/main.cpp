@@ -22,7 +22,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 2;
+constexpr int kProtocolVersion = 3;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 
@@ -42,6 +42,7 @@ struct Route {
 
 struct RequestClass {
     std::string name;
+    double concurrency_weight{};
     std::vector<std::vector<Route>> routes;
 };
 
@@ -669,6 +670,11 @@ Workload parse_workload(json_t* raw) {
     json_array_foreach(classes, index, item) {
         RequestClass request_class;
         request_class.name = json_text(item, "name");
+        request_class.concurrency_weight = json_number(item, "concurrency_weight");
+        if (request_class.concurrency_weight < 0.0
+            || request_class.concurrency_weight > 1.0) {
+            throw std::runtime_error("concurrency weights must lie in [0, 1]");
+        }
         json_t* routing = required(item, "routing");
         if (!json_is_array(routing)
             || json_array_size(routing) != workload.services.size()) {
@@ -701,6 +707,13 @@ Workload parse_workload(json_t* raw) {
         }
         workload.request_classes.push_back(std::move(request_class));
     }
+    double concurrency_weight_total = 0.0;
+    for (const RequestClass& request_class : workload.request_classes) {
+        concurrency_weight_total += request_class.concurrency_weight;
+    }
+    if (std::abs(concurrency_weight_total - 1.0) > 1e-10) {
+        throw std::runtime_error("request-class concurrency weights must sum to one");
+    }
 
     json_t* streams = required(raw, "external_streams");
     if (!json_is_array(streams)) {
@@ -720,6 +733,34 @@ Workload parse_workload(json_t* raw) {
         workload.external_streams.push_back({
             static_cast<int>(request_class), static_cast<int>(entry_service), rate
         });
+    }
+
+    std::vector<double> configured_class_rates(
+        workload.request_classes.size(),
+        0.0
+    );
+    double configured_total_rate = 0.0;
+    for (const ExternalStream& stream : workload.external_streams) {
+        configured_class_rates[stream.request_class] += stream.rate;
+        configured_total_rate += stream.rate;
+    }
+    if (configured_total_rate > 0.0) {
+        for (std::size_t request_class = 0;
+             request_class < workload.request_classes.size();
+             ++request_class) {
+            if (workload.request_classes[request_class].concurrency_weight > 0.0
+                && configured_class_rates[request_class] <= 0.0) {
+                throw std::runtime_error(
+                    "a positively weighted request class has no external stream"
+                );
+            }
+        }
+        for (ExternalStream& stream : workload.external_streams) {
+            const double target_class_rate = configured_total_rate
+                * workload.request_classes[stream.request_class].concurrency_weight;
+            stream.rate *= target_class_rate
+                / configured_class_rates[stream.request_class];
+        }
     }
     return workload;
 }

@@ -26,13 +26,138 @@ class System:
         self.__services = {}
         self.__external_traffic_services = []
 
-        if not workload:
+        if not isinstance(workload, dict) or not workload:
             raise ValueError("At least one request class is required.")
         self.__request_classes = tuple(workload.keys())
 
+        class_services = {}
+        configured_rates = {}
+        configured_totals = {}
+        explicit_weights = {}
+        wrapped_classes = []
+        for request_class_name, request_class_spec in workload.items():
+            if not isinstance(request_class_name, str) or not request_class_name:
+                raise ValueError("Request-class names must be non-empty strings.")
+            if not isinstance(request_class_spec, dict):
+                raise ValueError(
+                    f"Request class '{request_class_name}' must be a mapping."
+                )
+            wrapped = (
+                "services" in request_class_spec
+                or "concurrency_weight" in request_class_spec
+            )
+            wrapped_classes.append(wrapped)
+            if wrapped:
+                if set(request_class_spec) != {"concurrency_weight", "services"}:
+                    raise ValueError(
+                        f"Weighted request class '{request_class_name}' must contain "
+                        "only concurrency_weight and services."
+                    )
+                weight = request_class_spec["concurrency_weight"]
+                if (
+                    isinstance(weight, bool)
+                    or not isinstance(weight, (int, float))
+                    or not math.isfinite(float(weight))
+                    or float(weight) <= 0
+                ):
+                    raise ValueError(
+                        "Every concurrency_weight must be finite and greater than zero."
+                    )
+                explicit_weights[request_class_name] = float(weight)
+                services_spec = request_class_spec["services"]
+            else:
+                services_spec = request_class_spec
+            if not isinstance(services_spec, dict) or not services_spec:
+                raise ValueError(
+                    f"Request class '{request_class_name}' needs a nonempty services mapping."
+                )
+            class_services[request_class_name] = services_spec
+
+            rates = {}
+            for service_name, service_data in services_spec.items():
+                if not isinstance(service_data, dict):
+                    raise ValueError(
+                        f"Service '{service_name}' in class '{request_class_name}' "
+                        "must be a mapping."
+                    )
+                gamma = service_data.get("gamma", 0.0)
+                if (
+                    isinstance(gamma, bool)
+                    or not isinstance(gamma, (int, float))
+                    or not math.isfinite(float(gamma))
+                    or float(gamma) < 0
+                ):
+                    raise ValueError(
+                        "External arrival rates must be finite and non-negative."
+                    )
+                rates[service_name] = float(gamma)
+            configured_rates[request_class_name] = rates
+            configured_totals[request_class_name] = sum(rates.values())
+
+        if any(wrapped_classes) and not all(wrapped_classes):
+            raise ValueError(
+                "Do not mix weighted and legacy request-class schemas in one workload."
+            )
+
+        total_configured_rate = sum(configured_totals.values())
+        if all(wrapped_classes):
+            if not math.isclose(
+                sum(explicit_weights.values()),
+                1.0,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("Request-class concurrency weights must sum to one.")
+            for request_class_name in self.__request_classes:
+                if configured_totals[request_class_name] <= 0:
+                    raise ValueError(
+                        f"Weighted request class '{request_class_name}' needs at "
+                        "least one positive external gamma."
+                    )
+            concurrency_weights = explicit_weights
+        elif total_configured_rate > 0:
+            # Legacy workloads retain their exact arrival rates. Their implicit
+            # weights are simply their current shares of total external traffic.
+            concurrency_weights = {
+                request_class_name: (
+                    configured_totals[request_class_name] / total_configured_rate
+                )
+                for request_class_name in self.__request_classes
+            }
+        else:
+            equal_weight = 1.0 / len(self.__request_classes)
+            concurrency_weights = {
+                request_class_name: equal_weight
+                for request_class_name in self.__request_classes
+            }
+
+        self.__request_class_concurrency_weights = dict(concurrency_weights)
+        self.__configured_external_arrival_rates = copy.deepcopy(configured_rates)
+
+        effective_rates = {}
+        for request_class_name in self.__request_classes:
+            configured_class_total = configured_totals[request_class_name]
+            if total_configured_rate <= 0 or configured_class_total <= 0:
+                effective_rates[request_class_name] = {
+                    service_name: 0.0
+                    for service_name in configured_rates[request_class_name]
+                }
+                continue
+            target_class_rate = (
+                total_configured_rate * concurrency_weights[request_class_name]
+            )
+            effective_rates[request_class_name] = {
+                service_name: (
+                    target_class_rate * configured_rate / configured_class_total
+                )
+                for service_name, configured_rate in configured_rates[
+                    request_class_name
+                ].items()
+            }
+
         # Build the union of services before registering routes, so targets can
         # be resolved regardless of declaration order or request class.
-        for request_class in workload.values():
+        for request_class in class_services.values():
             for service_name, service_data in request_class.items():
                 service = self.get_service(service_name)
                 service_mu = service_data.get("mu", 0)
@@ -50,12 +175,12 @@ class System:
                         "every request class."
                     )
 
-        for request_class_name, request_class in workload.items():
+        for request_class_name, request_class in class_services.items():
             for service_name, service_data in request_class.items():
                 service = self.get_service(service_name)
                 service.add_gamma(
                     request_class_name,
-                    service_data.get("gamma", 0),
+                    effective_rates[request_class_name][service_name],
                 )
                 service.register_edges(
                     request_class_name,
@@ -331,6 +456,26 @@ class System:
     def get_workload_spec(self):
         """Return an isolated copy suitable for constructing another System."""
         return copy.deepcopy(self.__workload_spec)
+
+    def get_request_class_concurrency_weights(self):
+        """Return normalized external-traffic shares by request class."""
+        return dict(self.__request_class_concurrency_weights)
+
+    def get_configured_external_arrival_rates(self):
+        """Return pre-weight gamma values by class and service-ID order."""
+        services = tuple(
+            sorted(self.get_services().values(), key=lambda item: item.get_id())
+        )
+        return {
+            request_class: tuple(
+                self.__configured_external_arrival_rates[request_class].get(
+                    service.get_name(),
+                    0.0,
+                )
+                for service in services
+            )
+            for request_class in self.get_request_classes()
+        }
 
     def get_service(self, name):
         return self.__services.get(name, None)
