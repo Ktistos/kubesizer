@@ -1,19 +1,19 @@
 import os
-from pathlib import Path
-
 import yaml
 
-from calibration import (
-    CalibrationOptions,
-    CalibrationProfileMismatchError,
-    load_calibration_profile,
-    validate_profile_for_experiment,
-)
+from calibration import CalibrationOptions
 from optimization import (
-    ExhaustiveNodePlacementOptimizer,
     NodePlacementProblem,
+    OptimizationMode,
+    optimize_node_placement,
 )
 from performance_models import Cluster, QueueingNetworkType, System
+from runtime_estimation import (
+    calibrate_replica_configuration_limit,
+    estimate_workflow_runtime,
+    format_replica_configuration_limit_calibration,
+    format_runtime_estimate,
+)
 from statistical_workflow import (
     calibrate,
     optimize_with_calibrated_simulation,
@@ -28,47 +28,36 @@ REQUEST_CLASS_SLOS = {
 }
 MAX_REPLICAS_PER_SERVICE = 10
 SIMULATION_WORKERS = min(8, os.cpu_count() or 1)
-CALIBRATION_OUTPUT_DIRECTORY = Path("simulation_calibration_output")
-CALIBRATION_PROFILE_PATH = (
-    CALIBRATION_OUTPUT_DIRECTORY / "calibration_profile.yaml"
-)
+OPTIMIZATION_MODE = OptimizationMode.AUTO
+EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS = 600.0
+RUNTIME_LIMIT_SAFETY_FACTOR = 3.0
 
 
 def calibrate_before_optimization(system, *, options=None):
-    """Run Stage A and persist its profile and complete diagnostic evidence."""
+    """Run Stage A and keep its profile and diagnostics in memory."""
     return calibrate(
         system,
         request_class_slos=REQUEST_CLASS_SLOS,
         maximum_replicas=MAX_REPLICAS_PER_SERVICE,
         options=options or CalibrationOptions(),
         workers=SIMULATION_WORKERS,
-        report_directory=CALIBRATION_OUTPUT_DIRECTORY,
         progress_callback=lambda stage, details: print(stage, details),
     )
 
 
-def load_or_calibrate_profile(system, *, options=None):
-    """Load an exact-match profile, or calibrate only when none exists."""
-    if CALIBRATION_PROFILE_PATH.exists():
-        profile = load_calibration_profile(CALIBRATION_PROFILE_PATH)
-        return validate_profile_for_experiment(
-            profile,
-            system,
-            request_class_slos=REQUEST_CLASS_SLOS,
-            maximum_configuration=(
-                MAX_REPLICAS_PER_SERVICE,
-            )
-            * len(system.get_services()),
-        )
-    return calibrate_before_optimization(system, options=options)
-
-
-def optimize_replicas(system, calibration_profile):
-    """Run Stage B with frozen W/M and the calibrated sequential policy."""
+def optimize_replicas(
+    system,
+    calibration_profile,
+    *,
+    runtime_limit_calibration=None,
+):
+    """Run Stage B with runtime-adaptive exact/scalable selection."""
     return optimize_with_calibrated_simulation(
         system,
         calibration_profile,
         workers=SIMULATION_WORKERS,
+        mode=OPTIMIZATION_MODE,
+        runtime_limit_calibration=runtime_limit_calibration,
     )
 
 
@@ -79,7 +68,6 @@ def validate_optimizer_result(system, optimization_result, calibration_profile):
         optimization_result.configuration,
         calibration_profile,
         workers=SIMULATION_WORKERS,
-        report_directory=CALIBRATION_OUTPUT_DIRECTORY / "final_validation",
     )
 
 
@@ -112,9 +100,12 @@ def report_replica_result(system, result):
     )
     print("Replications used:", evaluation.configuration_evaluation.replications_used)
     print("Sequential looks:", evaluation.configuration_evaluation.look_count)
+    print("Search mode:", result.solution_mode)
     print("Explored states:", result.explored_states)
     print("Search path:", result.path)
     print("Minimum replica cost proven:", result.minimality_proven)
+    print("Locally minimal:", result.locally_minimal)
+    print("Search budget exhausted:", result.budget_exhausted)
     if result.unresolved_lower_cost_states:
         print(
             "Lower-cost inconclusive configurations:",
@@ -135,7 +126,26 @@ def main():
         resources = yaml.safe_load(resources_file)
 
     system = System("STELAR", workload, QueueingNetworkType.OPEN)
-    profile = load_or_calibrate_profile(system)
+    options = CalibrationOptions()
+    runtime_rates = None
+    print("Preflight: estimating the conservative workflow runtime")
+    try:
+        runtime_estimate = estimate_workflow_runtime(
+            system,
+            resources,
+            options=options,
+            maximum_replicas=MAX_REPLICAS_PER_SERVICE,
+            workers=SIMULATION_WORKERS,
+            optimization_mode=OPTIMIZATION_MODE,
+        )
+    except Exception as error:
+        print(f"Runtime speculation unavailable: {error}")
+    else:
+        print(format_runtime_estimate(runtime_estimate))
+        runtime_rates = getattr(runtime_estimate, "benchmark", None)
+
+    print("Stage A: calibrating a fresh statistical profile")
+    profile = calibrate_before_optimization(system, options=options)
     print(
         "Calibration profile:",
         {
@@ -147,9 +157,41 @@ def main():
         },
     )
 
-    replica_result = optimize_replicas(system, profile)
+    runtime_limit_calibration = None
+    if runtime_rates is not None:
+        try:
+            runtime_limit_calibration = calibrate_replica_configuration_limit(
+                system,
+                profile,
+                runtime_rates,
+                workers=SIMULATION_WORKERS,
+                exact_search_time_budget_seconds=(
+                    EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS
+                ),
+                safety_factor=RUNTIME_LIMIT_SAFETY_FACTOR,
+                mode=OPTIMIZATION_MODE,
+            )
+        except Exception as error:
+            print(
+                "Runtime-adaptive replica limit unavailable; using the hard "
+                f"configuration cap: {error}"
+            )
+        else:
+            print(
+                format_replica_configuration_limit_calibration(
+                    runtime_limit_calibration
+                )
+            )
+
+    print("Stage B: optimizing replica counts with calibrated simulation")
+    replica_result = optimize_replicas(
+        system,
+        profile,
+        runtime_limit_calibration=runtime_limit_calibration,
+    )
     report_replica_result(system, replica_result)
 
+    print("Stage C: validating the selected replicas with fresh seeds")
     final_validation = validate_optimizer_result(system, replica_result, profile)
     report_final_validation(final_validation)
     if not final_validation.passed:
@@ -158,12 +200,31 @@ def main():
             f"{final_validation.failure_reason}"
         )
 
+    print("Stage D: optimizing node placement")
     system.configure_system_replicas(replica_result.configuration)
     cluster = Cluster("okeanos", resources, system)
-    placement_result = ExhaustiveNodePlacementOptimizer().optimize(
-        NodePlacementProblem(cluster)
+    placement_result = optimize_node_placement(
+        NodePlacementProblem(cluster),
+        mode=OPTIMIZATION_MODE,
     )
     print("Node placement:", placement_result.configuration)
+    print(
+        "Node placement search:",
+        {
+            "mode": getattr(placement_result, "solution_mode", "EXACT"),
+            "complete_placements_evaluated": placement_result.complete_states,
+            "complete_placements_pruned": (
+                placement_result.pruned_complete_placements
+            ),
+            "total_placement_space": placement_result.total_configurations,
+            "optimality_proven": placement_result.optimality_proven,
+            "budget_exhausted": getattr(
+                placement_result,
+                "budget_exhausted",
+                False,
+            ),
+        },
+    )
 
 
 if __name__ == "__main__":

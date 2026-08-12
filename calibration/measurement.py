@@ -6,9 +6,56 @@ from metrics import (
     fixed_experiment_tail_alpha,
     replication_cluster_bootstrap_p95,
 )
-from native_backend import slice_measurement_replication
-
 from .profile import CalibrationOptions
+
+
+class _ArrivalCohortLatencyView:
+    """Read-only latency view selected by external-arrival time."""
+
+    __slots__ = ("_arrival_times", "_boundary", "_latencies", "_length")
+
+    def __init__(self, arrival_times, latencies, boundary):
+        if len(arrival_times) != len(latencies):
+            raise ValueError("Arrival and latency arrays must have equal length.")
+        self._arrival_times = arrival_times
+        self._latencies = latencies
+        self._boundary = boundary
+        self._length = sum(arrival < boundary for arrival in arrival_times)
+
+    def __len__(self):
+        return self._length
+
+    def __iter__(self):
+        return (
+            latency
+            for arrival, latency in zip(
+                self._arrival_times,
+                self._latencies,
+            )
+            if arrival < self._boundary
+        )
+
+
+def _latency_clusters_for_duration(
+    replications,
+    request_class,
+    measurement_duration,
+):
+    clusters = []
+    for replication in replications:
+        if measurement_duration > replication.measurement_duration:
+            raise ValueError(
+                "Cannot select a cohort beyond the simulated duration."
+            )
+        boundary = replication.warmup_duration + measurement_duration
+        clusters.append(
+            _ArrivalCohortLatencyView(
+                replication.request_class_arrival_times[request_class],
+                replication.request_class_latencies[request_class],
+                boundary,
+            )
+        )
+    return tuple(clusters)
 
 
 class MeasurementCalibrationError(RuntimeError):
@@ -122,7 +169,7 @@ def _relative_change(left, right):
 
 
 def _interval_for(
-    replications,
+    clusters,
     request_class,
     slo,
     *,
@@ -131,10 +178,6 @@ def _interval_for(
     configuration,
     tail_alpha,
 ):
-    clusters = tuple(
-        replication.request_class_latencies[request_class]
-        for replication in replications
-    )
     bootstrap_seed = options.seed_policy.deterministic_seed(
         "bootstrap",
         "measurement-calibration",
@@ -154,6 +197,140 @@ def _interval_for(
     )
 
 
+def _analyze_measurement_durations(
+    replications,
+    durations,
+    request_classes,
+    request_class_slos,
+    *,
+    options,
+    configuration,
+    tail_alpha,
+):
+    intervals = {}
+    cohort_counts = {}
+    for duration in durations:
+        for request_class in request_classes:
+            clusters = _latency_clusters_for_duration(
+                replications,
+                request_class,
+                duration,
+            )
+            cohort_counts[(duration, request_class)] = (
+                sum(len(cluster) for cluster in clusters),
+                sum(bool(len(cluster)) for cluster in clusters),
+            )
+            try:
+                interval = _interval_for(
+                    clusters,
+                    request_class,
+                    request_class_slos[request_class],
+                    options=options,
+                    duration=duration,
+                    configuration=configuration,
+                    tail_alpha=tail_alpha,
+                )
+            except ValueError as error:
+                if "at least one latency" not in str(error):
+                    raise MeasurementCalibrationError(
+                        "Measurement bootstrap failed for "
+                        f"{request_class!r} at M={duration}: {error}"
+                    ) from error
+                interval = None
+            intervals[(duration, request_class)] = interval
+    return intervals, cohort_counts
+
+
+def _measurement_candidate_diagnostic(
+    duration,
+    doubled_duration,
+    request_classes,
+    intervals,
+    cohort_counts,
+    options,
+):
+    class_results = []
+    for request_class in request_classes:
+        interval = intervals[(duration, request_class)]
+        doubled = intervals[(doubled_duration, request_class)]
+        sample_count, nonempty_count = cohort_counts[
+            (duration, request_class)
+        ]
+        intervals_available = interval is not None and doubled is not None
+        p95_change = (
+            _relative_change(interval.p95_estimate, doubled.p95_estimate)
+            if intervals_available
+            else math.inf
+        )
+        width_change = (
+            _relative_change(
+                2.0 * interval.half_width,
+                2.0 * doubled.half_width,
+            )
+            if intervals_available
+            else math.inf
+        )
+        precision_limit = (
+            max(
+                options.absolute_ci_half_width_target,
+                options.relative_ci_half_width_target
+                * interval.p95_estimate,
+            )
+            if interval is not None
+            else -math.inf
+        )
+        width_stability_limit = (
+            max(
+                options.absolute_ci_half_width_target,
+                options.ci_width_stability_tolerance
+                * interval.p95_estimate,
+            )
+            if interval is not None
+            else -math.inf
+        )
+        half_width_change = (
+            abs(doubled.half_width - interval.half_width)
+            if intervals_available
+            else math.inf
+        )
+        class_results.append(
+            MeasurementClassDiagnostic(
+                request_class=request_class,
+                duration=duration,
+                doubled_duration=doubled_duration,
+                interval=interval,
+                doubled_interval=doubled,
+                p95_relative_change=p95_change,
+                ci_width_relative_change=width_change,
+                ci_half_width_absolute_change=half_width_change,
+                sample_requirement_passed=(
+                    sample_count
+                    >= options.minimum_eligible_samples_per_class
+                ),
+                nonempty_replication_requirement_passed=(
+                    nonempty_count
+                    >= options.minimum_nonempty_replications_per_class
+                ),
+                precision_requirement_passed=(
+                    interval is not None
+                    and interval.half_width <= precision_limit
+                ),
+                p95_stability_passed=(
+                    p95_change
+                    <= options.measurement_stability_tolerance
+                ),
+                ci_width_stability_passed=(
+                    half_width_change <= width_stability_limit
+                ),
+            )
+        )
+    return MeasurementCandidateDiagnostic(
+        duration=duration,
+        doubled_duration=doubled_duration,
+        request_classes=tuple(class_results),
+    )
+
+
 def calibrate_measurement_duration(
     system,
     *,
@@ -162,6 +339,7 @@ def calibrate_measurement_duration(
     request_class_slos,
     options=None,
     workers=1,
+    progress_callback=None,
 ):
     """Select one global M using prefix-reused, drained arrival cohorts."""
     options = options or CalibrationOptions()
@@ -215,130 +393,74 @@ def calibrate_measurement_duration(
                 raise MeasurementCalibrationError(
                     f"Representative configuration {configuration} is analytically unstable."
                 )
-            longest = system.simulate_measurement_replications(
-                warmup_duration=warmup_duration,
-                measurement_duration=durations[-1],
-                seeds=seeds,
-                workers=workers,
-                maximum_drain_time=options.maximum_drain_time,
-            )
-            prefixes = {
-                duration: tuple(
-                    slice_measurement_replication(replication, duration)
-                    for replication in longest
-                )
-                for duration in durations
-            }
-            intervals = {}
-            for duration in durations:
-                for request_class in request_classes:
-                    try:
-                        interval = _interval_for(
-                            prefixes[duration],
-                            request_class,
-                            request_class_slos[request_class],
-                            options=options,
-                            duration=duration,
-                            configuration=configuration,
-                            tail_alpha=tail_alpha,
-                        )
-                    except ValueError as error:
-                        if "at least one latency" not in str(error):
-                            raise MeasurementCalibrationError(
-                                "Measurement bootstrap failed for "
-                                f"{request_class!r} at M={duration}: {error}"
-                            ) from error
-                        interval = None
-                    intervals[(duration, request_class)] = interval
+            candidate_pairs = tuple(zip(durations, durations[1:]))
+            studies = ((candidate_pairs[:1], durations[1]),)
+            if len(candidate_pairs) > 1:
+                studies += ((candidate_pairs[1:], durations[-1]),)
+
             candidate_results = []
             accepted_duration = None
-            for duration, doubled_duration in zip(durations, durations[1:]):
-                class_results = []
-                for request_class in request_classes:
-                    interval = intervals[(duration, request_class)]
-                    doubled = intervals[(doubled_duration, request_class)]
-                    duration_clusters = tuple(
-                        replication.request_class_latencies[request_class]
-                        for replication in prefixes[duration]
+            for pairs, simulated_duration in studies:
+                if progress_callback is not None:
+                    progress_callback(
+                        "measurement_trajectories_started",
+                        {
+                            "configuration": configuration,
+                            "simulation_duration": simulated_duration,
+                            "candidate_pairs": pairs,
+                            "replications": len(seeds),
+                            "workers": workers,
+                        },
                     )
-                    sample_count = sum(len(cluster) for cluster in duration_clusters)
-                    nonempty_count = sum(bool(cluster) for cluster in duration_clusters)
-                    intervals_available = interval is not None and doubled is not None
-                    p95_change = (
-                        _relative_change(interval.p95_estimate, doubled.p95_estimate)
-                        if intervals_available
-                        else math.inf
-                    )
-                    width_change = (
-                        _relative_change(
-                            2.0 * interval.half_width,
-                            2.0 * doubled.half_width,
-                        )
-                        if intervals_available
-                        else math.inf
-                    )
-                    precision_limit = (
-                        max(
-                            options.absolute_ci_half_width_target,
-                            options.relative_ci_half_width_target
-                            * interval.p95_estimate,
-                        )
-                        if interval is not None
-                        else -math.inf
-                    )
-                    width_stability_limit = (
-                        max(
-                            options.absolute_ci_half_width_target,
-                            options.ci_width_stability_tolerance
-                            * interval.p95_estimate,
-                        )
-                        if interval is not None
-                        else -math.inf
-                    )
-                    half_width_change = (
-                        abs(doubled.half_width - interval.half_width)
-                        if intervals_available
-                        else math.inf
-                    )
-                    class_results.append(
-                        MeasurementClassDiagnostic(
-                            request_class=request_class,
-                            duration=duration,
-                            doubled_duration=doubled_duration,
-                            interval=interval,
-                            doubled_interval=doubled,
-                            p95_relative_change=p95_change,
-                            ci_width_relative_change=width_change,
-                            ci_half_width_absolute_change=half_width_change,
-                            sample_requirement_passed=(
-                                sample_count
-                                >= options.minimum_eligible_samples_per_class
-                            ),
-                            nonempty_replication_requirement_passed=(
-                                nonempty_count
-                                >= options.minimum_nonempty_replications_per_class
-                            ),
-                            precision_requirement_passed=(
-                                interval is not None
-                                and interval.half_width <= precision_limit
-                            ),
-                            p95_stability_passed=(
-                                p95_change
-                                <= options.measurement_stability_tolerance
-                            ),
-                            ci_width_stability_passed=(
-                                half_width_change <= width_stability_limit
-                            ),
-                        )
-                    )
-                candidate = MeasurementCandidateDiagnostic(
-                    duration=duration,
-                    doubled_duration=doubled_duration,
-                    request_classes=tuple(class_results),
+                replications = system.simulate_measurement_replications(
+                    warmup_duration=warmup_duration,
+                    measurement_duration=simulated_duration,
+                    seeds=seeds,
+                    workers=workers,
+                    maximum_drain_time=options.maximum_drain_time,
                 )
-                candidate_results.append(candidate)
-                if accepted_duration is None and candidate.accepted:
-                    accepted_duration = duration
+                analysis_durations = tuple(
+                    dict.fromkeys(
+                        value
+                        for pair in pairs
+                        for value in pair
+                    )
+                )
+                intervals, cohort_counts = _analyze_measurement_durations(
+                    replications,
+                    analysis_durations,
+                    request_classes,
+                    request_class_slos,
+                    options=options,
+                    configuration=configuration,
+                    tail_alpha=tail_alpha,
+                )
+                for duration, doubled_duration in pairs:
+                    candidate = _measurement_candidate_diagnostic(
+                        duration,
+                        doubled_duration,
+                        request_classes,
+                        intervals,
+                        cohort_counts,
+                        options,
+                    )
+                    candidate_results.append(candidate)
+                    if progress_callback is not None:
+                        progress_callback(
+                            "measurement_candidate_analyzed",
+                            {
+                                "configuration": configuration,
+                                "duration": duration,
+                                "doubled_duration": doubled_duration,
+                                "accepted": candidate.accepted,
+                            },
+                        )
+                    if candidate.accepted:
+                        accepted_duration = duration
+                        break
+                if accepted_duration is not None:
+                    break
+
             configuration_results.append(
                 ConfigurationMeasurementCalibration(
                     replica_configuration=configuration,

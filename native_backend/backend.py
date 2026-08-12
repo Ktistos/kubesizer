@@ -2,6 +2,7 @@ import json
 import math
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -177,12 +178,23 @@ class CppSimulationBackend:
             "external_streams": external_streams,
         }
 
-    def _invoke(self, operation, system, **arguments):
+    def _invoke(
+        self,
+        operation,
+        system,
+        *,
+        serialized_workload=None,
+        **arguments,
+    ):
         self.ensure_available()
         request = {
             "protocol_version": PROTOCOL_VERSION,
             "operation": operation,
-            "workload": self.serialize_system(system),
+            "workload": (
+                self.serialize_system(system)
+                if serialized_workload is None
+                else serialized_workload
+            ),
             **arguments,
         }
         try:
@@ -375,23 +387,44 @@ class CppSimulationBackend:
         )
         if isinstance(workers, bool) or not isinstance(workers, int) or workers <= 0:
             raise ValueError("workers must be a positive integer.")
-        result = self._invoke(
-            "measurement_replications",
-            system,
-            seeds=seeds,
-            warmup_duration=warmup_duration,
-            measurement_duration=measurement_duration,
-            maximum_drain_time=maximum_drain_time,
-            workers=workers,
-        )
+        serialized_workload = self.serialize_system(system)
+
+        def invoke_one(seed):
+            return self._invoke(
+                "measurement_replications",
+                system,
+                serialized_workload=serialized_workload,
+                seeds=(seed,),
+                warmup_duration=warmup_duration,
+                measurement_duration=measurement_duration,
+                maximum_drain_time=maximum_drain_time,
+                workers=1,
+            )
+
+        bounded_workers = min(workers, len(seeds))
+        if bounded_workers == 1:
+            native_results = tuple(invoke_one(seed) for seed in seeds)
+        else:
+            with ThreadPoolExecutor(max_workers=bounded_workers) as executor:
+                native_results = tuple(executor.map(invoke_one, seeds))
+
         try:
-            configuration = tuple(int(value) for value in result["replica_configuration"])
             expected_configuration = tuple(system.get_system_replicas())
-            if configuration != expected_configuration:
-                raise ValueError("native configuration does not match request.")
-            raw_replications = result["replications"]
-            if len(raw_replications) != len(seeds):
-                raise ValueError("native replication count does not match request.")
+            raw_replications = []
+            for expected_seed, result in zip(seeds, native_results):
+                configuration = tuple(
+                    int(value) for value in result["replica_configuration"]
+                )
+                if configuration != expected_configuration:
+                    raise ValueError(
+                        "native configuration does not match request."
+                    )
+                batch = result["replications"]
+                if len(batch) != 1 or int(batch[0]["seed"]) != expected_seed:
+                    raise ValueError(
+                        "native single-replication batch identity is invalid."
+                    )
+                raw_replications.append(batch[0])
             expected_classes = set(system.get_request_classes())
             replications = []
             for expected_seed, item in zip(seeds, raw_replications):

@@ -12,7 +12,7 @@ from native_backend import SIMULATOR_SEMANTICS_VERSION
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
 
-CALIBRATION_PROFILE_VERSION = 2
+CALIBRATION_PROFILE_VERSION = 3
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
 
 
@@ -24,14 +24,15 @@ class CalibrationProfileMismatchError(RuntimeError):
 class CalibrationOptions:
     time_unit: str = "seconds"
     warmup_replications: int = 30
-    warmup_validation_replications: int = 10
+    warmup_validation_replications: int = 100
     warmup_window_length: int = 10
     warmup_reference_tail_fraction: float = 0.20
     warmup_required_stable_windows: int = 3
     warmup_relative_tolerance: float = 0.05
     warmup_sensitivity_tolerance: float = 0.10
     warmup_max_horizon_doublings: int = 5
-    warmup_max_validation_rounds: int = 3
+    warmup_max_validation_rounds: int = 1
+    warmup_max_validation_horizon_extensions: int = 2
     measurement_calibration_replications: int = 30
     target_samples_per_class: int = 2_000
     minimum_eligible_samples_per_class: int = 20_000
@@ -84,6 +85,14 @@ class CalibrationOptions:
         for name, value in positive_integers.items():
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer.")
+        if (
+            isinstance(self.warmup_max_validation_horizon_extensions, bool)
+            or not isinstance(self.warmup_max_validation_horizon_extensions, int)
+            or self.warmup_max_validation_horizon_extensions < 0
+        ):
+            raise ValueError(
+                "warmup_max_validation_horizon_extensions must be non-negative."
+            )
         if self.minimum_optimization_replications > self.maximum_optimization_replications:
             raise ValueError("R_min cannot exceed R_max.")
         if (

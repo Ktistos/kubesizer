@@ -316,12 +316,16 @@ class Kernel {
         double warmup_duration,
         double measurement_duration,
         bool capture_history,
+        bool collect_service_samples,
+        bool collect_request_class_samples,
         double bucket_width = 0.0,
         double maximum_drain_time = 0.0
     ) : workload_(workload), seed_(seed), mode_(mode), horizon_(horizon),
         warmup_duration_(warmup_duration),
         measurement_end_(warmup_duration + measurement_duration),
         maximum_drain_time_(maximum_drain_time),
+        collect_service_samples_(collect_service_samples),
+        collect_request_class_samples_(collect_request_class_samples),
         random_(static_cast<std::uint64_t>(seed)), waiting_(workload.services.size()),
         busy_(workload.services.size()),
         recorder_(capacities(workload), capture_history, bucket_width, horizon),
@@ -386,6 +390,12 @@ class Kernel {
     }
     const std::vector<std::vector<double>>& request_class_arrival_times() const {
         return request_class_arrival_times_;
+    }
+    std::vector<std::vector<double>> take_request_class_response_times() {
+        return std::move(request_class_response_times_);
+    }
+    std::vector<std::vector<double>> take_request_class_arrival_times() {
+        return std::move(request_class_arrival_times_);
     }
     const std::vector<std::int64_t>& measured_request_counts() const {
         return measured_request_counts_;
@@ -455,12 +465,22 @@ class Kernel {
         const bool eligible = mode_ == RunMode::FixedHorizon
             ? now >= warmup_duration_
             : tagged;
-        const std::size_t ownership_index = requests_.size();
-        requests_.push_back(std::make_unique<Request>(Request{
+        std::size_t ownership_index;
+        if (free_request_slots_.empty()) {
+            ownership_index = requests_.size();
+            requests_.push_back(nullptr);
+        } else {
+            ownership_index = free_request_slots_.back();
+            free_request_slots_.pop_back();
+            if (requests_[ownership_index]) {
+                throw std::runtime_error("request ownership slot was not empty");
+            }
+        }
+        requests_[ownership_index] = std::make_unique<Request>(Request{
             next_request_id_++, stream.request_class, now, ownership_index,
             eligible, tagged
-        }));
-        Request* request = requests_.back().get();
+        });
+        Request* request = requests_[ownership_index].get();
         ++processed_event_count_;
         ++external_arrival_count_;
         if (tagged) {
@@ -498,13 +518,17 @@ class Kernel {
     void service_completion(Request* request, int service, double now) {
         ++processed_event_count_;
         ++completed_visit_count_;
-        service_response_times_[service].push_back(now - current_visit_start_.at(request));
+        if (collect_service_samples_) {
+            service_response_times_[service].push_back(
+                now - current_visit_start_.at(request)
+            );
+        }
         current_visit_start_.erase(request);
         const int target = choose_route(request, service);
         if (target < 0) {
             ++completed_request_count_;
             const double latency = now - request->external_entry_time;
-            if (request->latency_eligible) {
+            if (request->latency_eligible && collect_request_class_samples_) {
                 request_class_arrival_times_[request->request_class].push_back(
                     request->external_entry_time
                 );
@@ -517,7 +541,9 @@ class Kernel {
                 --tagged_requests_in_flight_;
             }
             recorder_.final_exit(now);
-            requests_[request->ownership_index].reset();
+            const std::size_t ownership_index = request->ownership_index;
+            requests_[ownership_index].reset();
+            free_request_slots_.push_back(ownership_index);
         } else {
             schedule(now, kUrgentPriority, EventKind::Admit, request, target);
         }
@@ -560,6 +586,8 @@ class Kernel {
     double warmup_duration_{};
     double measurement_end_{};
     double maximum_drain_time_{};
+    bool collect_service_samples_{};
+    bool collect_request_class_samples_{};
     std::mt19937_64 random_;
     std::priority_queue<Event, std::vector<Event>, LaterEvent> future_events_;
     std::uint64_t sequence_{};
@@ -567,6 +595,7 @@ class Kernel {
     std::vector<int> busy_;
     StateRecorder recorder_;
     std::vector<std::unique_ptr<Request>> requests_;
+    std::vector<std::size_t> free_request_slots_;
     std::unordered_map<Request*, double> current_visit_start_;
     std::vector<std::vector<double>> service_response_times_;
     std::vector<std::vector<double>> request_class_response_times_;
@@ -1036,7 +1065,8 @@ json_t* run_simulate(json_t* request, const Workload& workload) {
         throw std::runtime_error("invalid seed, horizon, or warmup_duration");
     }
     Kernel kernel(
-        workload, seed, RunMode::FixedHorizon, horizon, warmup, 0.0, capture
+        workload, seed, RunMode::FixedHorizon, horizon, warmup, 0.0,
+        capture, true, true
     );
     const KernelSummary summary = kernel.run();
     return single_result(workload, kernel, summary, capture, horizon);
@@ -1051,32 +1081,47 @@ json_t* run_warmup_ensemble(json_t* request, const Workload& workload) {
         throw std::runtime_error("invalid horizon, bucket_width, or workers");
     }
     const int workers = static_cast<int>(std::min<std::int64_t>(workers_raw, seeds.size()));
-    std::vector<std::optional<BucketOutput>> outputs(seeds.size());
-    std::vector<KernelSummary> summaries(seeds.size());
     const auto start = std::chrono::steady_clock::now();
-    run_parallel(seeds.size(), workers, [&](std::size_t index) {
-        Kernel kernel(
-            workload, seeds[index], RunMode::FixedHorizon,
-            horizon, 0.0, 0.0, false, bucket_width
-        );
-        summaries[index] = kernel.run();
-        outputs[index] = kernel.buckets();
-    });
-    const double wall = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - start
-    ).count();
-
     BucketMoments moments;
     std::int64_t processed = 0;
     std::int64_t external = 0;
     std::int64_t completed = 0;
-    for (std::size_t index = 0; index < seeds.size(); ++index) {
-        add_bucket_values(moments.sum, outputs[index].value(), false);
-        add_bucket_values(moments.sum_squares, outputs[index].value(), true);
-        processed += summaries[index].processed_event_count;
-        external += summaries[index].external_arrival_count;
-        completed += summaries[index].completed_request_count;
+
+    // Retain at most one output per active worker. Combining batches in seed
+    // order preserves deterministic floating-point summation while bounding
+    // memory independently of the replication count.
+    for (std::size_t batch_start = 0; batch_start < seeds.size();
+         batch_start += static_cast<std::size_t>(workers)) {
+        const std::size_t batch_size = std::min(
+            static_cast<std::size_t>(workers),
+            seeds.size() - batch_start
+        );
+        std::vector<std::optional<BucketOutput>> outputs(batch_size);
+        std::vector<KernelSummary> summaries(batch_size);
+        run_parallel(batch_size, workers, [&](std::size_t local_index) {
+            const std::size_t seed_index = batch_start + local_index;
+            Kernel kernel(
+                workload, seeds[seed_index], RunMode::FixedHorizon,
+                horizon, 0.0, 0.0, false, false, false, bucket_width
+            );
+            summaries[local_index] = kernel.run();
+            outputs[local_index] = kernel.buckets();
+        });
+        for (std::size_t local_index = 0; local_index < batch_size; ++local_index) {
+            add_bucket_values(moments.sum, outputs[local_index].value(), false);
+            add_bucket_values(
+                moments.sum_squares,
+                outputs[local_index].value(),
+                true
+            );
+            processed += summaries[local_index].processed_event_count;
+            external += summaries[local_index].external_arrival_count;
+            completed += summaries[local_index].completed_request_count;
+        }
     }
+    const double wall = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - start
+    ).count();
     const BucketOutput average = means(moments.sum, static_cast<double>(seeds.size()));
     const BucketOutput variance = sample_variances(
         moments.sum, moments.sum_squares, seeds.size()
@@ -1124,14 +1169,14 @@ json_t* run_measurement_replications(json_t* request, const Workload& workload) 
     run_parallel(seeds.size(), workers, [&](std::size_t index) {
         Kernel kernel(
             workload, seeds[index], RunMode::MeasurementDrain,
-            warmup + measurement, warmup, measurement, false, 0.0,
-            maximum_drain_time
+            warmup + measurement, warmup, measurement,
+            false, false, true, 0.0, maximum_drain_time
         );
         MeasurementOutput output;
         output.summary = kernel.run();
         output.measured_counts = kernel.measured_request_counts();
-        output.latencies = kernel.request_class_response_times();
-        output.arrival_times = kernel.request_class_arrival_times();
+        output.latencies = kernel.take_request_class_response_times();
+        output.arrival_times = kernel.take_request_class_arrival_times();
         output.active_requests_at_end = kernel.recorder().active();
         output.queue_lengths_at_end = kernel.recorder().queues();
         output.busy_replicas_at_end = kernel.recorder().busy();
@@ -1192,6 +1237,7 @@ json_t* run_measurement_replications(json_t* request, const Workload& workload) 
         json_object_set_new(item, "external_arrival_count", json_integer(output.summary.external_arrival_count));
         json_object_set_new(item, "completed_request_count", json_integer(output.summary.completed_request_count));
         json_array_append_new(replications, item);
+        outputs[index].reset();
     }
     json_object_set_new(result, "replications", replications);
     json_object_set_new(result, "peak_memory_bytes", json_integer(peak_memory_bytes()));
@@ -1211,10 +1257,10 @@ void emit_response(const std::string& operation, bool ok, json_t* result, const 
         json_object_set_new(detail, "message", json_string(error));
         json_object_set_new(response.value, "error", detail);
     }
-    char* encoded = json_dumps(response.value, JSON_COMPACT | JSON_ENCODE_ANY);
-    if (!encoded) throw std::runtime_error("failed to encode JSON response");
-    std::cout << encoded << '\n';
-    std::free(encoded);
+    if (json_dumpf(response.value, stdout, JSON_COMPACT | JSON_ENCODE_ANY) != 0) {
+        throw std::runtime_error("failed to encode JSON response");
+    }
+    std::cout << '\n';
 }
 
 }  // namespace

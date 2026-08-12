@@ -53,6 +53,33 @@ def test_bootstrap_draws_replication_indices_as_complete_clusters():
     assert set(interval.bootstrap_p95_values) <= {0.0, 100.0}
 
 
+def test_fast_weighted_selection_matches_expanded_cluster_draws():
+    clusters = (
+        (1.0, 3.0, 8.0),
+        (2.0, 4.0),
+        (5.0, 6.0, 7.0, 9.0),
+    )
+    interval = bootstrap(clusters, seed=41)
+    draws = draw_cluster_bootstrap_indices(
+        len(clusters),
+        len(interval.bootstrap_p95_values),
+        seed=41,
+    )
+    expected = tuple(
+        percentile(
+            tuple(
+                value
+                for cluster_index in draw
+                for value in clusters[cluster_index]
+            ),
+            0.95,
+        )
+        for draw in draws
+    )
+
+    assert interval.bootstrap_p95_values == pytest.approx(expected)
+
+
 def test_bootstrap_seed_reproduces_interval_and_distribution():
     clusters = ((1.0, 2.0, 3.0), (4.0, 5.0), (2.0, 8.0))
 

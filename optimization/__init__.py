@@ -1,4 +1,8 @@
 from .astar import AStarOptimizer
+from .branch_and_bound_node_placement import (
+    BranchAndBoundNodePlacementOptimizationResult,
+    BranchAndBoundNodePlacementOptimizer,
+)
 from .uniform_cost import ReplicaOptimizationResult, UniformCostReplicaOptimizer
 from .base import GraphSearchProblem, OptimizationProblem, Optimizer
 from .exceptions import (
@@ -14,6 +18,27 @@ from .node_placement import (
     DEFAULT_COST_WEIGHTS,
     NodePlacementEvaluation,
     NodePlacementProblem,
+)
+from .mode import (
+    DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT,
+    DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
+    OptimizationMode,
+    ScalablePlacementSearchOptions,
+    ScalableReplicaSearchOptions,
+    normalize_optimization_mode,
+)
+from .scalable_node_placement import (
+    ScalableNodePlacementOptimizationResult,
+    ScalableNodePlacementOptimizer,
+)
+from .scalable_replica import (
+    ScalableReplicaOptimizationResult,
+    ScalableReplicaOptimizer,
+)
+from .selection import (
+    optimize_node_placement,
+    replica_configuration_count,
+    resolve_optimization_mode,
 )
 from .simulation_evaluation import (
     CalibratedConfigurationEvaluator,
@@ -40,6 +65,21 @@ from .replica_sizing import (
 
 __all__ = [
     "AStarOptimizer",
+    "DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT",
+    "DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT",
+    "OptimizationMode",
+    "ScalablePlacementSearchOptions",
+    "ScalableReplicaSearchOptions",
+    "ScalableNodePlacementOptimizationResult",
+    "ScalableNodePlacementOptimizer",
+    "ScalableReplicaOptimizationResult",
+    "ScalableReplicaOptimizer",
+    "normalize_optimization_mode",
+    "optimize_node_placement",
+    "replica_configuration_count",
+    "resolve_optimization_mode",
+    "BranchAndBoundNodePlacementOptimizationResult",
+    "BranchAndBoundNodePlacementOptimizer",
     "UniformCostReplicaOptimizer",
     "ReplicaOptimizationResult",
     "AnalyticalStabilityHeuristic",

@@ -16,9 +16,15 @@ from calibration import (
     validate_profile_for_experiment,
 )
 from optimization import (
+    DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     CalibratedConfigurationEvaluator,
     CalibratedReplicaSizingProblem,
+    OptimizationMode,
+    ScalableReplicaOptimizer,
+    ScalableReplicaSearchOptions,
     UniformCostReplicaOptimizer,
+    replica_configuration_count,
+    resolve_optimization_mode,
     validate_final_configuration as _validate_final_configuration,
 )
 
@@ -28,6 +34,7 @@ class CalibratedOptimizationResult:
     optimization_result: object
     configuration_evaluations: tuple[tuple[tuple[int, ...], object], ...]
     calibration_profile_fingerprint: str
+    runtime_limit_calibration: object | None = None
 
     @property
     def configuration(self):
@@ -66,6 +73,34 @@ class CalibratedOptimizationResult:
                 self.optimization_result,
                 "unresolved_lower_cost_states",
                 (),
+            )
+        )
+
+    @property
+    def solution_mode(self):
+        return str(getattr(self.optimization_result, "solution_mode", "EXACT"))
+
+    @property
+    def optimality_proven(self):
+        return bool(
+            getattr(
+                self.optimization_result,
+                "optimality_proven",
+                self.minimality_proven,
+            )
+        )
+
+    @property
+    def budget_exhausted(self):
+        return bool(getattr(self.optimization_result, "budget_exhausted", False))
+
+    @property
+    def locally_minimal(self):
+        return bool(
+            getattr(
+                self.optimization_result,
+                "locally_minimal",
+                self.minimality_proven,
             )
         )
 
@@ -132,6 +167,9 @@ def calibrate(
             max_horizon_doublings=options.warmup_max_horizon_doublings,
             horizon_sensitivity_tolerance=options.warmup_sensitivity_tolerance,
             max_validation_rounds=options.warmup_max_validation_rounds,
+            max_validation_horizon_extensions=(
+                options.warmup_max_validation_horizon_extensions
+            ),
             progress_callback=progress_callback,
             analysis_options={
                 "window_length": options.warmup_window_length,
@@ -162,6 +200,7 @@ def calibrate(
             request_class_slos=request_class_slos,
             options=options,
             workers=workers,
+            progress_callback=progress_callback,
         )
     except MeasurementCalibrationError as error:
         if report_directory is not None:
@@ -226,11 +265,16 @@ def optimize_with_calibrated_simulation(
     optimizer=None,
     heuristic=None,
     workers=1,
+    mode=OptimizationMode.AUTO,
+    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
+    scalable_options=None,
+    runtime_limit_calibration=None,
 ):
-    """Run cost-ordered replica sizing; only reliable feasibility is a goal.
+    """Run exact or bounded scalable statistically controlled replica sizing.
 
-    The default is uniform-cost search from the calibrated stable anchor.
-    ``heuristic`` is retained only for callers injecting a custom A* optimizer.
+    AUTO uses the full bounded configuration count, not service count alone.
+    Both modes accept only statistically feasible configurations; scalable
+    mode changes search coverage, never the confidence-interval procedure.
     """
     validate_profile_for_experiment(
         calibration_profile,
@@ -238,19 +282,59 @@ def optimize_with_calibrated_simulation(
         request_class_slos=calibration_profile.slos,
         maximum_configuration=calibration_profile.maximum_replica_configuration,
     )
+    configuration_count = (
+        replica_configuration_count(calibration_profile)
+        if optimizer is None or runtime_limit_calibration is not None
+        else None
+    )
+    if runtime_limit_calibration is not None:
+        if runtime_limit_calibration.calibration_profile_fingerprint != (
+            calibration_profile.profile_fingerprint
+        ):
+            raise ValueError(
+                "Runtime limit calibration belongs to a different "
+                "calibration profile."
+            )
+        if runtime_limit_calibration.configuration_count != configuration_count:
+            raise ValueError(
+                "Runtime limit calibration has a different replica search space."
+            )
+        exact_configuration_limit = min(
+            exact_configuration_limit,
+            runtime_limit_calibration.effective_configuration_limit,
+        )
+
     problem = CalibratedReplicaSizingProblem(
         system,
         calibration_profile,
         heuristic=heuristic,
         simulation_workers=workers,
     )
-    raw_result = (optimizer or UniformCostReplicaOptimizer()).optimize(problem)
+    if optimizer is None:
+        selected_mode = resolve_optimization_mode(
+            mode,
+            configuration_count,
+            exact_configuration_limit,
+        )
+        if selected_mode == OptimizationMode.EXACT:
+            optimizer = UniformCostReplicaOptimizer()
+        else:
+            options = scalable_options or ScalableReplicaSearchOptions()
+            optimizer = ScalableReplicaOptimizer(
+                maximum_configuration_evaluations=(
+                    options.maximum_configuration_evaluations
+                ),
+                time_budget_seconds=options.time_budget_seconds,
+                candidate_width=options.candidate_width,
+            )
+    raw_result = optimizer.optimize(problem)
     return CalibratedOptimizationResult(
         optimization_result=raw_result,
         configuration_evaluations=tuple(
             sorted(problem.configuration_evaluations.items())
         ),
         calibration_profile_fingerprint=calibration_profile.profile_fingerprint,
+        runtime_limit_calibration=runtime_limit_calibration,
     )
 
 

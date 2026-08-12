@@ -186,6 +186,26 @@ def test_measurement_window_tags_only_arrivals_in_window_and_drains_them():
     )
 
 
+def test_measurement_worker_count_preserves_exact_seed_results():
+    system = make_single_service_system(gamma=2.0, mu=5.0)
+    seeds = (501, 502, 503, 504)
+
+    sequential = system.simulate_measurement_replications(
+        warmup_duration=5.0,
+        measurement_duration=10.0,
+        seeds=seeds,
+        workers=1,
+    )
+    parallel = system.simulate_measurement_replications(
+        warmup_duration=5.0,
+        measurement_duration=10.0,
+        seeds=seeds,
+        workers=4,
+    )
+
+    assert parallel == sequential
+
+
 def test_slow_eligible_request_is_retained_after_measurement_end():
     system = make_single_service_system(gamma=1.0, mu=0.1)
     system.configure_system_replicas((20,))

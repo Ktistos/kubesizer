@@ -47,7 +47,7 @@ def test_extra_representative_must_stay_inside_bounds():
         )
 
 
-def test_later_configuration_increases_w_and_uses_fresh_round_seeds(monkeypatch):
+def test_fixed_validation_study_selects_maximum_cutoff_plus_safety(monkeypatch):
     parameters = SimpleNamespace(
         minimum_replica_configuration=(1,),
         pilot_horizon=300.0,
@@ -102,11 +102,10 @@ def test_later_configuration_increases_w_and_uses_fresh_round_seeds(monkeypatch)
     )
 
     assert result.global_warmup == 30.0
-    assert len(result.rounds) == 2
-    assert not result.rounds[0].passed
-    assert result.rounds[1].passed
-    assert seen_batches == [(500, 501), (502, 503), (504, 505), (506, 507)]
-    assert len(set(seed for batch in seen_batches for seed in batch)) == 8
+    assert len(result.rounds) == 1
+    assert result.rounds[0].passed
+    assert seen_batches == [(500, 501), (502, 503)]
+    assert len(set(seed for batch in seen_batches for seed in batch)) == 4
 
 
 def test_validation_rejects_overlap_with_calibration_seeds(monkeypatch):

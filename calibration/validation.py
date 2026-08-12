@@ -108,15 +108,15 @@ def validate_global_warmup(
     maximum_configuration,
     bucket_width,
     window_length=10,
-    validation_replication_count=10,
+    validation_replication_count=100,
     validation_seed_start=200_000,
     extra_configurations=(),
     excluded_seeds=(),
-    max_validation_rounds=3,
+    max_validation_rounds=1,
     cutoff_options=None,
     workers=1,
 ):
-    """Validate and, when necessary, enlarge W on independent seed batches."""
+    """Select a conservative global W from fixed fresh-seed ensembles."""
     if initial_warmup < 0:
         raise ValueError("initial_warmup must be non-negative.")
     if not isinstance(validation_replication_count, int) or validation_replication_count <= 0:
@@ -137,11 +137,14 @@ def validate_global_warmup(
     cutoff_options = dict(cutoff_options or {})
     cutoff_options["window_length"] = window_length
     safety_window = window_length * bucket_width
-    proposed_warmup = float(initial_warmup)
-    rounds = []
+    evidence_rounds = []
+    maximum_required_warmup = float(initial_warmup)
 
+    # The number of validation rounds is fixed before simulation. Evidence is
+    # combined once after every configured batch, avoiding adaptive retries on
+    # an unlucky stochastic window.
     for round_index in range(max_validation_rounds):
-        configuration_results = []
+        configuration_evidence = []
         for configuration_index, configuration in enumerate(representatives):
             seed_offset = (
                 round_index * len(representatives) + configuration_index
@@ -179,6 +182,31 @@ def validate_global_warmup(
                     f"configuration {configuration}; metric {error.metric_name} "
                     "did not settle."
                 ) from error
+            maximum_required_warmup = max(
+                maximum_required_warmup,
+                cutoff.warmup_duration,
+            )
+            configuration_evidence.append((
+                configuration,
+                seeds,
+                ensemble,
+                cutoff,
+            ))
+        evidence_rounds.append(tuple(configuration_evidence))
+
+    proposed_warmup = maximum_required_warmup
+    if maximum_required_warmup > initial_warmup:
+        proposed_warmup += safety_window
+    if proposed_warmup > parameters.pilot_horizon / 3.0:
+        raise WarmupValidationError(
+            "Representative configurations require W beyond H/3; extend "
+            "the pilot horizon and repeat calibration."
+        )
+
+    rounds = []
+    for round_index, configuration_evidence in enumerate(evidence_rounds):
+        configuration_results = []
+        for configuration, seeds, ensemble, cutoff in configuration_evidence:
             post_warmup = check_post_warmup_stability(
                 ensemble,
                 proposed_warmup,
@@ -191,10 +219,6 @@ def validate_global_warmup(
                     3,
                 ),
             )
-            passed = (
-                cutoff.warmup_duration <= proposed_warmup
-                and post_warmup.passed
-            )
             configuration_results.append(
                 ConfigurationWarmupValidation(
                     replica_configuration=configuration,
@@ -203,39 +227,23 @@ def validate_global_warmup(
                     required_warmup=cutoff.warmup_duration,
                     proposed_warmup=proposed_warmup,
                     post_warmup_check=post_warmup,
-                    passed=passed,
+                    passed=cutoff.warmup_duration <= proposed_warmup,
                 )
             )
-
-        round_passed = all(result.passed for result in configuration_results)
         rounds.append(
             WarmupValidationRound(
                 round_index=round_index,
                 proposed_warmup=proposed_warmup,
                 configurations=tuple(configuration_results),
-                passed=round_passed,
+                passed=all(item.passed for item in configuration_results),
             )
         )
-        if round_passed:
-            return GlobalWarmupValidationResult(
-                representative_configurations=representatives,
-                replication_count_per_configuration=validation_replication_count,
-                seed_start=validation_seed_start,
-                rounds=tuple(rounds),
-                global_warmup=proposed_warmup,
-                passed=True,
-            )
 
-        required_warmup = max(
-            result.required_warmup for result in configuration_results
-        )
-        proposed_warmup = max(proposed_warmup, required_warmup) + safety_window
-        if proposed_warmup > parameters.pilot_horizon / 3.0:
-            raise WarmupValidationError(
-                "Representative configurations require W beyond H/3; extend "
-                "the pilot horizon and repeat calibration."
-            )
-
-    raise WarmupValidationError(
-        "Global warm-up did not pass fresh-seed validation within the allowed rounds."
+    return GlobalWarmupValidationResult(
+        representative_configurations=representatives,
+        replication_count_per_configuration=validation_replication_count,
+        seed_start=validation_seed_start,
+        rounds=tuple(rounds),
+        global_warmup=proposed_warmup,
+        passed=all(round_result.passed for round_result in rounds),
     )

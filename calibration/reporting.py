@@ -1,10 +1,13 @@
 import csv
 import html
 import json
+import math
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 
-from .ensemble import centered_moving_average
+from .cutoff import MetricWarmupDiagnostic
+from .ensemble import WarmupEnsembleSeries, centered_moving_average
+from .sensitivity import PostWarmupMetricDiagnostic
 
 
 @dataclass(frozen=True)
@@ -15,24 +18,92 @@ class WarmupCalibrationArtifacts:
     plot_paths: tuple[str, ...]
 
 
-def _json_compatible(value):
+def _json_compatible(value, *, compact_ensembles=False):
+    if compact_ensembles and isinstance(value, WarmupEnsembleSeries):
+        return {
+            "service_names": list(value.service_names),
+            "replica_configuration": list(value.replica_configuration),
+            "pilot_horizon": value.pilot_horizon,
+            "bucket_width": value.bucket_width,
+            "bucket_count": value.bucket_count,
+            "seeds": list(value.seeds),
+            "series_storage": (
+                "Exact final and validation series are stored as CSV; "
+                "historical ensemble arrays are omitted from JSON."
+            ),
+        }
+    if compact_ensembles and isinstance(
+        value,
+        (MetricWarmupDiagnostic, PostWarmupMetricDiagnostic),
+    ):
+        payload = {
+            field.name: _json_compatible(
+                getattr(value, field.name),
+                compact_ensembles=True,
+            )
+            for field in fields(value)
+            if field.name != "window_means"
+        }
+        start = getattr(
+            value,
+            "accepted_window_index",
+            getattr(value, "first_window_index", 0),
+        )
+        payload["window_mean_count"] = len(value.window_means)
+        payload["decision_window_means"] = list(
+            value.window_means[start : start + 3]
+        )
+        return payload
     if is_dataclass(value) and not isinstance(value, type):
         return {
-            field.name: _json_compatible(getattr(value, field.name))
+            field.name: _json_compatible(
+                getattr(value, field.name),
+                compact_ensembles=compact_ensembles,
+            )
             for field in fields(value)
         }
     if isinstance(value, dict):
         return {
-            str(key): _json_compatible(item) for key, item in value.items()
+            str(key): _json_compatible(
+                item,
+                compact_ensembles=compact_ensembles,
+            )
+            for key, item in value.items()
         }
     if isinstance(value, (tuple, list)):
-        return [_json_compatible(item) for item in value]
+        return [
+            _json_compatible(item, compact_ensembles=compact_ensembles)
+            for item in value
+        ]
     if hasattr(value, "__dict__"):
         return {
-            str(key): _json_compatible(item)
+            str(key): _json_compatible(
+                item,
+                compact_ensembles=compact_ensembles,
+            )
             for key, item in vars(value).items()
         }
     return value
+
+
+def _display_points(values, *, maximum_points=2_000):
+    """Return block-averaged plot points without changing stored evidence."""
+    if maximum_points <= 0:
+        raise ValueError("maximum_points must be positive.")
+    values = tuple(values)
+    if len(values) <= maximum_points:
+        return tuple((float(index), value) for index, value in enumerate(values))
+    block_size = math.ceil(len(values) / maximum_points)
+    points = []
+    for start in range(0, len(values), block_size):
+        stop = min(start + block_size, len(values))
+        points.append(
+            (
+                (start + stop - 1) / 2.0,
+                sum(values[start:stop]) / (stop - start),
+            )
+        )
+    return tuple(points)
 
 
 def write_ensemble_csv(ensemble, path):
@@ -98,40 +169,34 @@ def save_ensemble_diagnostic_plot(
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    times = tuple(
-        (bucket_index + 0.5) * ensemble.bucket_width
-        for bucket_index in range(ensemble.bucket_count)
-    )
     figure, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-    axes[0].plot(
-        times,
-        centered_moving_average(ensemble.active_requests, smoothing_half_window),
-        label="active requests",
-    )
+
+    def plot_series(axis, values, **options):
+        points = _display_points(
+            centered_moving_average(values, smoothing_half_window)
+        )
+        axis.plot(
+            tuple((index + 0.5) * ensemble.bucket_width for index, _ in points),
+            tuple(value for _, value in points),
+            **options,
+        )
+
+    plot_series(axes[0], ensemble.active_requests, label="active requests")
     for service_id, service_name in enumerate(ensemble.service_names):
-        axes[1].plot(
-            times,
-            centered_moving_average(
-                ensemble.number_in_system_by_service[service_id],
-                smoothing_half_window,
-            ),
+        plot_series(
+            axes[1],
+            ensemble.number_in_system_by_service[service_id],
             label=f"N {service_name}",
         )
-        axes[1].plot(
-            times,
-            centered_moving_average(
-                ensemble.queue_length_by_service[service_id],
-                smoothing_half_window,
-            ),
+        plot_series(
+            axes[1],
+            ensemble.queue_length_by_service[service_id],
             linestyle="--",
             label=f"Q {service_name}",
         )
-        axes[2].plot(
-            times,
-            centered_moving_average(
-                ensemble.utilization_by_service[service_id],
-                smoothing_half_window,
-            ),
+        plot_series(
+            axes[2],
+            ensemble.utilization_by_service[service_id],
             label=service_name,
         )
 
@@ -297,10 +362,11 @@ def _save_ensemble_diagnostic_svg(
         )
 
         for label, values, color, dashed in smoothed:
+            display_points = _display_points(values)
             points = " ".join(
                 f"{x_coordinate((index + 0.5) * ensemble.bucket_width):.2f},"
                 f"{top + panel_height * (1.0 - value / y_maximum):.2f}"
-                for index, value in enumerate(values)
+                for index, value in display_points
             )
             dash_attribute = ' stroke-dasharray="6 4"' if dashed else ""
             svg.append(
@@ -358,7 +424,7 @@ def save_warmup_calibration(
     json_path = output_directory / "warmup_calibration.json"
     with json_path.open("w", encoding="utf-8") as output:
         json.dump(
-            _json_compatible(result),
+            _json_compatible(result, compact_ensembles=True),
             output,
             indent=2,
             sort_keys=True,
@@ -416,7 +482,7 @@ def save_warmup_calibration_failure(error, output_directory, *, parameters=None)
     }
     with path.open("w", encoding="utf-8") as output:
         json.dump(
-            _json_compatible(record),
+            _json_compatible(record, compact_ensembles=True),
             output,
             indent=2,
             sort_keys=True,

@@ -1,11 +1,17 @@
 import math
+import random
 
 import pytest
 
 from optimization import (
+    BranchAndBoundNodePlacementOptimizer,
     ExhaustiveNodePlacementOptimizer,
     NoFeasibleConfigurationError,
     NodePlacementProblem,
+    OptimizationMode,
+    ScalableNodePlacementOptimizer,
+    ScalablePlacementSearchOptions,
+    optimize_node_placement,
 )
 
 
@@ -38,13 +44,13 @@ class FakeService:
     def get_name(self):
         return self.__name
 
-    def get_gamma(self):
+    def get_gamma(self, _request_class):
         return self.__gamma
 
     def get_replicas(self):
         return self.__replicas
 
-    def get_adjacency_list(self):
+    def get_adjacency_list(self, _request_class):
         return tuple(self.__edges)
 
 
@@ -70,15 +76,18 @@ class FakeSystem:
     def get_services(self):
         return self.__services
 
+    def get_request_classes(self):
+        return ("default",)
+
     def get_effective_arrival_rates(self):
         services = tuple(self.__services.values())
-        rates = [service.get_gamma() for service in services]
+        rates = [service.get_gamma("default") for service in services]
 
         for _ in range(10_000):
-            updated = [service.get_gamma() for service in services]
+            updated = [service.get_gamma("default") for service in services]
             for source in services:
                 source_rate = rates[source.get_id()]
-                for edge in source.get_adjacency_list():
+                for edge in source.get_adjacency_list("default"):
                     updated[edge.get_target().get_id()] += (
                         source_rate * edge.get_routing_prob()
                     )
@@ -90,6 +99,9 @@ class FakeSystem:
             rates = updated
 
         raise ArithmeticError("Traffic fixed-point iteration did not converge.")
+
+    def get_request_class_effective_arrival_rates(self):
+        return {"default": self.get_effective_arrival_rates()}
 
 
 class FakeNode:
@@ -546,3 +558,215 @@ def test_exhaustive_optimizer_raises_when_capacity_rejects_every_placement():
 
     with pytest.raises(NoFeasibleConfigurationError):
         ExhaustiveNodePlacementOptimizer().optimize(problem)
+
+
+
+def test_partial_cost_bound_does_not_exceed_any_completion():
+    problem = build_problem(
+        {
+            "source": {
+                "gamma": 10.0,
+                "replicas": 2,
+                "routes": {"destination": 0.5},
+            },
+            "destination": {"gamma": 0.0, "replicas": 2},
+        },
+        {
+            "node-a": {"node-b": 0.2},
+            "node-b": {"node-a": 0.1},
+        },
+    )
+    partial = {"source": (2, 0)}
+
+    lower_bound = problem.partial_cost_lower_bound(partial)
+    completion_costs = [
+        problem.evaluate(
+            problem.build_configuration(
+                {
+                    **partial,
+                    "destination": destination_distribution,
+                }
+            )
+        ).total_cost
+        for destination_distribution in problem.get_replica_distribution_options(
+            "destination"
+        )
+    ]
+
+    assert lower_bound <= min(completion_costs) + 1e-15
+
+
+def test_branch_and_bound_matches_exhaustive_on_current_workload():
+    problem = build_problem(
+        CURRENT_SERVICE_SPECS,
+        CURRENT_NODE_LATENCIES,
+    )
+
+    exhaustive = ExhaustiveNodePlacementOptimizer().optimize(problem)
+    bounded = BranchAndBoundNodePlacementOptimizer().optimize(problem)
+
+    assert bounded.configuration == exhaustive.configuration
+    assert bounded.cost == pytest.approx(exhaustive.cost)
+    assert bounded.metrics == exhaustive.metrics
+    assert bounded.optimality_proven
+    assert bounded.total_configurations == problem.configuration_count()
+    assert (
+        bounded.complete_states + bounded.pruned_complete_placements
+        == bounded.total_configurations
+    )
+    assert bounded.complete_states < bounded.total_configurations
+    assert bounded.pruned_complete_placements > 0
+
+
+def test_branch_and_bound_prunes_resource_infeasible_partial_placements():
+    problem = build_problem(
+        {
+            "api": {"gamma": 0.0, "replicas": 2},
+            "worker": {"gamma": 0.0, "replicas": 2},
+        },
+        {
+            "node-a": {"node-b": 0.1},
+            "node-b": {"node-a": 0.1},
+        },
+        service_resource_requests={
+            "api": {
+                "cpu_request_millicores": 1,
+                "memory_request_bytes": 1,
+            },
+            "worker": {
+                "cpu_request_millicores": 1,
+                "memory_request_bytes": 1,
+            },
+        },
+        node_capacities={
+            "node-a": (2, 2),
+            "node-b": (2, 2),
+        },
+    )
+
+    result = BranchAndBoundNodePlacementOptimizer().optimize(problem)
+
+    assert result.metrics.valid
+    assert result.complete_states < result.total_configurations
+    assert result.pruned_complete_placements > 0
+
+
+def test_branch_and_bound_raises_when_capacity_rejects_every_placement():
+    problem = build_problem(
+        {"api": {"gamma": 0.0, "replicas": 1}},
+        {
+            "node-a": {"node-b": 0.1},
+            "node-b": {"node-a": 0.1},
+        },
+        service_resource_requests={
+            "api": {
+                "cpu_request_millicores": 2,
+                "memory_request_bytes": 1,
+            }
+        },
+        node_capacities={
+            "node-a": (1, 100),
+            "node-b": (1, 100),
+        },
+    )
+
+    with pytest.raises(NoFeasibleConfigurationError):
+        BranchAndBoundNodePlacementOptimizer().optimize(problem)
+
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_branch_and_bound_matches_exhaustive_across_small_problems(seed):
+    random_source = random.Random(seed)
+    service_names = ("service-a", "service-b", "service-c")
+    service_specs = {}
+    for source_index, source_name in enumerate(service_names):
+        routes = {
+            destination_name: random_source.uniform(0.0, 0.45)
+            for destination_name in service_names[source_index + 1 :]
+            if random_source.random() < 0.7
+        }
+        service_specs[source_name] = {
+            "gamma": (
+                random_source.uniform(1.0, 10.0)
+                if source_index == 0
+                else 0.0
+            ),
+            "replicas": random_source.randint(1, 2),
+            "routes": routes,
+        }
+
+    node_names = tuple(
+        f"node-{index}"
+        for index in range(random_source.randint(2, 3))
+    )
+    node_latencies = {
+        source_name: {
+            destination_name: random_source.uniform(0.001, 0.1)
+            for destination_name in node_names
+            if destination_name != source_name
+        }
+        for source_name in node_names
+    }
+    network_weight = random_source.random()
+    problem = build_problem(
+        service_specs,
+        node_latencies,
+        cost_weights={
+            "network": network_weight,
+            "replica_spreading": 1.0 - network_weight,
+        },
+    )
+
+    exhaustive = ExhaustiveNodePlacementOptimizer().optimize(problem)
+    bounded = BranchAndBoundNodePlacementOptimizer().optimize(problem)
+
+    assert bounded.configuration == exhaustive.configuration
+    assert bounded.cost == pytest.approx(exhaustive.cost)
+
+
+def test_scalable_placement_returns_feasible_locally_improved_result():
+    problem = build_problem(
+        CURRENT_SERVICE_SPECS,
+        CURRENT_NODE_LATENCIES,
+    )
+
+    result = ScalableNodePlacementOptimizer(
+        beam_width=8,
+        candidate_distributions_per_service=16,
+        maximum_partial_states=10_000,
+        maximum_complete_evaluations=1_000,
+        maximum_local_iterations=20,
+        time_budget_seconds=10,
+    ).optimize(problem)
+
+    assert result.metrics.valid
+    assert result.solution_mode == "SCALABLE"
+    assert not result.optimality_proven
+    assert result.complete_states <= 1_000
+    assert result.total_configurations == problem.configuration_count()
+
+
+def test_auto_placement_uses_scalable_mode_above_exact_space_limit():
+    problem = build_problem(
+        CURRENT_SERVICE_SPECS,
+        CURRENT_NODE_LATENCIES,
+    )
+
+    result = optimize_node_placement(
+        problem,
+        mode=OptimizationMode.AUTO,
+        exact_configuration_limit=1,
+        scalable_options=ScalablePlacementSearchOptions(
+            beam_width=4,
+            candidate_distributions_per_service=8,
+            maximum_partial_states=5_000,
+            maximum_complete_evaluations=500,
+            maximum_local_iterations=10,
+            time_budget_seconds=10,
+        ),
+    )
+
+    assert result.solution_mode == "SCALABLE"
+    assert result.metrics.valid
+    assert not result.optimality_proven

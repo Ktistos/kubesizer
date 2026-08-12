@@ -124,7 +124,7 @@ def test_initial_duration_uses_slowest_required_external_class():
     ) == pytest.approx(20.0)
 
 
-def test_calibration_reuses_one_long_run_for_all_duration_prefixes():
+def test_calibration_stops_after_first_accepted_duration_pair():
     system = FakeMeasurementSystem(make_system(), {"read": 20, "rare": 20})
     minimum = tuple(system.get_minimum_stable_replicas())
     maximum = tuple(value + 1 for value in minimum)
@@ -140,7 +140,7 @@ def test_calibration_reuses_one_long_run_for_all_duration_prefixes():
 
     assert result.global_measurement_duration == result.candidate_durations[0]
     assert len(system.calls) == 2
-    assert all(call[1] == result.candidate_durations[-1] for call in system.calls)
+    assert all(call[1] == result.candidate_durations[1] for call in system.calls)
     assert system.get_system_replicas() == [1]
     assert all(item.accepted_duration is not None for item in result.configurations)
 
@@ -148,6 +148,7 @@ def test_calibration_reuses_one_long_run_for_all_duration_prefixes():
 def test_rare_class_with_insufficient_observations_fails_explicitly():
     system = FakeMeasurementSystem(make_system(), {"read": 20, "rare": 1})
     minimum = tuple(system.get_minimum_stable_replicas())
+    selected_options = options()
 
     with pytest.raises(MeasurementCalibrationError) as captured:
         calibrate_measurement_duration(
@@ -155,10 +156,15 @@ def test_rare_class_with_insufficient_observations_fails_explicitly():
             warmup_duration=0.0,
             representative_configurations=(minimum,),
             request_class_slos={"read": 10.0, "rare": 10.0},
-            options=options(),
+            options=selected_options,
         )
 
-    assert captured.value.diagnostics.configurations[0].accepted_duration is None
+    diagnostics = captured.value.diagnostics
+    assert diagnostics.configurations[0].accepted_duration is None
+    assert [call[1] for call in system.calls] == [
+        diagnostics.candidate_durations[1],
+        diagnostics.candidate_durations[-1],
+    ]
 
 
 def test_required_class_without_external_stream_is_rejected():

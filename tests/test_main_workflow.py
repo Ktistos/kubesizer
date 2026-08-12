@@ -1,6 +1,5 @@
 import builtins
 import io
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,12 +7,9 @@ import pytest
 import main
 
 
-def test_missing_profile_runs_complete_calibration(monkeypatch):
+def test_calibrate_before_optimization_always_runs_complete_calibration(monkeypatch):
     expected = object()
     captured = {}
-    monkeypatch.setattr(
-        main, "CALIBRATION_PROFILE_PATH", SimpleNamespace(exists=lambda: False)
-    )
 
     def fake_calibrate(system, **kwargs):
         captured.update(kwargs)
@@ -22,77 +18,52 @@ def test_missing_profile_runs_complete_calibration(monkeypatch):
     monkeypatch.setattr(main, "calibrate", fake_calibrate)
     system = SimpleNamespace(get_services=lambda: {"api": object()})
 
-    result = main.load_or_calibrate_profile(system)
+    result = main.calibrate_before_optimization(system)
 
     assert result is expected
     assert captured["request_class_slos"] == main.REQUEST_CLASS_SLOS
     assert captured["maximum_replicas"] == main.MAX_REPLICAS_PER_SERVICE
-    assert captured["report_directory"] == main.CALIBRATION_OUTPUT_DIRECTORY
-
-
-def test_existing_profile_is_validated_and_not_recalibrated(monkeypatch):
-    profile = object()
-    validated = object()
-    monkeypatch.setattr(
-        main, "CALIBRATION_PROFILE_PATH", SimpleNamespace(exists=lambda: True)
-    )
-    monkeypatch.setattr(main, "load_calibration_profile", lambda path: profile)
-    monkeypatch.setattr(
-        main,
-        "validate_profile_for_experiment",
-        lambda selected, system, **kwargs: validated,
-    )
-    monkeypatch.setattr(
-        main,
-        "calibrate_before_optimization",
-        lambda *_args, **_kwargs: pytest.fail("must not recalibrate valid profile"),
-    )
-    system = SimpleNamespace(get_services=lambda: {"api": object(), "db": object()})
-
-    assert main.load_or_calibrate_profile(system) is validated
-
-
-def test_incompatible_existing_profile_is_rejected_not_silently_replaced(monkeypatch):
-    monkeypatch.setattr(
-        main, "CALIBRATION_PROFILE_PATH", SimpleNamespace(exists=lambda: True)
-    )
-    monkeypatch.setattr(main, "load_calibration_profile", lambda path: object())
-    monkeypatch.setattr(
-        main,
-        "validate_profile_for_experiment",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            main.CalibrationProfileMismatchError("workload mismatch")
-        ),
-    )
-    monkeypatch.setattr(
-        main,
-        "calibrate_before_optimization",
-        lambda *_args, **_kwargs: pytest.fail("mismatch requires explicit action"),
-    )
-    system = SimpleNamespace(get_services=lambda: {"api": object()})
-
-    with pytest.raises(main.CalibrationProfileMismatchError, match="workload"):
-        main.load_or_calibrate_profile(system)
+    assert "report_directory" not in captured
 
 
 def test_optimization_and_final_validation_use_public_profile_interface(monkeypatch):
     optimized = object()
     validated = object()
     profile = object()
+    optimization_arguments = {}
+
+    def fake_optimize(system, selected, **kwargs):
+        optimization_arguments.update(kwargs)
+        return optimized
+
     monkeypatch.setattr(
         main,
         "optimize_with_calibrated_simulation",
-        lambda system, selected, **kwargs: optimized,
+        fake_optimize,
     )
-    monkeypatch.setattr(
-        main,
-        "validate_final_configuration",
-        lambda system, configuration, selected, **kwargs: validated,
-    )
+    validation_arguments = {}
 
-    assert main.optimize_replicas(object(), profile) is optimized
+    def fake_validate(system, configuration, selected, **kwargs):
+        validation_arguments.update(kwargs)
+        return validated
+
+    monkeypatch.setattr(main, "validate_final_configuration", fake_validate)
+
+    runtime_limit_calibration = object()
+    assert (
+        main.optimize_replicas(
+            object(),
+            profile,
+            runtime_limit_calibration=runtime_limit_calibration,
+        )
+        is optimized
+    )
+    assert optimization_arguments["runtime_limit_calibration"] is (
+        runtime_limit_calibration
+    )
     result = SimpleNamespace(configuration=(2,))
     assert main.validate_optimizer_result(object(), result, profile) is validated
+    assert "report_directory" not in validation_arguments
 
 
 def test_main_does_not_place_when_fresh_validation_fails(monkeypatch):
@@ -119,8 +90,22 @@ def test_main_does_not_place_when_fresh_validation_fails(monkeypatch):
         lambda *_args, **_kwargs: io.StringIO("{}"),
     )
     monkeypatch.setattr(main, "System", lambda *_args, **_kwargs: system)
-    monkeypatch.setattr(main, "load_or_calibrate_profile", lambda _system: profile)
-    monkeypatch.setattr(main, "optimize_replicas", lambda *_args: optimization)
+    monkeypatch.setattr(
+        main,
+        "estimate_workflow_runtime",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(main, "format_runtime_estimate", lambda _value: "estimate")
+    monkeypatch.setattr(
+        main,
+        "calibrate_before_optimization",
+        lambda _system, **_kwargs: profile,
+    )
+    monkeypatch.setattr(
+        main,
+        "optimize_replicas",
+        lambda *_args, **_kwargs: optimization,
+    )
     monkeypatch.setattr(main, "report_replica_result", lambda *_args: None)
     monkeypatch.setattr(main, "validate_optimizer_result", lambda *_args: validation)
     monkeypatch.setattr(

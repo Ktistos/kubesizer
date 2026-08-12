@@ -87,79 +87,106 @@ def _linear_quantile_from_sorted(values, probability):
     return float(values[lower] * (1.0 - weight) + values[upper] * weight)
 
 
+def _weighted_order_statistics(
+    sorted_clusters,
+    multiplicities,
+    ranks,
+    pooled_values,
+):
+    """Select exact ranks from differently weighted sorted clusters.
+
+    A bootstrap draw repeats complete replication clusters. Binary search over
+    the pooled observation values lets each draw find its order statistic from
+    per-cluster cumulative counts instead of expanding and scanning the full
+    resampled latency cohort.
+    """
+    low = np.zeros(len(ranks), dtype=np.int64)
+    high = np.full(len(ranks), len(pooled_values) - 1, dtype=np.int64)
+    while np.any(low < high):
+        middle = (low + high) // 2
+        candidates = pooled_values[middle]
+        counts = np.zeros(len(ranks), dtype=np.int64)
+        for cluster_index, cluster in enumerate(sorted_clusters):
+            counts += (
+                multiplicities[:, cluster_index].astype(np.int64)
+                * np.searchsorted(cluster, candidates, side="right")
+            )
+        rank_found = counts > ranks
+        high = np.where(rank_found, middle, high)
+        low = np.where(rank_found, low, middle + 1)
+    return pooled_values[low]
+
+
+def _draw_nonempty_cluster_multiplicities(
+    cluster_sizes,
+    *,
+    resample_count,
+    seed,
+):
+    replication_count = len(cluster_sizes)
+    generator = np.random.default_rng(seed)
+    accepted = []
+    accepted_count = 0
+    while accepted_count < resample_count:
+        required = resample_count - accepted_count
+        sampled = generator.integers(
+            0,
+            replication_count,
+            size=(required, replication_count),
+        )
+        multiplicities = np.zeros(
+            (required, replication_count),
+            dtype=np.int16,
+        )
+        rows = np.repeat(np.arange(required), replication_count)
+        np.add.at(multiplicities, (rows, sampled.reshape(-1)), 1)
+        totals = multiplicities.astype(np.int64) @ cluster_sizes
+        nonempty = multiplicities[totals > 0]
+        if len(nonempty):
+            accepted.append(nonempty)
+            accepted_count += len(nonempty)
+    return np.concatenate(accepted, axis=0)[:resample_count]
+
+
 def _weighted_bootstrap_p95(
     clusters,
     *,
     resample_count,
     seed,
 ):
-    """Calculate exact cluster-bootstrap p95 values in bounded memory batches."""
-    replication_count = len(clusters)
-    pooled_values = np.concatenate(clusters)
-    pooled_cluster_ids = np.concatenate(
-        [
-            np.full(len(cluster), index, dtype=np.int16)
-            for index, cluster in enumerate(clusters)
-        ]
+    """Calculate exact cluster-bootstrap p95 values without cohort expansion."""
+    sorted_clusters = tuple(np.sort(cluster) for cluster in clusters)
+    pooled_values = np.sort(np.concatenate(sorted_clusters))
+    cluster_sizes = np.asarray(
+        [len(cluster) for cluster in sorted_clusters],
+        dtype=np.int64,
     )
-    order = np.argsort(pooled_values, kind="stable")
-    sorted_values = pooled_values[order]
-    sorted_cluster_ids = pooled_cluster_ids[order]
-    generator = np.random.default_rng(seed)
-
-    # Advanced indexing plus int64 cumulative weights uses about ten bytes per
-    # observation and bootstrap row. Bound a working batch near 64 MiB.
-    bytes_per_row = max(1, len(sorted_values) * 10)
-    batch_size = max(1, min(64, 64_000_000 // bytes_per_row))
-    bootstrap_values = []
-    while len(bootstrap_values) < resample_count:
-        count = min(batch_size, resample_count - len(bootstrap_values))
-        sampled = generator.integers(
-            0,
-            replication_count,
-            size=(count, replication_count),
-        )
-        multiplicities = np.zeros((count, replication_count), dtype=np.int16)
-        rows = np.repeat(np.arange(count), replication_count)
-        np.add.at(multiplicities, (rows, sampled.reshape(-1)), 1)
-        cumulative = np.cumsum(
-            multiplicities[:, sorted_cluster_ids],
-            axis=1,
-            dtype=np.int64,
-        )
-        totals = cumulative[:, -1]
-        positions = (totals - 1) * 0.95
-        lower_ranks = np.floor(np.maximum(positions, 0.0)).astype(np.int64)
-        upper_ranks = np.minimum(lower_ranks + 1, np.maximum(totals - 1, 0))
-        weights = positions - np.floor(positions)
-        for row_index in range(count):
-            # A legitimate cluster draw can contain no observations when the
-            # request class is rare. Condition the quantile bootstrap on a
-            # nonempty sampled cohort by redrawing that row.
-            if totals[row_index] <= 0:
-                continue
-            lower_index = int(
-                np.searchsorted(
-                    cumulative[row_index],
-                    lower_ranks[row_index] + 1,
-                    side="left",
-                )
-            )
-            upper_index = int(
-                np.searchsorted(
-                    cumulative[row_index],
-                    upper_ranks[row_index] + 1,
-                    side="left",
-                )
-            )
-            bootstrap_values.append(
-                float(
-                    sorted_values[lower_index] * (1.0 - weights[row_index])
-                    + sorted_values[upper_index] * weights[row_index]
-                )
-            )
-    return sorted_values, tuple(bootstrap_values)
-
+    multiplicities = _draw_nonempty_cluster_multiplicities(
+        cluster_sizes,
+        resample_count=resample_count,
+        seed=seed,
+    )
+    totals = multiplicities.astype(np.int64) @ cluster_sizes
+    positions = (totals - 1) * 0.95
+    lower_ranks = np.floor(positions).astype(np.int64)
+    upper_ranks = np.minimum(lower_ranks + 1, totals - 1)
+    weights = positions - lower_ranks
+    lower_values = _weighted_order_statistics(
+        sorted_clusters,
+        multiplicities,
+        lower_ranks,
+        pooled_values,
+    )
+    upper_values = _weighted_order_statistics(
+        sorted_clusters,
+        multiplicities,
+        upper_ranks,
+        pooled_values,
+    )
+    bootstrap_values = (
+        lower_values * (1.0 - weights) + upper_values * weights
+    )
+    return pooled_values, tuple(float(value) for value in bootstrap_values)
 
 def replication_cluster_bootstrap_p95(
     latency_clusters,
@@ -173,7 +200,10 @@ def replication_cluster_bootstrap_p95(
     minimum_tail_draws=5,
 ):
     """Estimate pooled p95 uncertainty by resampling complete replications."""
-    clusters = tuple(np.asarray(tuple(cluster), dtype=float) for cluster in latency_clusters)
+    clusters = tuple(
+        np.fromiter(cluster, dtype=float, count=len(cluster))
+        for cluster in latency_clusters
+    )
     if len(clusters) < 2:
         raise ValueError("Cluster bootstrap requires at least two replications.")
     if any(cluster.ndim != 1 for cluster in clusters):
