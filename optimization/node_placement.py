@@ -43,14 +43,10 @@ class NodePlacementEvaluation:
             "total_cost": self.total_cost,
             "network_cost_raw": self.network_cost_raw,
             "network_cost_normalized": self.network_cost_normalized,
-            "average_network_delay_seconds": (
-                self.average_network_delay_seconds
-            ),
+            "average_network_delay_seconds": (self.average_network_delay_seconds),
             "replica_spreading_penalty": self.replica_spreading_penalty,
             "constraint_violations": list(self.constraint_violations),
-            "resource_feasibility_checked": (
-                self.resource_feasibility_checked
-            ),
+            "resource_feasibility_checked": (self.resource_feasibility_checked),
         }
 
 
@@ -75,6 +71,7 @@ class NodePlacementProblem(OptimizationProblem):
         cluster,
         cost_weights=None,
         service_resource_requests=None,
+        hard_constraint=None,
     ):
         self.__cluster = cluster
         self.__system = cluster.get_system()
@@ -93,6 +90,9 @@ class NodePlacementProblem(OptimizationProblem):
         self.__resource_requests = self.__normalize_resource_requests(
             service_resource_requests
         )
+        if hard_constraint is not None and not callable(hard_constraint):
+            raise TypeError("hard_constraint must be callable.")
+        self.__hard_constraint = hard_constraint
         (
             self.__node_latencies,
             self.__maximum_inter_node_latency,
@@ -102,9 +102,7 @@ class NodePlacementProblem(OptimizationProblem):
             self.__edge_traffic_rates,
             self.__total_external_arrival_rate,
         ) = self.__derive_traffic_rates()
-        self.__total_edge_traffic_rate = sum(
-            self.__edge_traffic_rates.values()
-        )
+        self.__total_edge_traffic_rate = sum(self.__edge_traffic_rates.values())
 
     def evaluate(self, configuration):
         """Validate and calculate both placement objective components."""
@@ -112,6 +110,14 @@ class NodePlacementProblem(OptimizationProblem):
 
         if self.__resource_requests is not None:
             violations.extend(self.__validate_resource_capacities(placement))
+        complete_distributions = {
+            service_name: tuple(
+                placement[node_name][service_name] for node_name in self.__node_names
+            )
+            for service_name in self.__service_names
+        }
+        if not self.__hard_constraint_allows(complete_distributions, complete=True):
+            violations.append("Placement violates the configured hard constraint.")
 
         canonical_configuration = self.__canonical_configuration(placement)
         resource_checked = self.__resource_requests is not None
@@ -131,13 +137,10 @@ class NodePlacementProblem(OptimizationProblem):
 
         network_cost_raw = self.__calculate_network_cost(placement)
         network_denominator = (
-            self.__maximum_inter_node_latency
-            * self.__total_edge_traffic_rate
+            self.__maximum_inter_node_latency * self.__total_edge_traffic_rate
         )
         network_cost_normalized = (
-            network_cost_raw / network_denominator
-            if network_denominator > 0
-            else 0.0
+            network_cost_raw / network_denominator if network_denominator > 0 else 0.0
         )
         average_network_delay = (
             network_cost_raw / self.__total_external_arrival_rate
@@ -147,8 +150,7 @@ class NodePlacementProblem(OptimizationProblem):
         spreading_penalty = self.__calculate_spreading_penalty(placement)
         total_cost = (
             self.__cost_weights["network"] * network_cost_normalized
-            + self.__cost_weights["replica_spreading"]
-            * spreading_penalty
+            + self.__cost_weights["replica_spreading"] * spreading_penalty
         )
 
         return NodePlacementEvaluation(
@@ -189,6 +191,311 @@ class NodePlacementProblem(OptimizationProblem):
 
     def resource_feasibility_is_checked(self):
         return self.__resource_requests is not None
+
+    def get_replica_items(self):
+        """Return stable identities for identical replicas used by heuristics."""
+        return tuple(
+            (service_name, ordinal)
+            for service_name in self.__service_names
+            for ordinal in range(self.__fixed_replicas[service_name])
+        )
+
+    def get_replica_difficulty_scores(self):
+        """Return deterministic construction scores; larger means harder."""
+        incident = {name: 0.0 for name in self.__service_names}
+        for (source, destination), rate in self.__edge_traffic_rates.items():
+            incident[source] += rate
+            if destination != source:
+                incident[destination] += rate
+        maximum_incident = max(incident.values(), default=0.0)
+        scores = {}
+        for service_name in self.__service_names:
+            fit_count = len(self.__node_names)
+            resource_pressure = 0.0
+            if self.__resource_requests is not None:
+                request = self.__resource_requests[service_name]
+                fit_count = 0
+                pressures = []
+                for node_name, node in self.__nodes.items():
+                    cpu = node.get_allocatable_cpu()
+                    memory = node.get_allocatable_memory()
+                    fits = (
+                        request["cpu_request_millicores"] <= cpu
+                        and request["memory_request_bytes"] <= memory
+                    )
+                    fit_count += int(fits)
+                    if fits:
+                        pressures.append(
+                            max(
+                                (
+                                    request["cpu_request_millicores"] / cpu
+                                    if cpu > 0
+                                    else 0.0
+                                ),
+                                (
+                                    request["memory_request_bytes"] / memory
+                                    if memory > 0
+                                    else 0.0
+                                ),
+                            )
+                        )
+                resource_pressure = max(pressures, default=math.inf)
+            communication = (
+                incident[service_name] / maximum_incident
+                if maximum_incident > 0
+                else 0.0
+            )
+            scarcity = len(self.__node_names) / fit_count if fit_count > 0 else math.inf
+            spreading = float(self.__fixed_replicas[service_name] > 1)
+            scores[service_name] = (
+                resource_pressure + communication + scarcity + spreading
+            )
+        return scores
+
+    def normalize_partial_replica_distributions(self, service_distributions):
+        """Validate distributions that may contain fewer than all replicas."""
+        if not isinstance(service_distributions, Mapping):
+            raise TypeError("Service distributions must be a mapping.")
+        unknown = set(service_distributions) - set(self.__service_names)
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(f"Unknown services in partial placement: {names}.")
+        normalized = {}
+        node_count = len(self.__node_names)
+        for service_name in self.__service_names:
+            distribution = tuple(
+                service_distributions.get(service_name, (0,) * node_count)
+            )
+            if (
+                len(distribution) != node_count
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
+                    for value in distribution
+                )
+                or sum(distribution) > self.__fixed_replicas[service_name]
+            ):
+                raise ValueError(
+                    f"Partial distribution for '{service_name}' must contain "
+                    f"{node_count} nonnegative integers with total at most "
+                    f"{self.__fixed_replicas[service_name]}."
+                )
+            normalized[service_name] = distribution
+        return normalized
+
+    def partial_replica_assignment_is_feasible(self, service_distributions):
+        distributions = self.normalize_partial_replica_distributions(
+            service_distributions
+        )
+        if self.__resource_requests is not None:
+            for node_index, (node_name, node) in enumerate(self.__nodes.items()):
+                cpu = sum(
+                    distribution[node_index]
+                    * self.__resource_requests[service_name]["cpu_request_millicores"]
+                    for service_name, distribution in distributions.items()
+                )
+                memory = sum(
+                    distribution[node_index]
+                    * self.__resource_requests[service_name]["memory_request_bytes"]
+                    for service_name, distribution in distributions.items()
+                )
+                if (
+                    cpu > node.get_allocatable_cpu()
+                    or memory > node.get_allocatable_memory()
+                ):
+                    return False
+        complete = all(
+            sum(distributions[name]) == self.__fixed_replicas[name]
+            for name in self.__service_names
+        )
+        return self.__hard_constraint_allows(distributions, complete=complete)
+
+    def partial_replica_cost_estimate(self, service_distributions):
+        """Score a partial replica placement without claiming an exact bound."""
+        distributions = self.normalize_partial_replica_distributions(
+            service_distributions
+        )
+        raw_network = sum(
+            rate
+            * self.__distribution_pair_latency(
+                source,
+                distributions[source],
+                destination,
+                distributions[destination],
+            )
+            for (source, destination), rate in self.__edge_traffic_rates.items()
+        )
+        denominator = self.__maximum_inter_node_latency * self.__total_edge_traffic_rate
+        network = raw_network / denominator if denominator > 0 else 0.0
+        spreading_terms = []
+        for service_name, distribution in distributions.items():
+            replica_count = self.__fixed_replicas[service_name]
+            if replica_count <= 1:
+                continue
+            spreading_terms.append(
+                sum((count / replica_count) ** 2 for count in distribution)
+            )
+        spreading = (
+            sum(spreading_terms) / len(spreading_terms) if spreading_terms else 0.0
+        )
+        return (
+            self.__cost_weights["network"] * network
+            + self.__cost_weights["replica_spreading"] * spreading
+        )
+
+    def partial_resource_signature(self, service_distributions):
+        """Return a coarse per-node load signature for beam diversity."""
+        distributions = self.normalize_partial_replica_distributions(
+            service_distributions
+        )
+        if self.__resource_requests is None:
+            return tuple(
+                sum(distribution[index] for distribution in distributions.values())
+                for index in range(len(self.__node_names))
+            )
+        signature = []
+        for index, (node_name, node) in enumerate(self.__nodes.items()):
+            cpu = sum(
+                distribution[index]
+                * self.__resource_requests[service_name]["cpu_request_millicores"]
+                for service_name, distribution in distributions.items()
+            )
+            memory = sum(
+                distribution[index]
+                * self.__resource_requests[service_name]["memory_request_bytes"]
+                for service_name, distribution in distributions.items()
+            )
+            cpu_capacity = node.get_allocatable_cpu()
+            memory_capacity = node.get_allocatable_memory()
+            signature.append(
+                (
+                    round(cpu / cpu_capacity, 2) if cpu_capacity > 0 else 0.0,
+                    round(memory / memory_capacity, 2) if memory_capacity > 0 else 0.0,
+                )
+            )
+        return tuple(signature)
+
+    def configuration_to_distributions(self, configuration):
+        placement, violations = self.__validate_configuration(configuration)
+        if violations:
+            raise ValueError("; ".join(violations))
+        return {
+            service_name: tuple(
+                placement[node_name][service_name] for node_name in self.__node_names
+            )
+            for service_name in self.__service_names
+        }
+
+    def evaluate_distributions(self, service_distributions):
+        return self.evaluate(self.build_configuration(service_distributions))
+
+    def placement_lower_bound(self):
+        """Return the exact solver's valid empty-assignment relaxation."""
+        return self.partial_cost_lower_bound({})
+
+    def placement_change_delta(self, service_distributions, replacements):
+        """Return exact objective delta for changed service distributions."""
+        current = self.__validate_service_distributions(
+            service_distributions,
+            require_complete=True,
+        )
+        candidate = dict(current)
+        candidate.update(replacements)
+        candidate = self.__validate_service_distributions(
+            candidate,
+            require_complete=True,
+        )
+        if not self.partial_replica_assignment_is_feasible(candidate):
+            return math.inf, candidate
+
+        changed = set(replacements)
+        raw_network_delta = 0.0
+        for (source, destination), rate in self.__edge_traffic_rates.items():
+            if source not in changed and destination not in changed:
+                continue
+            before = self.__distribution_pair_latency(
+                source,
+                current[source],
+                destination,
+                current[destination],
+            )
+            after = self.__distribution_pair_latency(
+                source,
+                candidate[source],
+                destination,
+                candidate[destination],
+            )
+            raw_network_delta += rate * (after - before)
+        denominator = self.__maximum_inter_node_latency * self.__total_edge_traffic_rate
+        network_delta = raw_network_delta / denominator if denominator > 0 else 0.0
+
+        spreading_service_count = sum(
+            value > 1 for value in self.__fixed_replicas.values()
+        )
+        spreading_delta = 0.0
+        if spreading_service_count:
+            spreading_delta = (
+                sum(
+                    self.__distribution_spreading_penalty(
+                        service_name, candidate[service_name]
+                    )
+                    - self.__distribution_spreading_penalty(
+                        service_name, current[service_name]
+                    )
+                    for service_name in changed
+                    if self.__fixed_replicas[service_name] > 1
+                )
+                / spreading_service_count
+            )
+        delta = (
+            self.__cost_weights["network"] * network_delta
+            + self.__cost_weights["replica_spreading"] * spreading_delta
+        )
+        return delta, candidate
+
+    def relocation_delta(
+        self, service_distributions, service_name, source_node, destination_node
+    ):
+        node_index = {name: index for index, name in enumerate(self.__node_names)}
+        source = node_index[source_node]
+        destination = node_index[destination_node]
+        distribution = list(service_distributions[service_name])
+        if source == destination or distribution[source] <= 0:
+            return math.inf, service_distributions
+        distribution[source] -= 1
+        distribution[destination] += 1
+        return self.placement_change_delta(
+            service_distributions,
+            {service_name: tuple(distribution)},
+        )
+
+    def swap_delta(
+        self,
+        service_distributions,
+        left_service,
+        left_node,
+        right_service,
+        right_node,
+    ):
+        if left_node == right_node or left_service == right_service:
+            return math.inf, service_distributions
+        node_index = {name: index for index, name in enumerate(self.__node_names)}
+        left_index = node_index[left_node]
+        right_index = node_index[right_node]
+        left = list(service_distributions[left_service])
+        right = list(service_distributions[right_service])
+        if left[left_index] <= 0 or right[right_index] <= 0:
+            return math.inf, service_distributions
+        left[left_index] -= 1
+        left[right_index] += 1
+        right[right_index] -= 1
+        right[left_index] += 1
+        return self.placement_change_delta(
+            service_distributions,
+            {
+                left_service: tuple(left),
+                right_service: tuple(right),
+            },
+        )
 
     def iter_replica_distribution_options(self, service_name):
         """Yield node distributions without materializing a large search space."""
@@ -233,39 +540,34 @@ class NodePlacementProblem(OptimizationProblem):
             service_distributions,
             require_complete=False,
         )
-        if self.__resource_requests is None:
-            return True
-
-        for node_index, (node_name, node) in enumerate(self.__nodes.items()):
-            cpu_used = sum(
-                distribution[node_index]
-                * self.__resource_requests[service_name][
-                    "cpu_request_millicores"
-                ]
-                for service_name, distribution in distributions.items()
-            )
-            memory_used = sum(
-                distribution[node_index]
-                * self.__resource_requests[service_name][
-                    "memory_request_bytes"
-                ]
-                for service_name, distribution in distributions.items()
-            )
-            allocatable_cpu = node.get_allocatable_cpu()
-            allocatable_memory = node.get_allocatable_memory()
-            self.__validate_node_capacity(
-                node_name,
-                "allocatable CPU",
-                allocatable_cpu,
-            )
-            self.__validate_node_capacity(
-                node_name,
-                "allocatable memory",
-                allocatable_memory,
-            )
-            if cpu_used > allocatable_cpu or memory_used > allocatable_memory:
-                return False
-        return True
+        if self.__resource_requests is not None:
+            for node_index, (node_name, node) in enumerate(self.__nodes.items()):
+                cpu_used = sum(
+                    distribution[node_index]
+                    * self.__resource_requests[service_name]["cpu_request_millicores"]
+                    for service_name, distribution in distributions.items()
+                )
+                memory_used = sum(
+                    distribution[node_index]
+                    * self.__resource_requests[service_name]["memory_request_bytes"]
+                    for service_name, distribution in distributions.items()
+                )
+                allocatable_cpu = node.get_allocatable_cpu()
+                allocatable_memory = node.get_allocatable_memory()
+                self.__validate_node_capacity(
+                    node_name,
+                    "allocatable CPU",
+                    allocatable_cpu,
+                )
+                self.__validate_node_capacity(
+                    node_name,
+                    "allocatable memory",
+                    allocatable_memory,
+                )
+                if cpu_used > allocatable_cpu or memory_used > allocatable_memory:
+                    return False
+        complete = len(distributions) == len(self.__service_names)
+        return self.__hard_constraint_allows(distributions, complete=complete)
 
     def partial_cost_lower_bound(self, service_distributions):
         """Return an admissible objective bound for a partial placement.
@@ -290,10 +592,7 @@ class NodePlacementProblem(OptimizationProblem):
             source_distribution = distributions.get(source_service)
             destination_distribution = distributions.get(destination_service)
 
-            if (
-                source_distribution is not None
-                and destination_distribution is not None
-            ):
+            if source_distribution is not None and destination_distribution is not None:
                 edge_latency = self.__distribution_pair_latency(
                     source_service,
                     source_distribution,
@@ -306,26 +605,18 @@ class NodePlacementProblem(OptimizationProblem):
                     sum(
                         source_distribution[source_index]
                         / source_replicas
-                        * self.__node_latencies[
-                            (source_node, destination_node)
-                        ]
-                        for source_index, source_node in enumerate(
-                            self.__node_names
-                        )
+                        * self.__node_latencies[(source_node, destination_node)]
+                        for source_index, source_node in enumerate(self.__node_names)
                     )
                     for destination_node in self.__node_names
                 )
             elif destination_distribution is not None:
-                destination_replicas = self.__fixed_replicas[
-                    destination_service
-                ]
+                destination_replicas = self.__fixed_replicas[destination_service]
                 edge_latency = min(
                     sum(
                         destination_distribution[destination_index]
                         / destination_replicas
-                        * self.__node_latencies[
-                            (source_node, destination_node)
-                        ]
+                        * self.__node_latencies[(source_node, destination_node)]
                         for destination_index, destination_node in enumerate(
                             self.__node_names
                         )
@@ -338,8 +629,7 @@ class NodePlacementProblem(OptimizationProblem):
             network_cost_lower_bound += traffic_rate * edge_latency
 
         network_denominator = (
-            self.__maximum_inter_node_latency
-            * self.__total_edge_traffic_rate
+            self.__maximum_inter_node_latency * self.__total_edge_traffic_rate
         )
         normalized_network_lower_bound = (
             network_cost_lower_bound / network_denominator
@@ -348,25 +638,25 @@ class NodePlacementProblem(OptimizationProblem):
         )
 
         spreading_service_count = sum(
-            replica_count > 1
-            for replica_count in self.__fixed_replicas.values()
+            replica_count > 1 for replica_count in self.__fixed_replicas.values()
         )
         spreading_lower_bound = 0.0
         if spreading_service_count:
-            spreading_lower_bound = sum(
-                self.__distribution_spreading_penalty(
-                    service_name,
-                    distribution,
+            spreading_lower_bound = (
+                sum(
+                    self.__distribution_spreading_penalty(
+                        service_name,
+                        distribution,
+                    )
+                    for service_name, distribution in distributions.items()
+                    if self.__fixed_replicas[service_name] > 1
                 )
-                for service_name, distribution in distributions.items()
-                if self.__fixed_replicas[service_name] > 1
-            ) / spreading_service_count
+                / spreading_service_count
+            )
 
         return (
-            self.__cost_weights["network"]
-            * normalized_network_lower_bound
-            + self.__cost_weights["replica_spreading"]
-            * spreading_lower_bound
+            self.__cost_weights["network"] * normalized_network_lower_bound
+            + self.__cost_weights["replica_spreading"] * spreading_lower_bound
         )
 
     def configuration_count(self):
@@ -381,16 +671,12 @@ class NodePlacementProblem(OptimizationProblem):
         """Yield every placement that preserves all fixed replica totals."""
         node_count = len(self.__node_names)
         distribution_options = tuple(
-            tuple(
-                self.__replica_distributions(replica_count, node_count)
-            )
+            tuple(self.__replica_distributions(replica_count, node_count))
             for replica_count in self.__fixed_replicas.values()
         )
 
         for service_distributions in product(*distribution_options):
-            placement = {
-                node_name: {} for node_name in self.__node_names
-            }
+            placement = {node_name: {} for node_name in self.__node_names}
 
             for service_name, distribution in zip(
                 self.__service_names,
@@ -476,13 +762,9 @@ class NodePlacementProblem(OptimizationProblem):
         if missing_services or unknown_services:
             details = []
             if missing_services:
-                details.append(
-                    "missing: " + ", ".join(sorted(missing_services))
-                )
+                details.append("missing: " + ", ".join(sorted(missing_services)))
             if unknown_services:
-                details.append(
-                    "unknown: " + ", ".join(sorted(unknown_services))
-                )
+                details.append("unknown: " + ", ".join(sorted(unknown_services)))
             raise ValueError(
                 "Resource requests must be supplied for every service ("
                 + "; ".join(details)
@@ -513,11 +795,7 @@ class NodePlacementProblem(OptimizationProblem):
 
     @staticmethod
     def __validate_resource_value(value, service_name, field_name):
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int)
-            or value < 0
-        ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(
                 f"{field_name} for service '{service_name}' must be a "
                 "nonnegative integer."
@@ -599,18 +877,14 @@ class NodePlacementProblem(OptimizationProblem):
             )
 
         try:
-            arrival_values = tuple(
-                self.__system.get_effective_arrival_rates()
-            )
+            arrival_values = tuple(self.__system.get_effective_arrival_rates())
         except Exception as exc:
             raise ValueError(
                 "The open-network traffic equations could not be solved."
             ) from exc
 
         if len(arrival_values) != len(self.__services):
-            raise ValueError(
-                "The traffic solution must contain one rate per service."
-            )
+            raise ValueError("The traffic solution must contain one rate per service.")
 
         arrival_rates = {}
         for service_id, service_name in services_by_id.items():
@@ -653,8 +927,7 @@ class NodePlacementProblem(OptimizationProblem):
         total_external_arrival_rate = 0.0
         for service_name, service in self.__services.items():
             gamma = sum(
-                service.get_gamma(request_class)
-                for request_class in request_classes
+                service.get_gamma(request_class) for request_class in request_classes
             )
             if (
                 isinstance(gamma, bool)
@@ -670,9 +943,7 @@ class NodePlacementProblem(OptimizationProblem):
             total_external_arrival_rate += float(gamma)
 
         edge_traffic_rates = {}
-        incoming_traffic = {
-            service_name: 0.0 for service_name in self.__service_names
-        }
+        incoming_traffic = {service_name: 0.0 for service_name in self.__service_names}
 
         for request_class in request_classes:
             class_rates = request_class_arrival_rates[request_class]
@@ -712,8 +983,7 @@ class NodePlacementProblem(OptimizationProblem):
 
         for service_name in self.__service_names:
             expected_arrival_rate = (
-                external_arrivals[service_name]
-                + incoming_traffic[service_name]
+                external_arrivals[service_name] + incoming_traffic[service_name]
             )
             if not math.isclose(
                 arrival_rates[service_name],
@@ -732,12 +1002,30 @@ class NodePlacementProblem(OptimizationProblem):
             total_external_arrival_rate,
         )
 
-    def __validate_configuration(self, configuration):
+    def __hard_constraint_allows(self, distributions, *, complete):
+        if self.__hard_constraint is None:
+            return True
+        node_count = len(self.__node_names)
+        distributions = {
+            service_name: tuple(distributions.get(service_name, (0,) * node_count))
+            for service_name in self.__service_names
+        }
         placement = {
             node_name: {
-                service_name: 0
+                service_name: distributions[service_name][node_index]
                 for service_name in self.__service_names
+                if distributions[service_name][node_index] > 0
             }
+            for node_index, node_name in enumerate(self.__node_names)
+        }
+        try:
+            return bool(self.__hard_constraint(placement, complete=complete))
+        except TypeError:
+            return bool(self.__hard_constraint(placement))
+
+    def __validate_configuration(self, configuration):
+        placement = {
+            node_name: {service_name: 0 for service_name in self.__service_names}
             for node_name in self.__node_names
         }
         violations = []
@@ -761,15 +1049,10 @@ class NodePlacementProblem(OptimizationProblem):
             for service_name, count in service_counts.items():
                 if service_name not in self.__services:
                     violations.append(
-                        f"Unknown service '{service_name}' on node "
-                        f"'{node_name}'."
+                        f"Unknown service '{service_name}' on node " f"'{node_name}'."
                     )
                     continue
-                if (
-                    isinstance(count, bool)
-                    or not isinstance(count, int)
-                    or count < 0
-                ):
+                if isinstance(count, bool) or not isinstance(count, int) or count < 0:
                     violations.append(
                         f"Replica count for service '{service_name}' on "
                         f"node '{node_name}' must be a nonnegative integer."
@@ -779,8 +1062,7 @@ class NodePlacementProblem(OptimizationProblem):
 
         for service_name, fixed_count in self.__fixed_replicas.items():
             placed_count = sum(
-                placement[node_name][service_name]
-                for node_name in self.__node_names
+                placement[node_name][service_name] for node_name in self.__node_names
             )
             if placed_count != fixed_count:
                 violations.append(
@@ -796,16 +1078,12 @@ class NodePlacementProblem(OptimizationProblem):
         for node_name, node in self.__nodes.items():
             cpu_used = sum(
                 placement[node_name][service_name]
-                * self.__resource_requests[service_name][
-                    "cpu_request_millicores"
-                ]
+                * self.__resource_requests[service_name]["cpu_request_millicores"]
                 for service_name in self.__service_names
             )
             memory_used = sum(
                 placement[node_name][service_name]
-                * self.__resource_requests[service_name][
-                    "memory_request_bytes"
-                ]
+                * self.__resource_requests[service_name]["memory_request_bytes"]
                 for service_name in self.__service_names
             )
 
@@ -856,14 +1134,11 @@ class NodePlacementProblem(OptimizationProblem):
             destination_service,
         ), traffic_rate in self.__edge_traffic_rates.items():
             source_replicas = self.__fixed_replicas[source_service]
-            destination_replicas = self.__fixed_replicas[
-                destination_service
-            ]
+            destination_replicas = self.__fixed_replicas[destination_service]
 
             for source_node in self.__node_names:
                 source_fraction = (
-                    placement[source_node][source_service]
-                    / source_replicas
+                    placement[source_node][source_service] / source_replicas
                 )
                 if source_fraction == 0:
                     continue
@@ -880,9 +1155,7 @@ class NodePlacementProblem(OptimizationProblem):
                         traffic_rate
                         * source_fraction
                         * destination_fraction
-                        * self.__node_latencies[
-                            (source_node, destination_node)
-                        ]
+                        * self.__node_latencies[(source_node, destination_node)]
                     )
 
         return network_cost
@@ -903,9 +1176,7 @@ class NodePlacementProblem(OptimizationProblem):
             / destination_replicas
             * self.__node_latencies[(source_node, destination_node)]
             for source_index, source_node in enumerate(self.__node_names)
-            for destination_index, destination_node in enumerate(
-                self.__node_names
-            )
+            for destination_index, destination_node in enumerate(self.__node_names)
         )
 
     def __calculate_spreading_penalty(self, placement):
@@ -935,20 +1206,16 @@ class NodePlacementProblem(OptimizationProblem):
 
         node_count = len(self.__node_names)
         concentration = sum(
-            (replicas_on_node / replica_count) ** 2
-            for replicas_on_node in distribution
+            (replicas_on_node / replica_count) ** 2 for replicas_on_node in distribution
         )
         quotient, remainder = divmod(replica_count, node_count)
         minimum_concentration = (
-            remainder * (quotient + 1) ** 2
-            + (node_count - remainder) * quotient**2
+            remainder * (quotient + 1) ** 2 + (node_count - remainder) * quotient**2
         ) / replica_count**2
         normalization = 1.0 - minimum_concentration
         if normalization <= 1e-15:
             return 0.0
-        penalty = (
-            concentration - minimum_concentration
-        ) / normalization
+        penalty = (concentration - minimum_concentration) / normalization
         return min(1.0, max(0.0, penalty))
 
     def __validate_service_distributions(
@@ -960,21 +1227,15 @@ class NodePlacementProblem(OptimizationProblem):
         if not isinstance(service_distributions, Mapping):
             raise TypeError("Service distributions must be a mapping.")
 
-        unknown_services = set(service_distributions) - set(
-            self.__service_names
-        )
+        unknown_services = set(service_distributions) - set(self.__service_names)
         if unknown_services:
             names = ", ".join(sorted(unknown_services))
             raise ValueError(f"Unknown services in placement search: {names}.")
         if require_complete:
-            missing_services = set(self.__service_names) - set(
-                service_distributions
-            )
+            missing_services = set(self.__service_names) - set(service_distributions)
             if missing_services:
                 names = ", ".join(sorted(missing_services))
-                raise ValueError(
-                    f"Missing services in complete placement: {names}."
-                )
+                raise ValueError(f"Missing services in complete placement: {names}.")
 
         normalized = {}
         node_count = len(self.__node_names)
@@ -983,9 +1244,7 @@ class NodePlacementProblem(OptimizationProblem):
             if (
                 len(distribution) != node_count
                 or any(
-                    isinstance(value, bool)
-                    or not isinstance(value, int)
-                    or value < 0
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
                     for value in distribution
                 )
                 or sum(distribution) != self.__fixed_replicas[service_name]

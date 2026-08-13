@@ -7,11 +7,12 @@ class OptimizationResult:
     """Algorithm-independent optimization result.
 
     The meaning of ``cost`` is defined by the selected problem and algorithm.
-    For replica sizing it is the path cost from the selected initial state. For
-    exhaustive node placement it is the weighted placement objective.
+    Its meaning is method-specific; use objective_value when a richer exact or
+    heuristic result exposes it.
 
-    ``path`` is algorithm-specific. Exact enumeration returns only the chosen
-    configuration because it does not construct a transition path.
+    ``path`` is algorithm-specific. Placement methods normally return only
+    the chosen configuration because they do not construct a replica-sizing
+    transition path.
     """
 
     configuration: Hashable

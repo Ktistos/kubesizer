@@ -1,8 +1,10 @@
 import math
+import time
 from dataclasses import dataclass
 
 from .base import Optimizer
 from .exceptions import NoFeasibleConfigurationError
+from .feasibility import FeasibilityStatus, TerminationReason
 from .result import OptimizationResult
 
 
@@ -16,6 +18,26 @@ class BranchAndBoundNodePlacementOptimizationResult(OptimizationResult):
     pruned_complete_placements: int
     total_configurations: int
     optimality_proven: bool = True
+    method: str = "BRANCH_AND_BOUND_EXACT"
+    objective_value: float = 0.0
+    feasibility_status: FeasibilityStatus = FeasibilityStatus.FEASIBLE
+    termination_reason: TerminationReason = TerminationReason.LOWER_BOUND_MATCHED
+    evaluation_count: int = 0
+    unique_evaluation_count: int = 0
+    simulation_replications: int = 0
+    runtime_seconds: float = 0.0
+    restart_count: int = 1
+    random_seed: int | None = None
+    budget_exhausted: bool = False
+    deletion_local_certified: bool = False
+    relocation_local_certified: bool = True
+    swap_local_certified: bool = True
+    global_optimal: bool = True
+    lower_bound: float | None = None
+    absolute_bound_gap: float | None = 0.0
+    relative_bound_gap: float | None = None
+    trace: tuple = ()
+    selection_reason: str | None = None
 
     @property
     def placement(self):
@@ -39,12 +61,15 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
     _BOUND_RELATIVE_TOLERANCE = 1e-12
     _BOUND_ABSOLUTE_TOLERANCE = 1e-15
 
+    def __init__(self, *, selection_reason=None, clock=None):
+        self.selection_reason = selection_reason
+        self._clock = clock or time.perf_counter
+
     def optimize(self, problem):
+        started = self._clock()
         service_names = tuple(problem.get_service_names())
         distribution_options = {
-            service_name: problem.get_replica_distribution_options(
-                service_name
-            )
+            service_name: problem.get_replica_distribution_options(service_name)
             for service_name in service_names
         }
         service_order = self._traffic_aware_service_order(
@@ -65,10 +90,9 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
 
         remaining_completion_counts = [1] * (len(service_order) + 1)
         for index in range(len(service_order) - 1, -1, -1):
-            remaining_completion_counts[index] = (
-                remaining_completion_counts[index + 1]
-                * len(distribution_options[service_order[index]])
-            )
+            remaining_completion_counts[index] = remaining_completion_counts[
+                index + 1
+            ] * len(distribution_options[service_order[index]])
 
         def search(depth):
             nonlocal best_evaluation
@@ -98,15 +122,11 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
 
             service_name = service_order[depth]
             candidates = []
-            completions_below_candidate = remaining_completion_counts[
-                depth + 1
-            ]
+            completions_below_candidate = remaining_completion_counts[depth + 1]
 
             for distribution in distribution_options[service_name]:
                 assignments[service_name] = distribution
-                if not problem.partial_assignment_is_resource_feasible(
-                    assignments
-                ):
+                if not problem.partial_assignment_is_resource_feasible(assignments):
                     pruned_branches += 1
                     pruned_complete_placements += completions_below_candidate
                     continue
@@ -138,8 +158,7 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
 
         if complete_states + pruned_complete_placements != total_configurations:
             raise AssertionError(
-                "Branch-and-bound accounting did not cover the full placement "
-                "space."
+                "Branch-and-bound accounting did not cover the full placement " "space."
             )
 
         configuration = best_evaluation.configuration
@@ -154,6 +173,13 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
             pruned_branches=pruned_branches,
             pruned_complete_placements=pruned_complete_placements,
             total_configurations=total_configurations,
+            objective_value=best_evaluation.total_cost,
+            evaluation_count=complete_states,
+            unique_evaluation_count=complete_states,
+            runtime_seconds=max(0.0, self._clock() - started),
+            lower_bound=best_evaluation.total_cost,
+            relative_bound_gap=(0.0 if best_evaluation.total_cost > 0 else None),
+            selection_reason=self.selection_reason,
         )
 
     @classmethod
@@ -175,8 +201,7 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
     ):
         """Place highly connected services early to tighten cost bounds."""
         original_index = {
-            service_name: index
-            for index, service_name in enumerate(service_names)
+            service_name: index for index, service_name in enumerate(service_names)
         }
         total_incident_traffic = {name: 0.0 for name in service_names}
         pair_traffic = {}
@@ -196,14 +221,9 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
             def rank(service_name):
                 connected_traffic = sum(
                     traffic_rate
-                    for (source, destination), traffic_rate
-                    in pair_traffic.items()
-                    if (
-                        source == service_name and destination in assigned
-                    )
-                    or (
-                        destination == service_name and source in assigned
-                    )
+                    for (source, destination), traffic_rate in pair_traffic.items()
+                    if (source == service_name and destination in assigned)
+                    or (destination == service_name and source in assigned)
                 )
                 return (
                     connected_traffic,

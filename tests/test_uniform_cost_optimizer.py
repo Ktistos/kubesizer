@@ -338,11 +338,12 @@ def test_public_calibrated_workflow_uses_runtime_adaptive_scalable_mode(monkeypa
     assert result.runtime_limit_calibration is runtime_limit_calibration
     assert not result.optimality_proven
     assert result.locally_minimal
-    assert captured == {
-        "maximum_configuration_evaluations": 12,
-        "time_budget_seconds": 45,
-        "candidate_width": 3,
-    }
+    assert captured["maximum_configuration_evaluations"] == 12
+    assert captured["time_budget_seconds"] == 45
+    assert captured["candidate_width"] == 3
+    assert captured["maximum_restarts"] == 4
+    assert captured["maximum_vns_neighborhood"] == 3
+    assert captured["random_seed"] == 0
 
     mismatched = SimpleNamespace(
         calibration_profile_fingerprint="different-profile",

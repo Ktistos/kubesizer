@@ -1,10 +1,17 @@
 import heapq
 import itertools
 import math
+import time
 from dataclasses import dataclass
 
 from .base import GraphSearchProblem, Optimizer
 from .exceptions import NoFeasibleConfigurationError
+from .feasibility import (
+    FeasibilityStatus,
+    TerminationReason,
+    certified_bound_gaps,
+    evaluation_replication_count,
+)
 from .result import OptimizationResult
 
 
@@ -14,6 +21,30 @@ class ReplicaOptimizationResult(OptimizationResult):
 
     minimality_proven: bool
     unresolved_lower_cost_states: tuple
+    method: str
+    objective_value: float
+    feasibility_status: FeasibilityStatus
+    termination_reason: TerminationReason
+    evaluation_count: int
+    unique_evaluation_count: int
+    simulation_replications: int
+    runtime_seconds: float
+    restart_count: int
+    random_seed: int | None
+    budget_exhausted: bool
+    deletion_local_certified: bool
+    relocation_local_certified: bool
+    swap_local_certified: bool
+    global_optimal: bool
+    lower_bound: float | None
+    absolute_bound_gap: float | None
+    relative_bound_gap: float | None
+    trace: tuple
+    selection_reason: str | None
+
+    @property
+    def optimality_proven(self):
+        return self.global_optimal
 
 
 class UniformCostReplicaOptimizer(Optimizer):
@@ -27,17 +58,23 @@ class UniformCostReplicaOptimizer(Optimizer):
 
     _UNRESOLVED_CLASSIFICATIONS = {"CONTINUE_SAMPLING", "INCONCLUSIVE"}
 
+    def __init__(self, *, selection_reason=None, clock=None):
+        self.selection_reason = selection_reason
+        self._clock = clock or time.perf_counter
+
     def optimize(self, problem: GraphSearchProblem) -> ReplicaOptimizationResult:
+        started = self._clock()
         initial = problem.initial_state()
         counter = itertools.count()
-        frontier = []
+        frontier: list[tuple[float, float, int, object]] = []
         best_cost = {initial: 0.0}
-        parents = {initial: None}
+        parents: dict[object, object | None] = {initial: None}
         heapq.heappush(
             frontier,
             (0.0, self._state_ordering(problem, initial), next(counter), initial),
         )
         explored_states = 0
+        simulation_replications = 0
         best_goal = None
         unresolved_states = []
 
@@ -55,15 +92,14 @@ class UniformCostReplicaOptimizer(Optimizer):
                 state_is_feasible = problem.is_feasible(state)
                 evaluation = problem.evaluate(state) if state_is_feasible else None
 
+            simulation_replications += evaluation_replication_count(evaluation)
             classification = getattr(evaluation, "classification", None)
             classification_value = getattr(classification, "value", classification)
             if classification_value in self._UNRESOLVED_CLASSIFICATIONS:
                 unresolved_states.append((queued_cost, state))
 
             if state_is_feasible:
-                evaluation_tie_breaker = float(
-                    getattr(evaluation, "tie_breaker", 0.0)
-                )
+                evaluation_tie_breaker = float(getattr(evaluation, "tie_breaker", 0.0))
                 if not math.isfinite(evaluation_tie_breaker):
                     raise ValueError(
                         "A feasible evaluation tie_breaker must be finite."
@@ -112,14 +148,57 @@ class UniformCostReplicaOptimizer(Optimizer):
             for unresolved_cost, unresolved_state in unresolved_states
             if unresolved_cost < goal_cost
         )
+        objective = (
+            float(problem.configuration_cost(state))
+            if hasattr(problem, "configuration_cost")
+            else float(getattr(evaluation, "cost", goal_cost))
+        )
+        stable = (
+            problem.stable_configuration()
+            if hasattr(problem, "stable_configuration")
+            else initial
+        )
+        lower_bound = (
+            float(problem.configuration_cost(stable))
+            if hasattr(problem, "configuration_cost")
+            else objective - goal_cost
+        )
+        absolute_gap, relative_gap = certified_bound_gaps(
+            objective, objective if not unresolved_lower else lower_bound
+        )
+        proven = not unresolved_lower
         return ReplicaOptimizationResult(
             configuration=state,
             cost=goal_cost,
             metrics=evaluation,
             explored_states=explored_states,
             path=path,
-            minimality_proven=not unresolved_lower,
+            minimality_proven=proven,
             unresolved_lower_cost_states=unresolved_lower,
+            method="UNIFORM_COST_EXACT",
+            objective_value=objective,
+            feasibility_status=FeasibilityStatus.FEASIBLE,
+            termination_reason=(
+                TerminationReason.LOWER_BOUND_MATCHED
+                if proven
+                else TerminationReason.STATISTICALLY_UNRESOLVED
+            ),
+            evaluation_count=explored_states,
+            unique_evaluation_count=explored_states,
+            simulation_replications=simulation_replications,
+            runtime_seconds=max(0.0, self._clock() - started),
+            restart_count=1,
+            random_seed=None,
+            budget_exhausted=False,
+            deletion_local_certified=proven,
+            relocation_local_certified=False,
+            swap_local_certified=False,
+            global_optimal=proven,
+            lower_bound=(objective if proven else lower_bound),
+            absolute_bound_gap=absolute_gap,
+            relative_bound_gap=relative_gap,
+            trace=(),
+            selection_reason=self.selection_reason,
         )
 
     @staticmethod

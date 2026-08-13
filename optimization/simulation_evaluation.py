@@ -8,6 +8,7 @@ from metrics import ClusterBootstrapP95Interval, replication_cluster_bootstrap_p
 
 class SimulationClassification(str, Enum):
     ANALYTICALLY_UNSTABLE = "ANALYTICALLY_UNSTABLE"
+    STRUCTURALLY_INFEASIBLE = "STRUCTURALLY_INFEASIBLE"
     STATISTICALLY_FEASIBLE = "STATISTICALLY_FEASIBLE"
     STATISTICALLY_INFEASIBLE = "STATISTICALLY_INFEASIBLE"
     CONTINUE_SAMPLING = "CONTINUE_SAMPLING"
@@ -99,16 +100,13 @@ class CalibratedConfigurationEvaluator:
 
     def _normalize_configuration(self, configuration):
         configuration = tuple(configuration)
-        if (
-            len(configuration) != len(self.profile.maximum_replica_configuration)
-            or any(
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value <= 0
-                for value in configuration
-            )
+        if len(configuration) != len(self.profile.maximum_replica_configuration) or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in configuration
         ):
-            raise ValueError("Configuration must contain positive replicas for every service.")
+            raise ValueError(
+                "Configuration must contain positive replicas for every service."
+            )
         return configuration
 
     def _look_schedule(self):
@@ -122,7 +120,9 @@ class CalibratedConfigurationEvaluator:
                 )
             )
         if len(values) != profile.maximum_sequential_looks:
-            raise ValueError("Calibration profile contains an inconsistent look schedule.")
+            raise ValueError(
+                "Calibration profile contains an inconsistent look schedule."
+            )
         return tuple(values)
 
     def _calculate_intervals(self, configuration, replications, look_index):
@@ -237,7 +237,9 @@ class CalibratedConfigurationEvaluator:
             external_arrivals = 0
             completed_requests = 0
             maximum_stop_time = 0.0
-            for look_index, replication_count in enumerate(self._look_schedule(), start=1):
+            for look_index, replication_count in enumerate(
+                self._look_schedule(), start=1
+            ):
                 batch_seeds = all_seeds[previous_count:replication_count]
                 try:
                     batch = self.system.simulate_measurement_replications(

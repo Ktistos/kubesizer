@@ -8,7 +8,7 @@ class Optimizer(ABC):
 
     @abstractmethod
     def optimize(self, problem) -> OptimizationResult:
-        """Find and return an optimal feasible configuration."""
+        """Find a feasible configuration under the selected method guarantees."""
 
 
 class OptimizationProblem(ABC):

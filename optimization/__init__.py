@@ -5,6 +5,12 @@ from .branch_and_bound_node_placement import (
 )
 from .uniform_cost import ReplicaOptimizationResult, UniformCostReplicaOptimizer
 from .base import GraphSearchProblem, OptimizationProblem, Optimizer
+from .feasibility import (
+    FeasibilityStatus,
+    HeuristicTraceEntry,
+    TerminationReason,
+    evaluation_feasibility_status,
+)
 from .exceptions import (
     NoFeasibleConfigurationError,
     RequestClassMetricsUnavailableError,
@@ -28,15 +34,19 @@ from .mode import (
     normalize_optimization_mode,
 )
 from .scalable_node_placement import (
+    BeamVNSPlacementOptimizer,
     ScalableNodePlacementOptimizationResult,
     ScalableNodePlacementOptimizer,
 )
 from .scalable_replica import (
+    MultiStartReplicaVNSOptimizer,
     ScalableReplicaOptimizationResult,
     ScalableReplicaOptimizer,
 )
 from .selection import (
+    optimization_mode_decision,
     optimize_node_placement,
+    optimize_replica_configuration,
     replica_configuration_count,
     resolve_optimization_mode,
 )
@@ -65,6 +75,12 @@ from .replica_sizing import (
 
 __all__ = [
     "AStarOptimizer",
+    "BeamVNSPlacementOptimizer",
+    "FeasibilityStatus",
+    "HeuristicTraceEntry",
+    "MultiStartReplicaVNSOptimizer",
+    "TerminationReason",
+    "evaluation_feasibility_status",
     "DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT",
     "DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT",
     "OptimizationMode",
@@ -75,7 +91,9 @@ __all__ = [
     "ScalableReplicaOptimizationResult",
     "ScalableReplicaOptimizer",
     "normalize_optimization_mode",
+    "optimization_mode_decision",
     "optimize_node_placement",
+    "optimize_replica_configuration",
     "replica_configuration_count",
     "resolve_optimization_mode",
     "BranchAndBoundNodePlacementOptimizationResult",

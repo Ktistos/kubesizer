@@ -1,5 +1,5 @@
 class NoFeasibleConfigurationError(RuntimeError):
-    """Raised when a finite search space contains no feasible configuration."""
+    """Raised when a search returns no certified feasible configuration."""
 
 
 class RequestClassMetricsUnavailableError(RuntimeError):

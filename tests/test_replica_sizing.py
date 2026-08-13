@@ -57,7 +57,9 @@ class FakeSystem:
             )
         ]
         stable = all(utilization < 1 for utilization in utilizations)
-        latencies = [0.1 if utilization < 1 else float("inf") for utilization in utilizations]
+        latencies = [
+            0.1 if utilization < 1 else float("inf") for utilization in utilizations
+        ]
         return Metrics(utilizations, latencies, stable)
 
     def simulate_measurement_replications(
@@ -81,14 +83,11 @@ class FakeSystem:
                 warmup_duration=warmup_duration,
                 measurement_duration=measurement_duration,
                 measured_request_counts={
-                    request_class: 2_000
-                    for request_class in request_class_p95
+                    request_class: 2_000 for request_class in request_class_p95
                 },
                 request_class_p95_latencies={
                     request_class: (
-                        value[index]
-                        if isinstance(value, (list, tuple))
-                        else value
+                        value[index] if isinstance(value, (list, tuple)) else value
                     )
                     for request_class, value in request_class_p95.items()
                 },
@@ -318,7 +317,6 @@ def test_astar_uses_normalized_p95_only_to_break_equal_replica_ties():
     assert result.metrics.tie_breaker == 0.4
 
 
-
 def test_uncertain_confidence_interval_is_not_treated_as_feasible():
     _, problem = make_problem(
         p95_function=lambda _configuration: {
@@ -349,6 +347,7 @@ def test_configuration_seed_blocks_are_reproducible_and_disjoint():
     assert set(first).isdisjoint(neighbor)
     assert set(first).isdisjoint(other_neighbor)
     assert set(neighbor).isdisjoint(other_neighbor)
+
 
 def test_end_to_end_p95_is_not_sum_of_per_service_p95_values():
     collector = SimulationMetricsCollector(2)
@@ -419,3 +418,26 @@ def test_zero_and_stability_heuristics_return_same_optimum():
 
     assert zero_result.configuration == stability_result.configuration == (3, 2)
     assert zero_result.cost == stability_result.cost == 3
+
+
+def test_structural_infeasibility_skips_expensive_simulation():
+    system = FakeSystem(
+        (1, 1),
+        (10, 10),
+        lambda _configuration: {"checkout": 0.5},
+    )
+    problem = ReplicaSizingProblem(
+        system,
+        simulation_duration=10,
+        request_class_slos={"checkout": 1.0},
+        max_replicas=(3, 3),
+        heuristic=zero_heuristic,
+        structural_feasibility=lambda configuration: sum(configuration) <= 2,
+    )
+
+    evaluation = problem.evaluate((2, 1))
+
+    assert not evaluation.feasible
+    assert evaluation.classification.value == "STRUCTURALLY_INFEASIBLE"
+    assert evaluation.simulation_metrics is None
+    assert system.simulate_calls[(2, 1)] == 0

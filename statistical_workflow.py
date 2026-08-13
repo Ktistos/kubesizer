@@ -24,7 +24,7 @@ from optimization import (
     ScalableReplicaSearchOptions,
     UniformCostReplicaOptimizer,
     replica_configuration_count,
-    resolve_optimization_mode,
+    optimization_mode_decision,
     validate_final_configuration as _validate_final_configuration,
 )
 
@@ -62,9 +62,7 @@ class CalibratedOptimizationResult:
 
     @property
     def minimality_proven(self):
-        return bool(
-            getattr(self.optimization_result, "minimality_proven", False)
-        )
+        return bool(getattr(self.optimization_result, "minimality_proven", False))
 
     @property
     def unresolved_lower_cost_states(self):
@@ -104,6 +102,102 @@ class CalibratedOptimizationResult:
             )
         )
 
+    @property
+    def method(self):
+        return getattr(
+            self.optimization_result,
+            "method",
+            type(self.optimization_result).__name__,
+        )
+
+    @property
+    def objective_value(self):
+        return float(getattr(self.optimization_result, "objective_value", self.cost))
+
+    @property
+    def feasibility_status(self):
+        return getattr(self.optimization_result, "feasibility_status", None)
+
+    @property
+    def termination_reason(self):
+        return getattr(self.optimization_result, "termination_reason", None)
+
+    @property
+    def evaluation_count(self):
+        return int(
+            getattr(
+                self.optimization_result,
+                "evaluation_count",
+                self.explored_states,
+            )
+        )
+
+    @property
+    def unique_evaluation_count(self):
+        return int(
+            getattr(
+                self.optimization_result,
+                "unique_evaluation_count",
+                self.explored_states,
+            )
+        )
+
+    @property
+    def simulation_replications(self):
+        return int(getattr(self.optimization_result, "simulation_replications", 0))
+
+    @property
+    def runtime_seconds(self):
+        return float(getattr(self.optimization_result, "runtime_seconds", 0.0))
+
+    @property
+    def restart_count(self):
+        return int(getattr(self.optimization_result, "restart_count", 1))
+
+    @property
+    def random_seed(self):
+        return getattr(self.optimization_result, "random_seed", None)
+
+    @property
+    def deletion_local_certified(self):
+        return bool(
+            getattr(
+                self.optimization_result,
+                "deletion_local_certified",
+                self.locally_minimal,
+            )
+        )
+
+    @property
+    def global_optimal(self):
+        return bool(
+            getattr(
+                self.optimization_result,
+                "global_optimal",
+                self.optimality_proven,
+            )
+        )
+
+    @property
+    def lower_bound(self):
+        return getattr(self.optimization_result, "lower_bound", None)
+
+    @property
+    def absolute_bound_gap(self):
+        return getattr(self.optimization_result, "absolute_bound_gap", None)
+
+    @property
+    def relative_bound_gap(self):
+        return getattr(self.optimization_result, "relative_bound_gap", None)
+
+    @property
+    def trace(self):
+        return tuple(getattr(self.optimization_result, "trace", ()))
+
+    @property
+    def selection_reason(self):
+        return getattr(self.optimization_result, "selection_reason", None)
+
 
 def _maximum_configuration(system, maximum_replicas):
     service_count = len(system.get_services())
@@ -111,12 +205,9 @@ def _maximum_configuration(system, maximum_replicas):
         maximum = (maximum_replicas,) * service_count
     else:
         maximum = tuple(maximum_replicas)
-    if (
-        len(maximum) != service_count
-        or any(
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            for value in maximum
-        )
+    if len(maximum) != service_count or any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in maximum
     ):
         raise ValueError("maximum_replicas must define a positive bound per service.")
     minimum = tuple(system.get_minimum_stable_replicas())
@@ -311,21 +402,37 @@ def optimize_with_calibrated_simulation(
         simulation_workers=workers,
     )
     if optimizer is None:
-        selected_mode = resolve_optimization_mode(
+        selected_mode, selection_reason = optimization_mode_decision(
             mode,
             configuration_count,
             exact_configuration_limit,
         )
         if selected_mode == OptimizationMode.EXACT:
             optimizer = UniformCostReplicaOptimizer()
+            if hasattr(optimizer, "selection_reason"):
+                optimizer.selection_reason = selection_reason
         else:
             options = scalable_options or ScalableReplicaSearchOptions()
             optimizer = ScalableReplicaOptimizer(
                 maximum_configuration_evaluations=(
                     options.maximum_configuration_evaluations
                 ),
+                maximum_total_evaluator_calls=(options.maximum_total_evaluator_calls),
+                maximum_simulation_replications=(
+                    options.maximum_simulation_replications
+                ),
                 time_budget_seconds=options.time_budget_seconds,
                 candidate_width=options.candidate_width,
+                restricted_candidate_fraction=(options.restricted_candidate_fraction),
+                maximum_restarts=options.maximum_restarts,
+                maximum_no_improvement=options.maximum_no_improvement,
+                maximum_vns_neighborhood=(options.maximum_vns_neighborhood),
+                vns_attempts_per_neighborhood=(options.vns_attempts_per_neighborhood),
+                random_seed=options.random_seed,
+                removal_order=options.removal_order,
+                archive_equal_cost=options.archive_equal_cost,
+                collect_trace=options.collect_trace,
+                selection_reason=selection_reason,
             )
     raw_result = optimizer.optimize(problem)
     return CalibratedOptimizationResult(

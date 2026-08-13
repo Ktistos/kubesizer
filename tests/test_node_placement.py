@@ -91,10 +91,13 @@ class FakeSystem:
                     updated[edge.get_target().get_id()] += (
                         source_rate * edge.get_routing_prob()
                     )
-            if max(
-                abs(new_rate - old_rate)
-                for new_rate, old_rate in zip(updated, rates)
-            ) < 1e-14:
+            if (
+                max(
+                    abs(new_rate - old_rate)
+                    for new_rate, old_rate in zip(updated, rates)
+                )
+                < 1e-14
+            ):
                 return updated
             rates = updated
 
@@ -189,6 +192,7 @@ def build_problem(
     cost_weights=None,
     service_resource_requests=None,
     node_capacities=None,
+    hard_constraint=None,
 ):
     system = FakeSystem(service_specs)
     node_capacities = node_capacities or {}
@@ -208,6 +212,7 @@ def build_problem(
         FakeCluster(system, nodes),
         cost_weights=cost_weights,
         service_resource_requests=service_resource_requests,
+        hard_constraint=hard_constraint,
     )
 
 
@@ -305,10 +310,7 @@ def test_evaluates_supplied_current_placement_and_reports_unchecked_resources():
     assert evaluation.replica_spreading_penalty == pytest.approx(1 / 15)
     assert evaluation.network_cost_normalized == pytest.approx(
         evaluation.network_cost_raw
-        / (
-            0.0015
-            * sum(problem.get_edge_traffic_rates().values())
-        )
+        / (0.0015 * sum(problem.get_edge_traffic_rates().values()))
     )
     assert evaluation.average_network_delay_seconds == pytest.approx(
         evaluation.network_cost_raw / 20.0
@@ -390,9 +392,7 @@ def test_five_replica_spreading_examples(counts, expected_penalty):
     evaluation = problem.evaluate(placement)
 
     assert evaluation.valid
-    assert evaluation.replica_spreading_penalty == pytest.approx(
-        expected_penalty
-    )
+    assert evaluation.replica_spreading_penalty == pytest.approx(expected_penalty)
     assert evaluation.total_cost == pytest.approx(expected_penalty)
 
 
@@ -454,9 +454,7 @@ def test_enforces_cpu_and_memory_when_all_service_requests_are_supplied():
     )
 
     invalid = problem.evaluate({"node-a": {"api": 2}})
-    valid = problem.evaluate(
-        {"node-a": {"api": 1}, "node-b": {"api": 1}}
-    )
+    valid = problem.evaluate({"node-a": {"api": 1}, "node-b": {"api": 1}})
 
     assert invalid.resource_feasibility_checked
     assert not invalid.valid
@@ -558,7 +556,6 @@ def test_exhaustive_optimizer_raises_when_capacity_rejects_every_placement():
 
     with pytest.raises(NoFeasibleConfigurationError):
         ExhaustiveNodePlacementOptimizer().optimize(problem)
-
 
 
 def test_partial_cost_bound_does_not_exceed_any_completion():
@@ -674,7 +671,6 @@ def test_branch_and_bound_raises_when_capacity_rejects_every_placement():
         BranchAndBoundNodePlacementOptimizer().optimize(problem)
 
 
-
 @pytest.mark.parametrize("seed", range(10))
 def test_branch_and_bound_matches_exhaustive_across_small_problems(seed):
     random_source = random.Random(seed)
@@ -687,19 +683,12 @@ def test_branch_and_bound_matches_exhaustive_across_small_problems(seed):
             if random_source.random() < 0.7
         }
         service_specs[source_name] = {
-            "gamma": (
-                random_source.uniform(1.0, 10.0)
-                if source_index == 0
-                else 0.0
-            ),
+            "gamma": (random_source.uniform(1.0, 10.0) if source_index == 0 else 0.0),
             "replicas": random_source.randint(1, 2),
             "routes": routes,
         }
 
-    node_names = tuple(
-        f"node-{index}"
-        for index in range(random_source.randint(2, 3))
-    )
+    node_names = tuple(f"node-{index}" for index in range(random_source.randint(2, 3)))
     node_latencies = {
         source_name: {
             destination_name: random_source.uniform(0.001, 0.1)
@@ -770,3 +759,181 @@ def test_auto_placement_uses_scalable_mode_above_exact_space_limit():
     assert result.solution_mode == "SCALABLE"
     assert result.metrics.valid
     assert not result.optimality_proven
+    assert "AUTO selected SCALABLE" in result.selection_reason
+
+
+def _swap_fixture():
+    services = {
+        "A": {"gamma": 10.0, "replicas": 1, "routes": {"B": 1.0}},
+        "B": {"gamma": 0.0, "replicas": 1},
+        "C": {"gamma": 10.0, "replicas": 1, "routes": {"D": 1.0}},
+        "D": {"gamma": 0.0, "replicas": 1},
+    }
+    latencies = {
+        "node-a": {"node-b": 1.0},
+        "node-b": {"node-a": 1.0},
+    }
+    requests = {
+        name: {
+            "cpu_request_millicores": 1,
+            "memory_request_bytes": 1,
+        }
+        for name in services
+    }
+    problem = build_problem(
+        services,
+        latencies,
+        cost_weights={"network": 1.0, "replica_spreading": 0.0},
+        service_resource_requests=requests,
+        node_capacities={"node-a": (2, 2), "node-b": (2, 2)},
+    )
+    initial = {
+        "node-a": {"A": 1, "C": 1},
+        "node-b": {"B": 1, "D": 1},
+    }
+    return problem, initial
+
+
+def test_pairwise_swap_escapes_full_node_relocation_local_placement():
+    problem, initial = _swap_fixture()
+
+    result = ScalableNodePlacementOptimizer(
+        initial_placement=initial,
+        beam_width=4,
+        maximum_partial_states=1_000,
+        maximum_complete_evaluations=100,
+        maximum_restarts=1,
+        maximum_no_improvement=1,
+        lns_neighborhood_sizes=(3,),
+        lns_subset_attempts=1,
+        lns_subproblem_budget=50,
+        random_seed=11,
+        collect_trace=True,
+    ).optimize(problem)
+
+    assert result.metrics.valid
+    assert result.objective_value == pytest.approx(0.0)
+    assert result.relocation_local_certified
+    assert result.swap_local_certified
+    assert result.locally_optimal
+    assert not result.global_optimal
+    assert result.lower_bound == pytest.approx(0.0)
+    assert result.relative_bound_gap is None
+    assert any(entry.action == "accepted-swap" for entry in result.trace)
+    colocated = [set(services) for services in result.placement.values()]
+    assert {"A", "B"} in colocated
+    assert {"C", "D"} in colocated
+
+
+def test_budget_stopped_placement_does_not_claim_local_certificate():
+    problem, initial = _swap_fixture()
+
+    result = ScalableNodePlacementOptimizer(
+        initial_placement=initial,
+        beam_width=2,
+        maximum_partial_states=100,
+        maximum_complete_evaluations=1,
+        maximum_restarts=1,
+        random_seed=4,
+    ).optimize(problem)
+
+    assert result.metrics.valid
+    assert result.budget_exhausted
+    assert not result.relocation_local_certified
+    assert not result.swap_local_certified
+    assert not result.locally_optimal
+    assert result.termination_reason.value in {
+        "TOTAL_CALL_BUDGET_EXHAUSTED",
+        "EVALUATION_BUDGET_EXHAUSTED",
+    }
+
+
+def test_beam_failure_is_not_reported_as_proof_of_infeasibility():
+    problem = build_problem(
+        {"api": {"gamma": 0.0, "replicas": 1}},
+        {"node-a": {"node-b": 0.1}, "node-b": {"node-a": 0.1}},
+        service_resource_requests={
+            "api": {
+                "cpu_request_millicores": 3,
+                "memory_request_bytes": 1,
+            }
+        },
+        node_capacities={"node-a": (2, 2), "node-b": (2, 2)},
+    )
+
+    with pytest.raises(
+        NoFeasibleConfigurationError,
+        match="not proof",
+    ) as captured:
+        ScalableNodePlacementOptimizer(
+            maximum_restarts=2,
+            random_seed=5,
+        ).optimize(problem)
+
+    assert captured.value.termination_reason.value == ("NO_FEASIBLE_SOLUTION_FOUND")
+    assert captured.value.beam_failures == 2
+
+
+def test_placement_seed_is_reproducible_and_result_respects_hard_constraint():
+    def separate_a_b(placement, *, complete):
+        if not complete:
+            return True
+        return not any(
+            "A" in services and "B" in services for services in placement.values()
+        )
+
+    services = {
+        "A": {"gamma": 5.0, "replicas": 1, "routes": {"B": 1.0}},
+        "B": {"gamma": 0.0, "replicas": 1},
+        "C": {"gamma": 0.0, "replicas": 1},
+    }
+    latencies = {
+        "node-a": {"node-b": 0.2, "node-c": 0.3},
+        "node-b": {"node-a": 0.2, "node-c": 0.1},
+        "node-c": {"node-a": 0.3, "node-b": 0.1},
+    }
+
+    def run():
+        problem = build_problem(
+            services,
+            latencies,
+            hard_constraint=separate_a_b,
+        )
+        return problem, ScalableNodePlacementOptimizer(
+            beam_width=6,
+            diversity_per_signature=2,
+            maximum_restarts=2,
+            maximum_no_improvement=2,
+            maximum_complete_evaluations=100,
+            random_seed=23,
+            collect_trace=True,
+            lns_neighborhood_sizes=(2,),
+        ).optimize(problem)
+
+    left_problem, left = run()
+    right_problem, right = run()
+
+    assert left.configuration == right.configuration
+    assert left.objective_value == pytest.approx(right.objective_value)
+    assert left.trace == right.trace
+    assert left_problem.evaluate(left.placement).valid
+    assert not any(
+        "A" in services and "B" in services for services in left.placement.values()
+    )
+
+
+def test_small_scalable_placement_reports_true_gap_to_exact_for_test_only():
+    problem, _ = _swap_fixture()
+    exact = BranchAndBoundNodePlacementOptimizer().optimize(problem)
+    heuristic = ScalableNodePlacementOptimizer(
+        beam_width=4,
+        maximum_restarts=1,
+        maximum_complete_evaluations=100,
+        random_seed=9,
+        lns_neighborhood_sizes=(2,),
+    ).optimize(problem)
+
+    observed_test_gap = heuristic.objective_value - exact.objective_value
+    assert observed_test_gap >= -1e-15
+    assert heuristic.metrics.valid
+    assert not heuristic.global_optimal
