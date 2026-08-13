@@ -76,18 +76,20 @@ class ReplicaSizingProblem(GraphSearchProblem):
         request_class_slos,
         max_replicas,
         heuristic=None,
+        initial_configuration=None,
     ):
         self.__system = system
         self.__simulation_duration = simulation_duration
         self.__request_class_slos = dict(request_class_slos)
         self.__service_count = len(system.get_services())
-        self.__initial_state = tuple(1 for _ in range(self.__service_count))
         self.__max_replicas = self.__normalize_max_replicas(max_replicas)
-        self.__heuristic = (
-            heuristic
-            if heuristic is not None
-            else AnalyticalStabilityHeuristic.from_system(system)
+        stable_anchor = (
+            tuple(system.get_minimum_stable_replicas())
+            if initial_configuration is None
+            else tuple(initial_configuration)
         )
+        self.__initial_state = self.__normalize_configuration(stable_anchor)
+        self.__heuristic = heuristic if heuristic is not None else zero_heuristic
 
         if simulation_duration <= 0:
             raise ValueError("simulation_duration must be greater than zero.")
@@ -97,6 +99,7 @@ class ReplicaSizingProblem(GraphSearchProblem):
         self.__analytical_cache = {}
         self.__simulation_cache = {}
         self.__evaluation_cache = {}
+        self.__search_order_cache = {}
 
     def __normalize_max_replicas(self, max_replicas):
         if isinstance(max_replicas, int):
@@ -126,6 +129,16 @@ class ReplicaSizingProblem(GraphSearchProblem):
     def initial_state(self):
         return self.__initial_state
 
+    def configuration_count(self):
+        """Return the bounded replica space reachable from the stable anchor."""
+        return math.prod(
+            maximum - minimum + 1
+            for minimum, maximum in zip(
+                self.__initial_state,
+                self.__max_replicas,
+            )
+        )
+
     def neighbors(self, state):
         state = self.__normalize_configuration(state)
         neighbors = []
@@ -153,6 +166,28 @@ class ReplicaSizingProblem(GraphSearchProblem):
     def heuristic(self, state):
         state = self.__normalize_configuration(state)
         return self.__heuristic(state)
+
+    def search_tie_breaker(self, configuration):
+        """Order equal-cost states by analytical bottleneck utilization."""
+        configuration = self.__normalize_configuration(configuration)
+        cached = self.__search_order_cache.get(configuration)
+        if cached is not None:
+            return cached
+        self.__system.configure_system_replicas(configuration)
+        analytical_metrics = self.__analytical_cache.get(configuration)
+        if analytical_metrics is None:
+            analytical_metrics = self.__system.solve()
+            self.__analytical_cache[configuration] = analytical_metrics
+        utilizations = tuple(analytical_metrics.get_mean_utilizations())
+        if not analytical_metrics.get_stability() or not utilizations:
+            raise ValueError(
+                "Replica search requires analytically stable bounded states."
+            )
+        ordering = max(float(value) for value in utilizations)
+        if not math.isfinite(ordering) or ordering < 0:
+            raise ValueError("Analytical utilization ordering must be finite.")
+        self.__search_order_cache[configuration] = ordering
+        return ordering
 
     def evaluate(self, configuration):
         configuration = self.__normalize_configuration(configuration)
@@ -218,6 +253,10 @@ class ReplicaSizingProblem(GraphSearchProblem):
         )
         self.__evaluation_cache[configuration] = evaluation
         return evaluation
+
+    def evaluate_and_check(self, configuration):
+        evaluation = self.evaluate(configuration)
+        return evaluation, evaluation.feasible
 
     def is_feasible(self, configuration):
         return self.evaluate(configuration).feasible

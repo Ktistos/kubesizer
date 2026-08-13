@@ -2,7 +2,7 @@ import random
 
 import yaml
 
-from optimization import AStarOptimizer, ReplicaSizingProblem
+from optimization import ReplicaSizingProblem, optimize_replica_configuration
 from performance_models import QueueingNetworkType, System, Cluster
 
 
@@ -28,7 +28,7 @@ def main():
         request_class_slos=REQUEST_CLASS_SLOS,
         max_replicas=MAX_REPLICAS_PER_SERVICE,
     )
-    result = AStarOptimizer().optimize(problem)
+    result = optimize_replica_configuration(problem)
 
 
     cluster = Cluster("okeanos",resources, system)

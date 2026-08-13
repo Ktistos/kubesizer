@@ -3,9 +3,14 @@ import math
 import pytest
 
 from optimization import (
+    BranchAndBoundNodePlacementOptimizer,
     ExhaustiveNodePlacementOptimizer,
     NoFeasibleConfigurationError,
     NodePlacementProblem,
+    OptimizationMode,
+    ScalableNodePlacementOptimizer,
+    ScalablePlacementSearchOptions,
+    optimize_node_placement,
 )
 
 
@@ -546,3 +551,103 @@ def test_exhaustive_optimizer_raises_when_capacity_rejects_every_placement():
 
     with pytest.raises(NoFeasibleConfigurationError):
         ExhaustiveNodePlacementOptimizer().optimize(problem)
+
+
+def test_branch_and_bound_matches_exhaustive_placement_optimum():
+    problem = build_problem(
+        {
+            "source": {
+                "gamma": 10.0,
+                "replicas": 2,
+                "routes": {"destination": 0.5},
+            },
+            "destination": {"gamma": 0.0, "replicas": 2},
+        },
+        {
+            "node-a": {"node-b": 0.2},
+            "node-b": {"node-a": 0.1},
+        },
+    )
+
+    exhaustive = ExhaustiveNodePlacementOptimizer().optimize(problem)
+    bounded = BranchAndBoundNodePlacementOptimizer().optimize(problem)
+
+    assert bounded.configuration == exhaustive.configuration
+    assert bounded.cost == pytest.approx(exhaustive.cost)
+    assert bounded.optimality_proven
+    assert bounded.complete_states + bounded.pruned_complete_placements == (
+        problem.configuration_count()
+    )
+
+
+def test_partial_placement_bound_is_admissible_for_every_completion():
+    problem = build_problem(
+        {
+            "source": {
+                "gamma": 10.0,
+                "replicas": 2,
+                "routes": {"destination": 0.5},
+            },
+            "destination": {"gamma": 0.0, "replicas": 2},
+        },
+        {
+            "node-a": {"node-b": 0.2},
+            "node-b": {"node-a": 0.1},
+        },
+    )
+    partial = {"source": (2, 0)}
+    lower_bound = problem.partial_cost_lower_bound(partial)
+    completion_costs = [
+        problem.evaluate(
+            problem.build_configuration(
+                {
+                    **partial,
+                    "destination": distribution,
+                }
+            )
+        ).total_cost
+        for distribution in problem.get_replica_distribution_options(
+            "destination"
+        )
+    ]
+
+    assert lower_bound <= min(completion_costs) + 1e-15
+
+
+def test_scalable_placement_returns_feasible_result_without_global_claim():
+    problem = build_problem(CURRENT_SERVICE_SPECS, CURRENT_NODE_LATENCIES)
+
+    result = ScalableNodePlacementOptimizer(
+        beam_width=8,
+        candidate_distributions_per_service=16,
+        maximum_partial_states=10_000,
+        maximum_complete_evaluations=1_000,
+        maximum_local_iterations=20,
+        time_budget_seconds=10,
+    ).optimize(problem)
+
+    assert result.metrics.valid
+    assert result.solution_mode == "SCALABLE"
+    assert not result.optimality_proven
+    assert result.complete_states <= 1_000
+
+
+def test_auto_placement_switches_to_scalable_above_limit():
+    problem = build_problem(CURRENT_SERVICE_SPECS, CURRENT_NODE_LATENCIES)
+
+    result = optimize_node_placement(
+        problem,
+        mode=OptimizationMode.AUTO,
+        exact_configuration_limit=1,
+        scalable_options=ScalablePlacementSearchOptions(
+            beam_width=4,
+            candidate_distributions_per_service=8,
+            maximum_partial_states=5_000,
+            maximum_complete_evaluations=500,
+            maximum_local_iterations=10,
+            time_budget_seconds=10,
+        ),
+    )
+
+    assert result.solution_mode == "SCALABLE"
+    assert result.metrics.valid

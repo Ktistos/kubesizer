@@ -170,6 +170,14 @@ class NodePlacementProblem(OptimizationProblem):
     def get_fixed_replica_counts(self):
         return dict(self.__fixed_replicas)
 
+    def get_service_names(self):
+        """Return the stable service order used by placement distributions."""
+        return self.__service_names
+
+    def get_node_names(self):
+        """Return the stable node order used by placement distributions."""
+        return self.__node_names
+
     def get_service_arrival_rates(self):
         return dict(self.__service_arrival_rates)
 
@@ -181,6 +189,185 @@ class NodePlacementProblem(OptimizationProblem):
 
     def resource_feasibility_is_checked(self):
         return self.__resource_requests is not None
+
+    def iter_replica_distribution_options(self, service_name):
+        """Yield node distributions without materializing a large search space."""
+        if service_name not in self.__fixed_replicas:
+            raise KeyError(f"Unknown service '{service_name}'.")
+        yield from self.__replica_distributions(
+            self.__fixed_replicas[service_name],
+            len(self.__node_names),
+        )
+
+    def get_replica_distribution_options(self, service_name):
+        """Return every node distribution for exact placement search."""
+        return tuple(self.iter_replica_distribution_options(service_name))
+
+    def build_configuration(self, service_distributions):
+        """Build a node-oriented configuration from all service distributions."""
+        distributions = self.__validate_service_distributions(
+            service_distributions,
+            require_complete=True,
+        )
+        placement = {node_name: {} for node_name in self.__node_names}
+        for service_name in self.__service_names:
+            for node_name, replica_count in zip(
+                self.__node_names,
+                distributions[service_name],
+            ):
+                if replica_count:
+                    placement[node_name][service_name] = replica_count
+        return {
+            node_name: service_counts
+            for node_name, service_counts in placement.items()
+            if service_counts
+        }
+
+    def partial_assignment_is_resource_feasible(self, service_distributions):
+        """Return whether assigned services fit current node capacities.
+
+        Unassigned services are deliberately ignored. Therefore ``False``
+        proves that no completion of the partial assignment can be feasible.
+        """
+        distributions = self.__validate_service_distributions(
+            service_distributions,
+            require_complete=False,
+        )
+        if self.__resource_requests is None:
+            return True
+
+        for node_index, (node_name, node) in enumerate(self.__nodes.items()):
+            cpu_used = sum(
+                distribution[node_index]
+                * self.__resource_requests[service_name][
+                    "cpu_request_millicores"
+                ]
+                for service_name, distribution in distributions.items()
+            )
+            memory_used = sum(
+                distribution[node_index]
+                * self.__resource_requests[service_name][
+                    "memory_request_bytes"
+                ]
+                for service_name, distribution in distributions.items()
+            )
+            allocatable_cpu = node.get_allocatable_cpu()
+            allocatable_memory = node.get_allocatable_memory()
+            self.__validate_node_capacity(
+                node_name,
+                "allocatable CPU",
+                allocatable_cpu,
+            )
+            self.__validate_node_capacity(
+                node_name,
+                "allocatable memory",
+                allocatable_memory,
+            )
+            if cpu_used > allocatable_cpu or memory_used > allocatable_memory:
+                return False
+        return True
+
+    def partial_cost_lower_bound(self, service_distributions):
+        """Return an admissible objective bound for a partial placement.
+
+        Exact terms are used whenever their services are assigned. For a
+        communication edge with one unassigned endpoint, that endpoint is
+        allowed to choose its best node without capacity or spreading costs.
+        Relaxing those constraints can only reduce the objective, so the
+        result is safe for exact branch-and-bound pruning.
+        """
+        distributions = self.__validate_service_distributions(
+            service_distributions,
+            require_complete=False,
+        )
+        network_cost_lower_bound = 0.0
+        global_minimum_latency = min(self.__node_latencies.values())
+
+        for (
+            source_service,
+            destination_service,
+        ), traffic_rate in self.__edge_traffic_rates.items():
+            source_distribution = distributions.get(source_service)
+            destination_distribution = distributions.get(destination_service)
+
+            if (
+                source_distribution is not None
+                and destination_distribution is not None
+            ):
+                edge_latency = self.__distribution_pair_latency(
+                    source_service,
+                    source_distribution,
+                    destination_service,
+                    destination_distribution,
+                )
+            elif source_distribution is not None:
+                source_replicas = self.__fixed_replicas[source_service]
+                edge_latency = min(
+                    sum(
+                        source_distribution[source_index]
+                        / source_replicas
+                        * self.__node_latencies[
+                            (source_node, destination_node)
+                        ]
+                        for source_index, source_node in enumerate(
+                            self.__node_names
+                        )
+                    )
+                    for destination_node in self.__node_names
+                )
+            elif destination_distribution is not None:
+                destination_replicas = self.__fixed_replicas[
+                    destination_service
+                ]
+                edge_latency = min(
+                    sum(
+                        destination_distribution[destination_index]
+                        / destination_replicas
+                        * self.__node_latencies[
+                            (source_node, destination_node)
+                        ]
+                        for destination_index, destination_node in enumerate(
+                            self.__node_names
+                        )
+                    )
+                    for source_node in self.__node_names
+                )
+            else:
+                edge_latency = global_minimum_latency
+
+            network_cost_lower_bound += traffic_rate * edge_latency
+
+        network_denominator = (
+            self.__maximum_inter_node_latency
+            * self.__total_edge_traffic_rate
+        )
+        normalized_network_lower_bound = (
+            network_cost_lower_bound / network_denominator
+            if network_denominator > 0
+            else 0.0
+        )
+
+        spreading_service_count = sum(
+            replica_count > 1
+            for replica_count in self.__fixed_replicas.values()
+        )
+        spreading_lower_bound = 0.0
+        if spreading_service_count:
+            spreading_lower_bound = sum(
+                self.__distribution_spreading_penalty(
+                    service_name,
+                    distribution,
+                )
+                for service_name, distribution in distributions.items()
+                if self.__fixed_replicas[service_name] > 1
+            ) / spreading_service_count
+
+        return (
+            self.__cost_weights["network"]
+            * normalized_network_lower_bound
+            + self.__cost_weights["replica_spreading"]
+            * spreading_lower_bound
+        )
 
     def configuration_count(self):
         """Return the exact size of the fixed-replica placement space."""
@@ -673,42 +860,116 @@ class NodePlacementProblem(OptimizationProblem):
 
         return network_cost
 
-    def __calculate_spreading_penalty(self, placement):
-        service_penalties = []
-        node_count = len(self.__node_names)
-
-        for service_name, replica_count in self.__fixed_replicas.items():
-            if replica_count == 1:
-                continue
-
-            concentration = sum(
-                (
-                    placement[node_name][service_name]
-                    / replica_count
-                )
-                ** 2
-                for node_name in self.__node_names
+    def __distribution_pair_latency(
+        self,
+        source_service,
+        source_distribution,
+        destination_service,
+        destination_distribution,
+    ):
+        source_replicas = self.__fixed_replicas[source_service]
+        destination_replicas = self.__fixed_replicas[destination_service]
+        return sum(
+            source_distribution[source_index]
+            / source_replicas
+            * destination_distribution[destination_index]
+            / destination_replicas
+            * self.__node_latencies[(source_node, destination_node)]
+            for source_index, source_node in enumerate(self.__node_names)
+            for destination_index, destination_node in enumerate(
+                self.__node_names
             )
-            quotient, remainder = divmod(replica_count, node_count)
-            minimum_concentration = (
-                remainder * (quotient + 1) ** 2
-                + (node_count - remainder) * quotient**2
-            ) / replica_count**2
-            normalization = 1.0 - minimum_concentration
+        )
 
-            if normalization <= 1e-15:
-                service_penalty = 0.0
-            else:
-                service_penalty = (
-                    concentration - minimum_concentration
-                ) / normalization
-                service_penalty = min(1.0, max(0.0, service_penalty))
-
-            service_penalties.append(service_penalty)
-
+    def __calculate_spreading_penalty(self, placement):
+        service_penalties = [
+            self.__distribution_spreading_penalty(
+                service_name,
+                tuple(
+                    placement[node_name][service_name]
+                    for node_name in self.__node_names
+                ),
+            )
+            for service_name, replica_count in self.__fixed_replicas.items()
+            if replica_count > 1
+        ]
         if not service_penalties:
             return 0.0
         return sum(service_penalties) / len(service_penalties)
+
+    def __distribution_spreading_penalty(
+        self,
+        service_name,
+        distribution,
+    ):
+        replica_count = self.__fixed_replicas[service_name]
+        if replica_count == 1:
+            return 0.0
+
+        node_count = len(self.__node_names)
+        concentration = sum(
+            (replicas_on_node / replica_count) ** 2
+            for replicas_on_node in distribution
+        )
+        quotient, remainder = divmod(replica_count, node_count)
+        minimum_concentration = (
+            remainder * (quotient + 1) ** 2
+            + (node_count - remainder) * quotient**2
+        ) / replica_count**2
+        normalization = 1.0 - minimum_concentration
+        if normalization <= 1e-15:
+            return 0.0
+        penalty = (
+            concentration - minimum_concentration
+        ) / normalization
+        return min(1.0, max(0.0, penalty))
+
+    def __validate_service_distributions(
+        self,
+        service_distributions,
+        *,
+        require_complete,
+    ):
+        if not isinstance(service_distributions, Mapping):
+            raise TypeError("Service distributions must be a mapping.")
+
+        unknown_services = set(service_distributions) - set(
+            self.__service_names
+        )
+        if unknown_services:
+            names = ", ".join(sorted(unknown_services))
+            raise ValueError(f"Unknown services in placement search: {names}.")
+        if require_complete:
+            missing_services = set(self.__service_names) - set(
+                service_distributions
+            )
+            if missing_services:
+                names = ", ".join(sorted(missing_services))
+                raise ValueError(
+                    f"Missing services in complete placement: {names}."
+                )
+
+        normalized = {}
+        node_count = len(self.__node_names)
+        for service_name, raw_distribution in service_distributions.items():
+            distribution = tuple(raw_distribution)
+            if (
+                len(distribution) != node_count
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 0
+                    for value in distribution
+                )
+                or sum(distribution) != self.__fixed_replicas[service_name]
+            ):
+                raise ValueError(
+                    f"Distribution for service '{service_name}' must contain "
+                    f"{node_count} nonnegative integers summing to "
+                    f"{self.__fixed_replicas[service_name]}."
+                )
+            normalized[service_name] = distribution
+        return normalized
 
     def __canonical_configuration(self, placement):
         return tuple(
