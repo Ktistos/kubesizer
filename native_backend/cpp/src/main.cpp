@@ -22,17 +22,35 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 3;
+constexpr int kProtocolVersion = 4;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 
 enum class EventKind { ExternalArrival, Admit, ServiceCompletion, Grant, Resume };
 enum class RunMode { FixedHorizon, MeasurementDrain };
+enum class DistributionKind {
+    Exponential,
+    Deterministic,
+    Gamma,
+    Lognormal,
+    Weibull,
+    Empirical,
+    ArrivalTrace
+};
+
+struct Distribution {
+    DistributionKind kind{};
+    double mean{};
+    double scv{};
+    double shape{};
+    double block_duration{};
+    std::vector<double> samples;
+};
 
 struct Service {
     std::string name;
     int capacity{};
-    double rate{};
+    Distribution service_time;
 };
 
 struct Route {
@@ -49,7 +67,13 @@ struct RequestClass {
 struct ExternalStream {
     int request_class{};
     int entry_service{};
-    double rate{};
+    Distribution interarrival;
+};
+
+struct TraceSamplerState {
+    std::size_t next_index{};
+    double elapsed{};
+    bool initialized{};
 };
 
 struct Workload {
@@ -328,6 +352,7 @@ class Kernel {
         collect_request_class_samples_(collect_request_class_samples),
         random_(static_cast<std::uint64_t>(seed)), waiting_(workload.services.size()),
         busy_(workload.services.size()),
+        trace_states_(workload.external_streams.size()),
         recorder_(capacities(workload), capture_history, bucket_width, horizon),
         service_response_times_(workload.services.size()),
         request_class_response_times_(workload.request_classes.size()),
@@ -416,15 +441,100 @@ class Kernel {
         future_events_.push({time, priority, sequence_++, kind, request, index});
     }
 
-    double exponential(double rate) {
+    double exponential(double mean) {
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
         const double draw = uniform(random_);
-        return -std::log(1.0 - draw) / rate;
+        return -std::log(1.0 - draw) * mean;
+    }
+
+    double sample(
+        const Distribution& distribution,
+        TraceSamplerState* trace_state = nullptr
+    ) {
+        double result = 0.0;
+        switch (distribution.kind) {
+            case DistributionKind::Exponential:
+                result = exponential(distribution.mean);
+                break;
+            case DistributionKind::Deterministic:
+                result = distribution.mean;
+                break;
+            case DistributionKind::Gamma: {
+                const double shape = 1.0 / distribution.scv;
+                std::gamma_distribution<double> gamma(
+                    shape,
+                    distribution.mean / shape
+                );
+                result = gamma(random_);
+                break;
+            }
+            case DistributionKind::Lognormal: {
+                if (distribution.scv == 0.0) {
+                    result = distribution.mean;
+                    break;
+                }
+                const double sigma_squared = std::log1p(distribution.scv);
+                std::lognormal_distribution<double> lognormal(
+                    std::log(distribution.mean) - 0.5 * sigma_squared,
+                    std::sqrt(sigma_squared)
+                );
+                result = lognormal(random_);
+                break;
+            }
+            case DistributionKind::Weibull: {
+                const double scale = distribution.mean
+                    / std::tgamma(1.0 + 1.0 / distribution.shape);
+                std::weibull_distribution<double> weibull(
+                    distribution.shape,
+                    scale
+                );
+                result = weibull(random_);
+                break;
+            }
+            case DistributionKind::Empirical: {
+                std::uniform_int_distribution<std::size_t> choose(
+                    0,
+                    distribution.samples.size() - 1
+                );
+                result = distribution.samples[choose(random_)];
+                break;
+            }
+            case DistributionKind::ArrivalTrace: {
+                if (trace_state == nullptr) {
+                    throw std::runtime_error(
+                        "arrival_trace requires per-stream sampler state"
+                    );
+                }
+                if (!trace_state->initialized
+                    || trace_state->elapsed >= distribution.block_duration
+                    || trace_state->next_index >= distribution.samples.size()) {
+                    std::uniform_int_distribution<std::size_t> choose(
+                        0,
+                        distribution.samples.size() - 1
+                    );
+                    trace_state->next_index = choose(random_);
+                    trace_state->elapsed = 0.0;
+                    trace_state->initialized = true;
+                }
+                result = distribution.samples[trace_state->next_index++];
+                trace_state->elapsed += result;
+                break;
+            }
+        }
+        if (!std::isfinite(result) || result <= 0.0) {
+            throw std::runtime_error(
+                "a distribution generated a non-positive or non-finite sample"
+            );
+        }
+        return result;
     }
 
     void schedule_next_external(int stream, double now) {
         schedule(
-            now + exponential(workload_.external_streams[stream].rate),
+            now + sample(
+                workload_.external_streams[stream].interarrival,
+                &trace_states_[stream]
+            ),
             kNormalPriority,
             EventKind::ExternalArrival,
             nullptr,
@@ -501,7 +611,7 @@ class Kernel {
                 service, now, static_cast<int>(waiting_[service].size()), busy_[service]
             );
             schedule(
-                now + exponential(workload_.services[service].rate),
+                now + sample(workload_.services[service].service_time),
                 kNormalPriority,
                 EventKind::ServiceCompletion,
                 request,
@@ -571,7 +681,7 @@ class Kernel {
             service, now, static_cast<int>(waiting_[service].size()), busy_[service]
         );
         schedule(
-            now + exponential(workload_.services[service].rate),
+            now + sample(workload_.services[service].service_time),
             kNormalPriority,
             EventKind::ServiceCompletion,
             request,
@@ -593,6 +703,7 @@ class Kernel {
     std::uint64_t sequence_{};
     std::vector<std::deque<Request*>> waiting_;
     std::vector<int> busy_;
+    std::vector<TraceSamplerState> trace_states_;
     StateRecorder recorder_;
     std::vector<std::unique_ptr<Request>> requests_;
     std::vector<std::size_t> free_request_slots_;
@@ -650,6 +761,101 @@ bool required_boolean(json_t* object, const char* key) {
     return json_is_true(value);
 }
 
+Distribution parse_distribution(json_t* raw, bool allow_arrival_trace) {
+    Distribution result;
+    const std::string name = json_text(raw, "distribution");
+    result.mean = json_number(raw, "mean");
+    result.scv = json_number(raw, "scv");
+    if (result.mean <= 0.0 || result.scv < 0.0) {
+        throw std::runtime_error("distribution mean and SCV are invalid");
+    }
+
+    if (name == "exponential") {
+        result.kind = DistributionKind::Exponential;
+    } else if (name == "deterministic") {
+        result.kind = DistributionKind::Deterministic;
+    } else if (name == "gamma") {
+        if (result.scv <= 0.0) {
+            throw std::runtime_error("gamma distribution SCV must be positive");
+        }
+        result.kind = DistributionKind::Gamma;
+    } else if (name == "lognormal") {
+        result.kind = DistributionKind::Lognormal;
+    } else if (name == "weibull") {
+        result.kind = DistributionKind::Weibull;
+        result.shape = json_number(raw, "shape");
+        if (result.shape <= 0.0) {
+            throw std::runtime_error("weibull shape must be positive");
+        }
+    } else if (name == "empirical" || name == "empirical_interarrival") {
+        result.kind = DistributionKind::Empirical;
+        if (json_text(raw, "sampling") != "iid_with_replacement") {
+            throw std::runtime_error(
+                "empirical sampling must be iid_with_replacement"
+            );
+        }
+    } else if (name == "arrival_trace" && allow_arrival_trace) {
+        result.kind = DistributionKind::ArrivalTrace;
+        if (json_text(raw, "sampling") != "block_bootstrap") {
+            throw std::runtime_error(
+                "arrival_trace sampling must be block_bootstrap"
+            );
+        }
+        result.block_duration = json_number(raw, "block_duration");
+        if (result.block_duration <= 0.0) {
+            throw std::runtime_error("arrival_trace block_duration must be positive");
+        }
+    } else {
+        throw std::runtime_error("unsupported distribution: " + name);
+    }
+
+    if (result.kind == DistributionKind::Empirical
+        || result.kind == DistributionKind::ArrivalTrace) {
+        json_t* raw_samples = required(raw, "samples");
+        if (!json_is_array(raw_samples) || json_array_size(raw_samples) == 0) {
+            throw std::runtime_error("empirical distribution samples are empty");
+        }
+        std::size_t sample_index;
+        json_t* raw_sample;
+        json_array_foreach(raw_samples, sample_index, raw_sample) {
+            if (!json_is_number(raw_sample)) {
+                throw std::runtime_error("distribution samples must be numeric");
+            }
+            const double sample = json_number_value(raw_sample);
+            if (!std::isfinite(sample)) {
+                throw std::runtime_error("distribution samples must be finite");
+            }
+            result.samples.push_back(sample);
+        }
+        if (result.kind == DistributionKind::ArrivalTrace) {
+            if (result.samples.size() < 2) {
+                throw std::runtime_error(
+                    "arrival_trace requires at least two timestamps"
+                );
+            }
+            std::vector<double> intervals;
+            intervals.reserve(result.samples.size() - 1);
+            for (std::size_t i = 1; i < result.samples.size(); ++i) {
+                const double interval = result.samples[i] - result.samples[i - 1];
+                if (interval <= 0.0) {
+                    throw std::runtime_error(
+                        "arrival_trace timestamps must be strictly increasing"
+                    );
+                }
+                intervals.push_back(interval);
+            }
+            result.samples = std::move(intervals);
+        } else if (std::any_of(
+            result.samples.begin(),
+            result.samples.end(),
+            [](double value) { return value <= 0.0; }
+        )) {
+            throw std::runtime_error("empirical samples must be positive");
+        }
+    }
+    return result;
+}
+
 std::vector<std::int64_t> parse_seeds(json_t* request) {
     json_t* raw = required(request, "seeds");
     if (!json_is_array(raw) || json_array_size(raw) == 0) {
@@ -683,12 +889,13 @@ Workload parse_workload(json_t* raw) {
     json_t* item;
     json_array_foreach(services, index, item) {
         const std::int64_t capacity = required_integer(item, "capacity");
-        const double rate = json_number(item, "service_rate");
-        if (capacity <= 0 || capacity > 1'000'000 || rate <= 0.0) {
-            throw std::runtime_error("service capacity and rate must be positive");
+        if (capacity <= 0 || capacity > 1'000'000) {
+            throw std::runtime_error("service capacity must be positive");
         }
         workload.services.push_back({
-            json_text(item, "name"), static_cast<int>(capacity), rate
+            json_text(item, "name"),
+            static_cast<int>(capacity),
+            parse_distribution(required(item, "service_time_distribution"), false)
         });
     }
 
@@ -751,45 +958,17 @@ Workload parse_workload(json_t* raw) {
     json_array_foreach(streams, index, item) {
         const std::int64_t request_class = required_integer(item, "request_class");
         const std::int64_t entry_service = required_integer(item, "entry_service");
-        const double rate = json_number(item, "arrival_rate");
         if (request_class < 0
             || request_class >= static_cast<std::int64_t>(workload.request_classes.size())
             || entry_service < 0
-            || entry_service >= static_cast<std::int64_t>(workload.services.size())
-            || rate <= 0.0) {
+            || entry_service >= static_cast<std::int64_t>(workload.services.size())) {
             throw std::runtime_error("invalid external stream");
         }
         workload.external_streams.push_back({
-            static_cast<int>(request_class), static_cast<int>(entry_service), rate
+            static_cast<int>(request_class),
+            static_cast<int>(entry_service),
+            parse_distribution(required(item, "interarrival_distribution"), true)
         });
-    }
-
-    std::vector<double> configured_class_rates(
-        workload.request_classes.size(),
-        0.0
-    );
-    double configured_total_rate = 0.0;
-    for (const ExternalStream& stream : workload.external_streams) {
-        configured_class_rates[stream.request_class] += stream.rate;
-        configured_total_rate += stream.rate;
-    }
-    if (configured_total_rate > 0.0) {
-        for (std::size_t request_class = 0;
-             request_class < workload.request_classes.size();
-             ++request_class) {
-            if (workload.request_classes[request_class].concurrency_weight > 0.0
-                && configured_class_rates[request_class] <= 0.0) {
-                throw std::runtime_error(
-                    "a positively weighted request class has no external stream"
-                );
-            }
-        }
-        for (ExternalStream& stream : workload.external_streams) {
-            const double target_class_rate = configured_total_rate
-                * workload.request_classes[stream.request_class].concurrency_weight;
-            stream.rate *= target_class_rate
-                / configured_class_rates[stream.request_class];
-        }
     }
     return workload;
 }

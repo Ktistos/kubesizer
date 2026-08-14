@@ -5,9 +5,10 @@ from calibration import CalibrationOptions
 from optimization import (
     NodePlacementProblem,
     OptimizationMode,
+    ReplicaEvaluationMode,
     optimize_node_placement,
 )
-from performance_models import Cluster, QueueingNetworkType, System
+from performance_models import Cluster, QueueingNetworkType, ScenarioSystem, System
 from runtime_estimation import (
     calibrate_replica_configuration_limit,
     estimate_workflow_runtime,
@@ -16,6 +17,7 @@ from runtime_estimation import (
 )
 from statistical_workflow import (
     calibrate,
+    optimize_with_analytical_model,
     optimize_with_calibrated_simulation,
     validate_final_configuration,
 )
@@ -26,8 +28,16 @@ REQUEST_CLASS_SLOS = {
     "write_heavy": 1.0,
     "compute_heavy": 1.0,
 }
+# These are analytical end-to-end mean-latency limits, not p95 SLOs. Keep
+# them separate even when an experiment intentionally uses the same numbers.
+ANALYTICAL_REQUEST_CLASS_MEAN_LATENCY_LIMITS = {
+    "read_heavy": 1.0,
+    "write_heavy": 1.0,
+    "compute_heavy": 1.0,
+}
 MAX_REPLICAS_PER_SERVICE = 10
 SIMULATION_WORKERS = min(8, os.cpu_count() or 1)
+REPLICA_EVALUATION_MODE = ReplicaEvaluationMode.SIMULATION
 OPTIMIZATION_MODE = OptimizationMode.AUTO
 EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS = 600.0
 RUNTIME_LIMIT_SAFETY_FACTOR = 3.0
@@ -58,6 +68,18 @@ def optimize_replicas(
         workers=SIMULATION_WORKERS,
         mode=OPTIMIZATION_MODE,
         runtime_limit_calibration=runtime_limit_calibration,
+    )
+
+
+def optimize_replicas_analytically(system):
+    """Optimize analytical mean latency without calibration or simulation."""
+    return optimize_with_analytical_model(
+        system,
+        request_class_mean_latency_limits=(
+            ANALYTICAL_REQUEST_CLASS_MEAN_LATENCY_LIMITS
+        ),
+        maximum_replicas=MAX_REPLICAS_PER_SERVICE,
+        mode=OPTIMIZATION_MODE,
     )
 
 
@@ -94,12 +116,23 @@ def report_replica_result(system, result):
     )
     print("Replicas added from stable anchor:", result.cost)
     print("Classification:", evaluation.classification.value)
-    print(
-        "Sequential p95 confidence intervals:",
-        _interval_summary(evaluation.configuration_evaluation.intervals),
-    )
-    print("Replications used:", evaluation.configuration_evaluation.replications_used)
-    print("Sequential looks:", evaluation.configuration_evaluation.look_count)
+    if getattr(evaluation, "evaluation_basis", None) == "ANALYTICAL_MEAN_LATENCY":
+        print("Analytical scenario/class mean latencies:", evaluation.scenario_means)
+        print("Analytical mean-latency limits:", evaluation.limits)
+        print(
+            "Evidence warning: analytical means are not p95 estimates; no "
+            "simulation or confidence interval was run."
+        )
+    else:
+        print(
+            "Sequential p95 confidence intervals:",
+            _interval_summary(evaluation.configuration_evaluation.intervals),
+        )
+        print(
+            "Replications used:",
+            evaluation.configuration_evaluation.replications_used,
+        )
+        print("Sequential looks:", evaluation.configuration_evaluation.look_count)
     print("Search mode:", result.solution_mode)
     print("Explored states:", result.explored_states)
     print("Search path:", result.path)
@@ -125,80 +158,99 @@ def main():
     with open("resources.yaml", "r", encoding="utf-8") as resources_file:
         resources = yaml.safe_load(resources_file)
 
-    system = System("STELAR", workload, QueueingNetworkType.OPEN)
-    options = CalibrationOptions()
-    runtime_rates = None
-    print("Preflight: estimating the conservative workflow runtime")
-    try:
-        runtime_estimate = estimate_workflow_runtime(
-            system,
-            resources,
-            options=options,
-            maximum_replicas=MAX_REPLICAS_PER_SERVICE,
-            workers=SIMULATION_WORKERS,
-            optimization_mode=OPTIMIZATION_MODE,
-        )
-    except Exception as error:
-        print(f"Runtime speculation unavailable: {error}")
-    else:
-        print(format_runtime_estimate(runtime_estimate))
-        runtime_rates = getattr(runtime_estimate, "benchmark", None)
-
-    print("Stage A: calibrating a fresh statistical profile")
-    profile = calibrate_before_optimization(system, options=options)
-    print(
-        "Calibration profile:",
-        {
-            "fingerprint": profile.profile_fingerprint,
-            "W": profile.warmup_duration,
-            "M": profile.measurement_duration,
-            "R_min": profile.minimum_optimization_replications,
-            "R_max": profile.maximum_optimization_replications,
-        },
+    scenario_count = len(workload.get("scenarios", {}))
+    system_type = ScenarioSystem if scenario_count > 1 else System
+    system = system_type(
+        "STELAR",
+        workload,
+        QueueingNetworkType.OPEN,
+        workload_base_path=".",
     )
-
-    runtime_limit_calibration = None
-    if runtime_rates is not None:
+    if REPLICA_EVALUATION_MODE == ReplicaEvaluationMode.ANALYTICAL:
+        print(
+            "Replica sizing: analytical mean-latency evaluation; calibration "
+            "and simulation validation are skipped"
+        )
+        replica_result = optimize_replicas_analytically(system)
+        report_replica_result(system, replica_result)
+    else:
+        options = CalibrationOptions()
+        runtime_rates = None
+        print("Preflight: estimating the conservative workflow runtime")
         try:
-            runtime_limit_calibration = calibrate_replica_configuration_limit(
+            runtime_estimate = estimate_workflow_runtime(
                 system,
-                profile,
-                runtime_rates,
+                resources,
+                options=options,
+                maximum_replicas=MAX_REPLICAS_PER_SERVICE,
                 workers=SIMULATION_WORKERS,
-                exact_search_time_budget_seconds=(
-                    EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS
-                ),
-                safety_factor=RUNTIME_LIMIT_SAFETY_FACTOR,
-                mode=OPTIMIZATION_MODE,
+                optimization_mode=OPTIMIZATION_MODE,
             )
         except Exception as error:
-            print(
-                "Runtime-adaptive replica limit unavailable; using the hard "
-                f"configuration cap: {error}"
-            )
+            print(f"Runtime speculation unavailable: {error}")
         else:
-            print(
-                format_replica_configuration_limit_calibration(
-                    runtime_limit_calibration
-                )
-            )
+            print(format_runtime_estimate(runtime_estimate))
+            runtime_rates = getattr(runtime_estimate, "benchmark", None)
 
-    print("Stage B: optimizing replica counts with calibrated simulation")
-    replica_result = optimize_replicas(
-        system,
-        profile,
-        runtime_limit_calibration=runtime_limit_calibration,
-    )
-    report_replica_result(system, replica_result)
-
-    print("Stage C: validating the selected replicas with fresh seeds")
-    final_validation = validate_optimizer_result(system, replica_result, profile)
-    report_final_validation(final_validation)
-    if not final_validation.passed:
-        raise RuntimeError(
-            "The optimizer candidate failed independent final validation: "
-            f"{final_validation.failure_reason}"
+        print("Stage A: calibrating a fresh statistical profile")
+        profile = calibrate_before_optimization(system, options=options)
+        print(
+            "Calibration profile:",
+            {
+                "fingerprint": profile.profile_fingerprint,
+                "W": profile.warmup_duration,
+                "M": profile.measurement_duration,
+                "R_min": profile.minimum_optimization_replications,
+                "R_max": profile.maximum_optimization_replications,
+            },
         )
+
+        runtime_limit_calibration = None
+        if runtime_rates is not None:
+            try:
+                runtime_limit_calibration = calibrate_replica_configuration_limit(
+                    system,
+                    profile,
+                    runtime_rates,
+                    workers=SIMULATION_WORKERS,
+                    exact_search_time_budget_seconds=(
+                        EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS
+                    ),
+                    safety_factor=RUNTIME_LIMIT_SAFETY_FACTOR,
+                    mode=OPTIMIZATION_MODE,
+                )
+            except Exception as error:
+                print(
+                    "Runtime-adaptive replica limit unavailable; using the hard "
+                    f"configuration cap: {error}"
+                )
+            else:
+                print(
+                    format_replica_configuration_limit_calibration(
+                        runtime_limit_calibration
+                    )
+                )
+
+        print("Stage B: optimizing replica counts with calibrated simulation")
+        replica_result = optimize_replicas(
+            system,
+            profile,
+            runtime_limit_calibration=runtime_limit_calibration,
+        )
+        report_replica_result(system, replica_result)
+
+        print("Stage C: validating the selected replicas with fresh seeds")
+        final_validation = validate_optimizer_result(
+            system,
+            replica_result,
+            profile,
+        )
+        report_final_validation(final_validation)
+        if not final_validation.passed:
+            raise RuntimeError(
+                "The optimizer candidate failed independent final validation: "
+                f"{final_validation.failure_reason}"
+            )
 
     print("Stage D: optimizing node placement")
     system.configure_system_replicas(replica_result.configuration)

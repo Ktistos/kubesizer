@@ -7,16 +7,40 @@ class OptimizationMode(str, Enum):
     AUTO = "AUTO"
     EXACT = "EXACT"
     SCALABLE = "SCALABLE"
+    # User-facing compatibility name. It is an alias for the scalable
+    # heuristic; it does not imply a certified approximation ratio.
+    APPROXIMATE = "SCALABLE"
+
+
+class ReplicaEvaluationMode(str, Enum):
+    """Choose deterministic analytical means or statistical p95 simulation."""
+
+    ANALYTICAL = "ANALYTICAL"
+    SIMULATION = "SIMULATION"
 
 
 def normalize_optimization_mode(value):
     if isinstance(value, OptimizationMode):
         return value
+    if str(value).upper() == "APPROXIMATE":
+        return OptimizationMode.SCALABLE
     try:
         return OptimizationMode(str(value).upper())
     except ValueError as error:
-        choices = ", ".join(item.value for item in OptimizationMode)
+        choices = "AUTO, EXACT, SCALABLE (or APPROXIMATE)"
         raise ValueError(f"optimization mode must be one of: {choices}.") from error
+
+
+def normalize_replica_evaluation_mode(value):
+    if isinstance(value, ReplicaEvaluationMode):
+        return value
+    try:
+        return ReplicaEvaluationMode(str(value).upper())
+    except ValueError as error:
+        choices = ", ".join(item.value for item in ReplicaEvaluationMode)
+        raise ValueError(
+            f"replica evaluation mode must be one of: {choices}."
+        ) from error
 
 
 def _positive_integer(name, value, *, allow_none=False):

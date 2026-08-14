@@ -45,6 +45,7 @@ def select_warmup_pilot_parameters(
     time_unit="seconds",
     replication_count=30,
     seed_start=100_000,
+    minimum_configuration=None,
 ):
     """Calculate the milestone-three bucket widths and initial pilot horizon.
 
@@ -135,7 +136,27 @@ def select_warmup_pilot_parameters(
         for request_class in request_class_names
     )
 
-    minimum_replicas = tuple(system.get_minimum_stable_replicas())
+    analytical_minimum = tuple(system.get_minimum_stable_replicas())
+    minimum_replicas = (
+        analytical_minimum
+        if minimum_configuration is None
+        else tuple(minimum_configuration)
+    )
+    if (
+        len(minimum_replicas) != len(services)
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in minimum_replicas
+        )
+        or any(
+            value < required
+            for value, required in zip(minimum_replicas, analytical_minimum)
+        )
+    ):
+        raise ValueError(
+            "minimum_configuration must be at or above the analytical "
+            "stability vector."
+        )
     capacity_slacks = tuple(
         replicas * service_rate - arrival_rate
         for replicas, service_rate, arrival_rate in zip(

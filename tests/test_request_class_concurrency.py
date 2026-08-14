@@ -143,17 +143,21 @@ def test_invalid_weighted_schemas_fail_explicitly(workload, message):
         System("invalid", workload, QueueingNetworkType.OPEN)
 
 
-def test_native_protocol_receives_raw_rates_and_weights_separately():
+def test_native_protocol_receives_effective_distributions_and_class_weights():
     payload = get_native_backend().serialize_system(weighted_single_service())
 
     assert [item["concurrency_weight"] for item in payload["request_classes"]] == [
         0.5,
         0.5,
     ]
-    assert [item["arrival_rate"] for item in payload["external_streams"]] == [
-        8.0,
-        2.0,
-    ]
+    assert [
+        item["interarrival_distribution"]["distribution"]
+        for item in payload["external_streams"]
+    ] == ["exponential", "exponential"]
+    assert [
+        1.0 / item["interarrival_distribution"]["mean"]
+        for item in payload["external_streams"]
+    ] == pytest.approx([5.0, 5.0])
 
 
 def test_native_measurement_counts_follow_weighted_concurrent_mix():
@@ -205,18 +209,30 @@ def test_native_protocol_rejects_invalid_weight_total():
     assert "weights must sum to one" in completed.stdout
 
 
-def test_repository_workload_uses_70_20_10_mix_and_preserves_total_rate():
+def test_repository_workload_uses_explicit_streams_and_derives_class_mix():
     workload_path = Path(__file__).resolve().parents[1] / "workload.yaml"
     workload = yaml.safe_load(workload_path.read_text(encoding="utf-8"))
 
-    assert {
-        name: value["concurrency_weight"] for name, value in workload.items()
-    } == {
-        "read_heavy": 0.7,
-        "write_heavy": 0.2,
-        "compute_heavy": 0.1,
+    assert set(workload) == {
+        "schema_version",
+        "time_unit",
+        "request_classes",
+        "scenarios",
     }
-    assert all(set(value) == {"concurrency_weight", "services"} for value in workload.values())
+    assert set(workload["scenarios"]) == {"normal"}
+    assert set(workload["scenarios"]["normal"]) == {
+        "entry_services",
+        "service_times",
+    }
+    assert {
+        name: streams["api"]["rate"]
+        for name, streams in workload["scenarios"]["normal"]["entry_services"].items()
+    } == {
+        "read_heavy": 23.1,
+        "write_heavy": 6.6,
+        "compute_heavy": 3.3,
+    }
+    assert workload["schema_version"] == 2
 
     system = System("repository-workload", workload, QueueingNetworkType.OPEN)
     class_rates = {
@@ -234,6 +250,57 @@ def test_repository_workload_uses_70_20_10_mix_and_preserves_total_rate():
         }
     )
     assert sum(class_rates.values()) == pytest.approx(33.0)
+    assert system.get_request_class_concurrency_weights() == pytest.approx(
+        {
+            "read_heavy": 0.7,
+            "write_heavy": 0.2,
+            "compute_heavy": 0.1,
+        }
+    )
+
+
+def test_versioned_workload_rejects_an_incomplete_empirical_distribution():
+    workload = {
+        "schema_version": 2,
+        "time_unit": "seconds",
+        "request_classes": {"read": {"routing": {}}},
+        "scenarios": {
+            "observed": {
+                "entry_services": {
+                    "read": {
+                        "api": {
+                            "distribution": "empirical_interarrival",
+                            "rate": 10.0,
+                        }
+                    }
+                },
+                "service_times": {
+                    "api": {"distribution": "exponential", "rate": 100.0}
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="source, column, and sampling"):
+        System("unsupported", workload, QueueingNetworkType.OPEN)
+
+
+def test_system_requires_an_explicit_selection_for_multiple_scenarios():
+    workload_path = Path(__file__).resolve().parents[1] / "workload.yaml"
+    workload = yaml.safe_load(workload_path.read_text(encoding="utf-8"))
+    workload["scenarios"]["peak"] = workload["scenarios"]["normal"]
+
+    with pytest.raises(ValueError, match="scenario_name is required"):
+        System("multiple", workload, QueueingNetworkType.OPEN)
+
+    selected = System(
+        "multiple",
+        workload,
+        QueueingNetworkType.OPEN,
+        scenario_name="peak",
+    )
+
+    assert selected.get_scenario_name() == "peak"
 
 
 def test_concurrency_weight_change_invalidates_workload_fingerprint():

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 3
-SIMULATOR_SEMANTICS_VERSION = "native-event-kernel-weighted-cohort-v3"
+PROTOCOL_VERSION = 4
+SIMULATOR_SEMANTICS_VERSION = "native-event-kernel-distributions-cohort-v4"
 
 
 class NativeBackendError(RuntimeError):
@@ -101,6 +101,22 @@ def _numeric_matrix(values, label, *, rows, columns):
     )
 
 
+def _serialize_distribution(specification):
+    """Convert a validated workload distribution into protocol JSON."""
+    parameters = dict(specification.parameters)
+    result = {
+        "distribution": specification.distribution,
+        "mean": specification.mean,
+        "scv": specification.scv,
+    }
+    for field in ("shape", "sampling", "block_duration"):
+        if field in parameters:
+            result[field] = parameters[field]
+    if specification.samples:
+        result["samples"] = list(specification.samples)
+    return result
+
+
 class CppSimulationBackend:
     """Versioned subprocess adapter for the required native event kernel."""
 
@@ -129,7 +145,8 @@ class CppSimulationBackend:
         )
         request_classes = []
         concurrency_weights = system.get_request_class_concurrency_weights()
-        configured_arrival_rates = system.get_configured_external_arrival_rates()
+        arrival_specs = system.get_external_arrival_distribution_specs()
+        service_specs = system.get_service_time_distribution_specs()
         for request_class in system.get_request_classes():
             routing = []
             for service in services:
@@ -154,13 +171,15 @@ class CppSimulationBackend:
         external_streams = []
         for service in services:
             for class_id, request_class in enumerate(system.get_request_classes()):
-                arrival_rate = configured_arrival_rates[request_class][service.get_id()]
-                if arrival_rate > 0:
+                distribution = arrival_specs[request_class].get(service.get_name())
+                if distribution is not None:
                     external_streams.append(
                         {
                             "request_class": class_id,
                             "entry_service": service.get_id(),
-                            "arrival_rate": arrival_rate,
+                            "interarrival_distribution": _serialize_distribution(
+                                distribution
+                            ),
                         }
                     )
 
@@ -170,7 +189,9 @@ class CppSimulationBackend:
                 {
                     "name": service.get_name(),
                     "capacity": service.get_replicas(),
-                    "service_rate": service.get_mu(),
+                    "service_time_distribution": _serialize_distribution(
+                        service_specs[service.get_name()]
+                    ),
                 }
                 for service in services
             ],

@@ -320,3 +320,46 @@ def test_native_feedback_network_matches_analytical_visit_ratios():
         _analytical_class_mean_latency(system, "interactive"),
         label="feedback-network end-to-end mean",
     )
+
+
+def test_native_gamma_service_matches_exact_mg1_mean():
+    workload = {
+        "schema_version": 2,
+        "time_unit": "seconds",
+        "request_classes": {"request": {"routing": {}}},
+        "scenarios": {
+            "gamma-service": {
+                "entry_services": {
+                    "request": {
+                        "service": {
+                            "distribution": "exponential",
+                            "rate": 4.0,
+                        }
+                    }
+                },
+                "service_times": {
+                    "service": {
+                        "distribution": "gamma",
+                        "mean": 0.1,
+                        "scv": 2.0,
+                    }
+                },
+            }
+        },
+    }
+    system = System("mg1", workload, QueueingNetworkType.OPEN)
+    analytical = system.solve()
+    seeds = tuple(range(140_000, 140_000 + REPLICATION_COUNT))
+
+    replications = system.simulate_measurement_replications(
+        warmup_duration=100.0,
+        measurement_duration=500.0,
+        seeds=seeds,
+        workers=6,
+    )
+
+    _assert_independent_mean_matches(
+        _replication_means(replications, "request"),
+        analytical.get_mean_latencies()[0],
+        label="M/G/1 gamma-service mean response",
+    )

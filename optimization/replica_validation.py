@@ -205,28 +205,39 @@ def validate_final_configuration(
                 failure_reason="Final-validation seeds overlap optimization seeds.",
                 **base,
             )
+        scenario_systems = (
+            system.get_scenario_systems()
+            if hasattr(system, "get_scenario_systems")
+            else {profile.required_scenarios[0]: system}
+        )
         try:
-            replications = tuple(
-                system.simulate_measurement_replications(
-                    warmup_duration=profile.warmup_duration,
-                    measurement_duration=profile.measurement_duration,
-                    seeds=seeds,
-                    workers=workers,
-                    maximum_drain_time=profile.maximum_drain_time,
+            replications_by_scenario = {
+                scenario: tuple(
+                    scenario_system.simulate_measurement_replications(
+                        warmup_duration=profile.warmup_duration,
+                        measurement_duration=profile.measurement_duration,
+                        seeds=seeds,
+                        workers=workers,
+                        maximum_drain_time=profile.maximum_drain_time,
+                    )
                 )
-            )
+                for scenario, scenario_system in scenario_systems.items()
+            }
         except Exception as error:
             return CalibratedFinalValidationResult(
                 classification=FinalValidationClassification.SIMULATION_FAILURE,
                 failure_reason=str(error),
                 **base,
             )
-        if tuple(item.seed for item in replications) != seeds:
+        if any(
+            tuple(item.seed for item in replications) != seeds
+            for replications in replications_by_scenario.values()
+        ):
             return CalibratedFinalValidationResult(
                 replica_configuration=configuration,
                 classification=FinalValidationClassification.SIMULATION_FAILURE,
-                replication_count=len(replications),
-                seeds=tuple(item.seed for item in replications),
+                replication_count=0,
+                seeds=(),
                 request_class_intervals=(),
                 eligible_request_counts=(),
                 warmup_duration=profile.warmup_duration,
@@ -237,101 +248,120 @@ def validate_final_configuration(
             )
         tail_alpha = fixed_experiment_tail_alpha(
             profile.overall_alpha,
-            len(profile.request_class_slos),
+            len(profile.request_class_slos) * len(profile.required_scenarios),
         )
         intervals = []
         counts = []
-        for request_class, slo in profile.request_class_slos:
-            try:
-                clusters = tuple(
-                    tuple(item.request_class_latencies[request_class])
-                    for item in replications
+        for scenario, replications in replications_by_scenario.items():
+            for request_class, slo in profile.request_class_slos:
+                label = (
+                    request_class
+                    if len(profile.required_scenarios) == 1
+                    else f"{scenario}/{request_class}"
                 )
-            except (AttributeError, KeyError, TypeError) as error:
-                return CalibratedFinalValidationResult(
-                    replica_configuration=configuration,
-                    classification=FinalValidationClassification.SIMULATION_FAILURE,
-                    replication_count=len(replications),
-                    seeds=seeds,
-                    request_class_intervals=tuple(intervals),
-                    eligible_request_counts=tuple(counts),
-                    warmup_duration=profile.warmup_duration,
-                    measurement_duration=profile.measurement_duration,
-                    calibration_profile_fingerprint=profile.profile_fingerprint,
-                    simulation_diagnostics=(),
-                    failure_reason=f"Missing raw final cohort for {request_class!r}.",
-                )
-            total = sum(len(cluster) for cluster in clusters)
-            nonempty = sum(bool(cluster) for cluster in clusters)
-            counts.append((request_class, total))
-            if (
-                total < profile.minimum_eligible_samples_per_request_class
-                or nonempty
-                < profile.minimum_nonempty_replications_per_request_class
-            ):
-                return CalibratedFinalValidationResult(
-                    replica_configuration=configuration,
-                    classification=FinalValidationClassification.SIMULATION_FAILURE,
-                    replication_count=len(replications),
-                    seeds=seeds,
-                    request_class_intervals=tuple(intervals),
-                    eligible_request_counts=tuple(counts),
-                    warmup_duration=profile.warmup_duration,
-                    measurement_duration=profile.measurement_duration,
-                    calibration_profile_fingerprint=profile.profile_fingerprint,
-                    simulation_diagnostics=(),
-                    failure_reason=(
-                        f"Final cohort for {request_class!r} does not meet minimum "
-                        "sample requirements."
-                    ),
-                )
-            try:
-                interval = replication_cluster_bootstrap_p95(
-                    clusters,
-                    request_class=request_class,
-                    slo=slo,
-                    resample_count=profile.bootstrap_resample_count,
-                    seed=profile.optimization_seed_policy.deterministic_seed(
-                        "bootstrap",
-                        "final-validation",
-                        profile.profile_fingerprint,
-                        configuration,
-                        request_class,
-                    ),
-                    lower_tail_probability=tail_alpha,
-                    upper_tail_probability=1.0 - tail_alpha,
-                    minimum_tail_draws=profile.minimum_bootstrap_tail_draws,
-                )
-            except ValueError as error:
-                return CalibratedFinalValidationResult(
-                    replica_configuration=configuration,
-                    classification=FinalValidationClassification.SIMULATION_FAILURE,
-                    replication_count=len(replications),
-                    seeds=seeds,
-                    request_class_intervals=tuple(intervals),
-                    eligible_request_counts=tuple(counts),
-                    warmup_duration=profile.warmup_duration,
-                    measurement_duration=profile.measurement_duration,
-                    calibration_profile_fingerprint=profile.profile_fingerprint,
-                    simulation_diagnostics=(),
-                    failure_reason=str(error),
-                )
-            intervals.append((request_class, interval))
+                try:
+                    clusters = tuple(
+                        tuple(item.request_class_latencies[request_class])
+                        for item in replications
+                    )
+                except (AttributeError, KeyError, TypeError):
+                    return CalibratedFinalValidationResult(
+                        replica_configuration=configuration,
+                        classification=FinalValidationClassification.SIMULATION_FAILURE,
+                        replication_count=len(replications),
+                        seeds=seeds,
+                        request_class_intervals=tuple(intervals),
+                        eligible_request_counts=tuple(counts),
+                        warmup_duration=profile.warmup_duration,
+                        measurement_duration=profile.measurement_duration,
+                        calibration_profile_fingerprint=profile.profile_fingerprint,
+                        simulation_diagnostics=(),
+                        failure_reason=f"Missing raw final cohort for {label!r}.",
+                    )
+                total = sum(len(cluster) for cluster in clusters)
+                nonempty = sum(bool(cluster) for cluster in clusters)
+                counts.append((label, total))
+                if (
+                    total < profile.minimum_eligible_samples_per_request_class
+                    or nonempty
+                    < profile.minimum_nonempty_replications_per_request_class
+                ):
+                    return CalibratedFinalValidationResult(
+                        replica_configuration=configuration,
+                        classification=FinalValidationClassification.SIMULATION_FAILURE,
+                        replication_count=len(replications),
+                        seeds=seeds,
+                        request_class_intervals=tuple(intervals),
+                        eligible_request_counts=tuple(counts),
+                        warmup_duration=profile.warmup_duration,
+                        measurement_duration=profile.measurement_duration,
+                        calibration_profile_fingerprint=profile.profile_fingerprint,
+                        simulation_diagnostics=(),
+                        failure_reason=(
+                            f"Final cohort for {label!r} does not meet minimum "
+                            "sample requirements."
+                        ),
+                    )
+                try:
+                    interval = replication_cluster_bootstrap_p95(
+                        clusters,
+                        request_class=request_class,
+                        slo=slo,
+                        resample_count=profile.bootstrap_resample_count,
+                        seed=profile.optimization_seed_policy.deterministic_seed(
+                            "bootstrap",
+                            "final-validation",
+                            profile.profile_fingerprint,
+                            configuration,
+                            scenario,
+                            request_class,
+                        ),
+                        lower_tail_probability=tail_alpha,
+                        upper_tail_probability=1.0 - tail_alpha,
+                        minimum_tail_draws=profile.minimum_bootstrap_tail_draws,
+                    )
+                except ValueError as error:
+                    return CalibratedFinalValidationResult(
+                        replica_configuration=configuration,
+                        classification=FinalValidationClassification.SIMULATION_FAILURE,
+                        replication_count=len(replications),
+                        seeds=seeds,
+                        request_class_intervals=tuple(intervals),
+                        eligible_request_counts=tuple(counts),
+                        warmup_duration=profile.warmup_duration,
+                        measurement_duration=profile.measurement_duration,
+                        calibration_profile_fingerprint=profile.profile_fingerprint,
+                        simulation_diagnostics=(),
+                        failure_reason=str(error),
+                    )
+                intervals.append((label, interval))
         passed = all(
             interval.upper_bound <= interval.slo for _, interval in intervals
         )
         diagnostics = (
             (
                 "processed_event_count",
-                sum(int(getattr(item, "processed_event_count", 0)) for item in replications),
+                sum(
+                    int(getattr(item, "processed_event_count", 0))
+                    for replications in replications_by_scenario.values()
+                    for item in replications
+                ),
             ),
             (
                 "external_arrival_count",
-                sum(int(getattr(item, "external_arrival_count", 0)) for item in replications),
+                sum(
+                    int(getattr(item, "external_arrival_count", 0))
+                    for replications in replications_by_scenario.values()
+                    for item in replications
+                ),
             ),
             (
                 "completed_request_count",
-                sum(int(getattr(item, "completed_request_count", 0)) for item in replications),
+                sum(
+                    int(getattr(item, "completed_request_count", 0))
+                    for replications in replications_by_scenario.values()
+                    for item in replications
+                ),
             ),
         )
         return CalibratedFinalValidationResult(
@@ -341,7 +371,7 @@ def validate_final_configuration(
                 if passed
                 else FinalValidationClassification.FAILED_SLO_VALIDATION
             ),
-            replication_count=len(replications),
+            replication_count=len(seeds),
             seeds=seeds,
             request_class_intervals=tuple(intervals),
             eligible_request_counts=tuple(counts),

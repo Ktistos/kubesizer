@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass
+from enum import Enum
 
 from metrics import (
     Metrics,
@@ -34,10 +35,19 @@ class AnalyticalStabilityHeuristic:
         if any(service_rate <= 0 for service_rate in service_rates):
             raise ValueError("Service rates must be greater than zero.")
 
-        self.__required_replicas = tuple(
+        required_replicas = tuple(
             math.floor(arrival_rate / service_rate) + 1
             for arrival_rate, service_rate in zip(arrival_rates, service_rates)
         )
+        self.__initialize(required_replicas, replica_costs)
+
+    def __initialize(self, required_replicas, replica_costs):
+        if not required_replicas or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in required_replicas
+        ):
+            raise ValueError("Required replicas must be positive integers.")
+        self.__required_replicas = tuple(required_replicas)
         self.__replica_costs = (
             (1.0,) * len(self.__required_replicas)
             if replica_costs is None
@@ -51,7 +61,20 @@ class AnalyticalStabilityHeuristic:
             )
 
     @classmethod
+    def from_required_replicas(cls, required_replicas, replica_costs=None):
+        """Build the lower bound from an already solved robust requirement."""
+        instance = cls.__new__(cls)
+        instance.__initialize(tuple(required_replicas), replica_costs)
+        return instance
+
+    @classmethod
     def from_system(cls, system, replica_costs=None):
+        stable_method = getattr(system, "get_minimum_stable_replicas", None)
+        if stable_method is not None:
+            return cls.from_required_replicas(
+                stable_method(),
+                replica_costs=replica_costs,
+            )
         services = tuple(system.get_services().values())
         service_rates = tuple(service.get_mu() for service in services)
         return cls(
@@ -71,6 +94,50 @@ class AnalyticalStabilityHeuristic:
                 self.__replica_costs,
             )
         )
+
+
+class AnalyticalClassification(str, Enum):
+    """Deterministic classifications from the configured analytical model."""
+
+    ANALYTICALLY_FEASIBLE = "ANALYTICALLY_FEASIBLE"
+    ANALYTICALLY_INFEASIBLE = "ANALYTICALLY_INFEASIBLE"
+    ANALYTICALLY_UNSTABLE = "ANALYTICALLY_UNSTABLE"
+    STRUCTURALLY_INFEASIBLE = "STRUCTURALLY_INFEASIBLE"
+
+
+@dataclass(frozen=True)
+class AnalyticalReplicaSizingEvaluation:
+    """Mean-latency evidence for an analytical-only replica evaluation.
+
+    The values are scenario-specific analytical expectations. They are not
+    p95 latency estimates and have no statistical confidence guarantee.
+    """
+
+    configuration: tuple[int, ...]
+    feasible: bool
+    cost: float
+    tie_breaker: float
+    analytical_metrics: Metrics
+    classification: AnalyticalClassification
+    scenario_request_class_mean_latencies: tuple[
+        tuple[str, tuple[tuple[str, float], ...]], ...
+    ]
+    request_class_mean_latency_limits: tuple[tuple[str, float], ...]
+    evaluation_basis: str = "ANALYTICAL_MEAN_LATENCY"
+
+    @property
+    def scenario_means(self):
+        return {
+            scenario: dict(values)
+            for scenario, values in self.scenario_request_class_mean_latencies
+        }
+
+    @property
+    def limits(self):
+        return dict(self.request_class_mean_latency_limits)
+
+    def ranking_key(self):
+        return (0 if self.feasible else 1, self.cost, self.tie_breaker)
 
 
 @dataclass(frozen=True)
@@ -107,6 +174,290 @@ class ReplicaSizingEvaluation:
             self.cost,
             self.tie_breaker,
         )
+
+
+class AnalyticalReplicaSizingProblem(GraphSearchProblem):
+    """Bounded replica sizing using analytical mean-latency constraints only.
+
+    Exact/scalable describes search coverage. It does not change the queueing
+    formulas selected by the system, and neither search mode turns analytical
+    mean latency into a p95 or a statistical feasibility claim.
+    """
+
+    def __init__(
+        self,
+        system,
+        request_class_mean_latency_limits,
+        max_replicas,
+        *,
+        replica_costs=None,
+        structural_feasibility=None,
+    ):
+        self.__system = system
+        self.__service_count = len(system.get_services())
+        self.__request_classes = tuple(system.get_request_classes())
+        self.__limits = self.__normalize_limits(
+            request_class_mean_latency_limits
+        )
+        self.__stable = self.__normalize_configuration(
+            tuple(system.get_minimum_stable_replicas()),
+            maximum=None,
+        )
+        self.__maximum = self.__normalize_maximum(max_replicas)
+        if any(
+            maximum < minimum
+            for minimum, maximum in zip(self.__stable, self.__maximum)
+        ):
+            raise ValueError(
+                "Maximum replica bounds cannot be below the analytically "
+                "stable configuration."
+            )
+        self.__replica_costs = self.__normalize_replica_costs(replica_costs)
+        self.__structural_feasibility = structural_feasibility
+        self.__evidence_cache = {}
+        self.__evaluation_cache = {}
+
+    def __normalize_limits(self, values):
+        limits = dict(values)
+        expected = set(self.__request_classes)
+        actual = set(limits)
+        if actual != expected:
+            missing = ", ".join(sorted(expected - actual)) or "none"
+            unexpected = ", ".join(sorted(actual - expected)) or "none"
+            raise ValueError(
+                "Analytical mean-latency limits must exactly match request "
+                f"classes (missing: {missing}; unexpected: {unexpected})."
+            )
+        normalized = {name: float(limits[name]) for name in self.__request_classes}
+        if any(
+            not math.isfinite(value) or value <= 0
+            for value in normalized.values()
+        ):
+            raise ValueError(
+                "Analytical request-class mean-latency limits must be finite "
+                "and positive."
+            )
+        return normalized
+
+    def __normalize_maximum(self, value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            values = (value,) * self.__service_count
+        else:
+            values = tuple(value)
+        if len(values) != self.__service_count or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0
+            for item in values
+        ):
+            raise ValueError(
+                "max_replicas must define one positive integer per service."
+            )
+        return values
+
+    def __normalize_replica_costs(self, values):
+        if values is None:
+            normalized = (1.0,) * self.__service_count
+        elif isinstance(values, (int, float)) and not isinstance(values, bool):
+            normalized = (float(values),) * self.__service_count
+        else:
+            normalized = tuple(float(value) for value in values)
+        if len(normalized) != self.__service_count or any(
+            not math.isfinite(value) or value <= 0 for value in normalized
+        ):
+            raise ValueError(
+                "replica_costs must define one finite positive cost per service."
+            )
+        return normalized
+
+    def __normalize_configuration(self, configuration, *, maximum=True):
+        values = tuple(configuration)
+        if len(values) != self.__service_count or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in values
+        ):
+            raise ValueError(
+                "Configuration must define a positive integer per service."
+            )
+        if maximum is not None and any(
+            value > limit for value, limit in zip(values, self.__maximum)
+        ):
+            raise ValueError("Configuration exceeds the replica search bounds.")
+        return values
+
+    @property
+    def configuration_evaluations(self):
+        return dict(self.__evaluation_cache)
+
+    def initial_state(self):
+        return self.__stable
+
+    def stable_configuration(self):
+        return self.__stable
+
+    def maximum_configuration(self):
+        return self.__maximum
+
+    def configuration_count(self):
+        return math.prod(
+            maximum - minimum + 1
+            for minimum, maximum in zip(self.__stable, self.__maximum)
+        )
+
+    def replica_costs(self):
+        return self.__replica_costs
+
+    def configuration_cost(self, configuration):
+        configuration = self.__normalize_configuration(configuration)
+        return sum(
+            count * cost
+            for count, cost in zip(configuration, self.__replica_costs)
+        )
+
+    def candidate_is_structurally_feasible(self, configuration):
+        configuration = self.__normalize_configuration(configuration)
+        return (
+            True
+            if self.__structural_feasibility is None
+            else bool(self.__structural_feasibility(configuration))
+        )
+
+    def neighbors(self, state):
+        state = self.__normalize_configuration(state)
+        neighbors = []
+        for service_id, replicas in enumerate(state):
+            if replicas >= self.__maximum[service_id]:
+                continue
+            candidate = list(state)
+            candidate[service_id] += 1
+            neighbors.append(tuple(candidate))
+        return tuple(neighbors)
+
+    def step_cost(self, current, neighbor):
+        current = self.__normalize_configuration(current)
+        neighbor = self.__normalize_configuration(neighbor)
+        differences = tuple(
+            right - left for left, right in zip(current, neighbor)
+        )
+        if differences.count(1) != 1 or any(
+            difference not in (0, 1) for difference in differences
+        ):
+            raise ValueError("A replica-sizing step must add exactly one replica.")
+        return self.__replica_costs[differences.index(1)]
+
+    def heuristic(self, state):
+        self.__normalize_configuration(state)
+        return 0.0
+
+    def _scenario_means(self):
+        method = getattr(
+            self.__system,
+            "get_request_class_mean_latencies_by_scenario",
+            None,
+        )
+        if method is not None:
+            values = method()
+        else:
+            scenario_method = getattr(self.__system, "get_scenario_name", None)
+            scenario = scenario_method() if scenario_method is not None else None
+            values = {
+                scenario or "default": (
+                    self.__system.get_request_class_mean_latencies()
+                )
+            }
+        return tuple(
+            (
+                str(scenario),
+                tuple(
+                    (request_class, float(class_values[request_class]))
+                    for request_class in self.__request_classes
+                ),
+            )
+            for scenario, class_values in values.items()
+        )
+
+    def _evidence(self, configuration):
+        configuration = self.__normalize_configuration(configuration)
+        cached = self.__evidence_cache.get(configuration)
+        if cached is not None:
+            return cached
+        self.__system.configure_system_replicas(configuration)
+        analytical = self.__system.solve()
+        scenario_means = self._scenario_means() if analytical.get_stability() else ()
+        evidence = (analytical, scenario_means)
+        self.__evidence_cache[configuration] = evidence
+        return evidence
+
+    def _worst_normalized_latency(self, scenario_means):
+        return max(
+            mean / self.__limits[request_class]
+            for _, class_values in scenario_means
+            for request_class, mean in class_values
+        )
+
+    def search_tie_breaker(self, configuration):
+        analytical, scenario_means = self._evidence(configuration)
+        if not analytical.get_stability() or not scenario_means:
+            raise ValueError(
+                "Analytical optimization search states must be strictly stable."
+            )
+        value = self._worst_normalized_latency(scenario_means)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("Analytical mean-latency ranking must be finite.")
+        return value
+
+    def rank_replica_addition(self, current, candidate):
+        added_cost = self.configuration_cost(candidate) - self.configuration_cost(
+            current
+        )
+        return (
+            self.search_tie_breaker(current)
+            - self.search_tie_breaker(candidate)
+        ) / added_cost
+
+    def evaluate(self, configuration):
+        configuration = self.__normalize_configuration(configuration)
+        cached = self.__evaluation_cache.get(configuration)
+        if cached is not None:
+            return cached
+
+        analytical, scenario_means = self._evidence(configuration)
+        if not analytical.get_stability():
+            classification = AnalyticalClassification.ANALYTICALLY_UNSTABLE
+            feasible = False
+            tie_breaker = math.inf
+        elif not self.candidate_is_structurally_feasible(configuration):
+            classification = AnalyticalClassification.STRUCTURALLY_INFEASIBLE
+            feasible = False
+            tie_breaker = self._worst_normalized_latency(scenario_means)
+        else:
+            tie_breaker = self._worst_normalized_latency(scenario_means)
+            feasible = tie_breaker <= 1.0
+            classification = (
+                AnalyticalClassification.ANALYTICALLY_FEASIBLE
+                if feasible
+                else AnalyticalClassification.ANALYTICALLY_INFEASIBLE
+            )
+
+        evaluation = AnalyticalReplicaSizingEvaluation(
+            configuration=configuration,
+            feasible=feasible,
+            cost=(
+                self.configuration_cost(configuration) if feasible else math.inf
+            ),
+            tie_breaker=tie_breaker,
+            analytical_metrics=analytical,
+            classification=classification,
+            scenario_request_class_mean_latencies=scenario_means,
+            request_class_mean_latency_limits=tuple(self.__limits.items()),
+        )
+        self.__evaluation_cache[configuration] = evaluation
+        return evaluation
+
+    def evaluate_and_check(self, configuration):
+        evaluation = self.evaluate(configuration)
+        return evaluation, evaluation.feasible
+
+    def is_feasible(self, configuration):
+        return self.evaluate(configuration).feasible
 
 
 class ReplicaSizingProblem(GraphSearchProblem):

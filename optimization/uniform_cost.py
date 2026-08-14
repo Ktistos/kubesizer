@@ -46,6 +46,14 @@ class ReplicaOptimizationResult(OptimizationResult):
     def optimality_proven(self):
         return self.global_optimal
 
+    @property
+    def solution_mode(self):
+        return "EXACT"
+
+    @property
+    def locally_minimal(self):
+        return self.deletion_local_certified
+
 
 class UniformCostReplicaOptimizer(Optimizer):
     """Find the lowest-cost reliably feasible replica configuration.

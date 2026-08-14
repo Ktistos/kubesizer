@@ -12,7 +12,7 @@ from native_backend import SIMULATOR_SEMANTICS_VERSION
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
 
-CALIBRATION_PROFILE_VERSION = 3
+CALIBRATION_PROFILE_VERSION = 4
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
 
 
@@ -152,6 +152,7 @@ class CalibrationProfile:
     topology_fingerprint: str
     workload_fingerprint: str
     simulator_semantics_version: str
+    required_scenarios: tuple[str, ...]
     minimum_replica_configuration: tuple[int, ...]
     maximum_replica_configuration: tuple[int, ...]
     warmup_duration: float
@@ -362,6 +363,14 @@ class CalibrationProfile:
             raise CalibrationProfileMismatchError(
                 "Calibration seeds are outside calibration namespaces."
             )
+        if (
+            not self.required_scenarios
+            or len(set(self.required_scenarios)) != len(self.required_scenarios)
+            or any(not name for name in self.required_scenarios)
+        ):
+            raise CalibrationProfileMismatchError(
+                "Profile scenario identities are invalid."
+            )
         class_count = len(self.request_class_slos)
         if (
             class_count == 0
@@ -377,7 +386,10 @@ class CalibrationProfile:
         if not 0 < self.overall_alpha < 1:
             raise CalibrationProfileMismatchError("Profile overall alpha is invalid.")
         tail_alpha = self.overall_alpha / (
-            2 * self.maximum_sequential_looks * class_count
+            2
+            * self.maximum_sequential_looks
+            * class_count
+            * len(self.required_scenarios)
         )
         if self.bootstrap_resample_count * tail_alpha < self.minimum_bootstrap_tail_draws:
             raise CalibrationProfileMismatchError(
@@ -391,6 +403,7 @@ class CalibrationProfile:
             "topology_fingerprint": self.topology_fingerprint,
             "workload_fingerprint": self.workload_fingerprint,
             "simulator_semantics_version": self.simulator_semantics_version,
+            "required_scenarios": list(self.required_scenarios),
             "bounded_replica_configuration_space": {
                 "minimum": list(self.minimum_replica_configuration),
                 "maximum": list(self.maximum_replica_configuration),
@@ -457,6 +470,7 @@ class CalibrationProfile:
             topology_fingerprint=str(value["topology_fingerprint"]),
             workload_fingerprint=str(value["workload_fingerprint"]),
             simulator_semantics_version=str(value["simulator_semantics_version"]),
+            required_scenarios=tuple(str(v) for v in value["required_scenarios"]),
             minimum_replica_configuration=tuple(int(v) for v in bounds["minimum"]),
             maximum_replica_configuration=tuple(int(v) for v in bounds["maximum"]),
             warmup_duration=float(value["warmup_duration"]),
@@ -553,13 +567,44 @@ def _fingerprint(value):
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def experiment_fingerprints(system):
-    services = tuple(
-        sorted(system.get_services().values(), key=lambda item: item.get_id())
+def _scenario_systems(system):
+    if hasattr(system, "get_scenario_systems"):
+        return system.get_scenario_systems()
+    scenario_name = (
+        system.get_scenario_name()
+        if hasattr(system, "get_scenario_name")
+        else None
     )
-    request_classes = tuple(system.get_request_classes())
+    return {scenario_name or "default": system}
+
+
+def _distribution_fingerprint(specification):
+    nonsemantic_fields = {"source", "column", "timestamp_column"}
+    return {
+        "distribution": specification.distribution,
+        "mean": float(specification.mean),
+        "scv": float(specification.scv),
+        "parameters": [
+            (name, value)
+            for name, value in specification.parameters
+            if name not in nonsemantic_fields
+        ],
+        "samples": list(specification.samples),
+    }
+
+
+def experiment_fingerprints(system):
+    scenario_systems = _scenario_systems(system)
+    representative = next(iter(scenario_systems.values()))
+    services = tuple(
+        sorted(
+            representative.get_services().values(),
+            key=lambda item: item.get_id(),
+        )
+    )
+    request_classes = tuple(representative.get_request_classes())
     topology = {
-        "network_type": system.get_type().value,
+        "network_type": representative.get_type().value,
         "services": [
             {"id": service.get_id(), "name": service.get_name()}
             for service in services
@@ -588,25 +633,45 @@ def experiment_fingerprints(system):
             for request_class in request_classes
         ],
     }
-    workload = {
-        "service_rates": [
-            {"service": service.get_name(), "mu": float(service.get_mu())}
-            for service in services
-        ],
-        "external_arrival_rates": [
+    workload = {"scenarios": []}
+    for scenario_name, scenario_system in scenario_systems.items():
+        scenario_services = tuple(
+            sorted(
+                scenario_system.get_services().values(),
+                key=lambda item: item.get_id(),
+            )
+        )
+        service_specs = scenario_system.get_service_time_distribution_specs()
+        arrival_specs = scenario_system.get_external_arrival_distribution_specs()
+        workload["scenarios"].append(
             {
-                "request_class": request_class,
-                "rates": [
+                "name": scenario_name,
+                "service_times": [
                     {
                         "service": service.get_name(),
-                        "gamma": float(service.get_gamma(request_class)),
+                        "specification": _distribution_fingerprint(
+                            service_specs[service.get_name()]
+                        ),
                     }
-                    for service in services
+                    for service in scenario_services
+                ],
+                "external_arrivals": [
+                    {
+                        "request_class": request_class,
+                        "streams": [
+                            {
+                                "service": service_name,
+                                "specification": _distribution_fingerprint(spec),
+                            }
+                            for service_name, spec in sorted(
+                                arrival_specs[request_class].items()
+                            )
+                        ],
+                    }
+                    for request_class in request_classes
                 ],
             }
-            for request_class in request_classes
-        ],
-    }
+        )
     return _fingerprint(topology), _fingerprint(workload)
 
 
@@ -691,11 +756,13 @@ def build_calibration_profile(
         "final_validation", options.final_validation_replications
     )
     topology_fingerprint, workload_fingerprint = experiment_fingerprints(system)
+    required_scenarios = tuple(_scenario_systems(system))
     profile = CalibrationProfile(
         profile_version=CALIBRATION_PROFILE_VERSION,
         topology_fingerprint=topology_fingerprint,
         workload_fingerprint=workload_fingerprint,
         simulator_semantics_version=SIMULATOR_SEMANTICS_VERSION,
+        required_scenarios=required_scenarios,
         minimum_replica_configuration=minimum,
         maximum_replica_configuration=maximum,
         warmup_duration=float(warmup_duration),

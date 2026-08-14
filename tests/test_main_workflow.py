@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
+from optimization import ReplicaEvaluationMode
 
 
 def test_calibrate_before_optimization_always_runs_complete_calibration(monkeypatch):
@@ -118,3 +119,62 @@ def test_main_does_not_place_when_fresh_validation_fails(monkeypatch):
         main.main()
 
     assert placement_calls == []
+
+
+def test_main_analytical_mode_skips_every_simulation_stage(monkeypatch):
+    system = SimpleNamespace(configure_system_replicas=lambda _value: None)
+    optimization = SimpleNamespace(configuration=(2,))
+    placement = SimpleNamespace(
+        configuration={"api": "node"},
+        solution_mode="EXACT",
+        complete_states=1,
+        pruned_complete_placements=0,
+        total_configurations=1,
+        optimality_proven=True,
+        budget_exhausted=False,
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        builtins,
+        "open",
+        lambda *_args, **_kwargs: io.StringIO("{}"),
+    )
+    monkeypatch.setattr(main, "System", lambda *_args, **_kwargs: system)
+    monkeypatch.setattr(
+        main,
+        "REPLICA_EVALUATION_MODE",
+        ReplicaEvaluationMode.ANALYTICAL,
+    )
+    monkeypatch.setattr(
+        main,
+        "estimate_workflow_runtime",
+        lambda *_args, **_kwargs: pytest.fail("runtime preflight must be skipped"),
+    )
+    monkeypatch.setattr(
+        main,
+        "calibrate_before_optimization",
+        lambda *_args, **_kwargs: pytest.fail("calibration must be skipped"),
+    )
+    monkeypatch.setattr(
+        main,
+        "validate_optimizer_result",
+        lambda *_args, **_kwargs: pytest.fail("validation must be skipped"),
+    )
+    monkeypatch.setattr(
+        main,
+        "optimize_replicas_analytically",
+        lambda selected: calls.append(("analytical", selected)) or optimization,
+    )
+    monkeypatch.setattr(main, "report_replica_result", lambda *_args: None)
+    monkeypatch.setattr(main, "Cluster", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        main,
+        "optimize_node_placement",
+        lambda *_args, **_kwargs: placement,
+    )
+    monkeypatch.setattr(main, "NodePlacementProblem", lambda value: value)
+
+    main.main()
+
+    assert calls == [("analytical", system)]

@@ -2,6 +2,23 @@ import copy
 import math
 from enum import Enum
 from .service import Service
+from .workload import (
+    DistributionSpec,
+    normalize_workload_spec,
+    parse_workload_spec,
+    scenario_names,
+    select_workload_scenario,
+)
+from .analytical import (
+    AnalyticalQueueingModel,
+    approximate_departure_scv,
+    combine_independent_stream_scvs,
+    mg1_mean_response_time,
+    mmc_mean_response_time,
+    select_queueing_model,
+    thinned_stream_scv,
+    variability_adjusted_mean_response_time,
+)
 from metrics import Metrics
 from native_backend import get_native_backend
 
@@ -18,9 +35,38 @@ class QueueingNetworkType(str, Enum):
 
 class System:
 
-    def __init__(self, name, workload, type: QueueingNetworkType):
+    def __init__(
+        self,
+        name,
+        workload,
+        type: QueueingNetworkType,
+        *,
+        scenario_name=None,
+        workload_base_path=None,
+    ):
         self.__name = name
-        self.__workload_spec = copy.deepcopy(workload)
+        names = scenario_names(workload)
+        selected_workload = select_workload_scenario(workload, scenario_name)
+        self.__scenario_name = (
+            scenario_name
+            if scenario_name is not None
+            else (names[0] if len(names) == 1 else None)
+        )
+        self.__workload_spec = selected_workload
+        self.__workload_base_path = workload_base_path
+        self.__scenario_distribution_spec = None
+        if names:
+            parsed = parse_workload_spec(
+                selected_workload,
+                base_path=workload_base_path,
+            )
+            self.__scenario_distribution_spec = parsed.scenario(
+                self.__scenario_name
+            )
+        workload = normalize_workload_spec(
+            selected_workload,
+            base_path=workload_base_path,
+        )
         # type refers to either open or closed system
         self.__type = type
         self.__services = {}
@@ -195,6 +241,240 @@ class System:
                 for request_class in self.get_request_classes()
             )
         ]
+        self.__initialize_distribution_metadata()
+        self.__poisson_arrival_flags = self.__calculate_poisson_arrival_flags()
+
+    def __initialize_distribution_metadata(self):
+        if self.__scenario_distribution_spec is None:
+            self.__service_time_specs = {
+                service.get_name(): DistributionSpec(
+                    distribution="exponential",
+                    mean=(
+                        1.0 / service.get_mu()
+                        if service.get_mu() > 0.0
+                        else math.inf
+                    ),
+                    scv=1.0,
+                    parameters=(
+                        ("distribution", "exponential"),
+                        ("rate", service.get_mu()),
+                    ),
+                )
+                for service in self.get_services().values()
+            }
+            self.__entry_arrival_specs = {
+                request_class: {
+                    service.get_name(): DistributionSpec(
+                        distribution="exponential",
+                        mean=1.0 / service.get_gamma(request_class),
+                        scv=1.0,
+                        parameters=(
+                            ("distribution", "exponential"),
+                            ("rate", service.get_gamma(request_class)),
+                        ),
+                    )
+                    for service in self.get_services().values()
+                    if service.get_gamma(request_class) > 0.0
+                }
+                for request_class in self.get_request_classes()
+            }
+        else:
+            scenario = self.__scenario_distribution_spec
+            self.__service_time_specs = dict(scenario.service_times)
+            self.__entry_arrival_specs = {
+                request_class: dict(scenario.entry_services[request_class])
+                for request_class in self.get_request_classes()
+            }
+
+        self.__service_time_distributions = {
+            service_name: process.distribution
+            for service_name, process in self.__service_time_specs.items()
+        }
+        self.__service_time_scvs = {
+            service_name: process.scv
+            for service_name, process in self.__service_time_specs.items()
+        }
+        self.__entry_arrival_distributions = {
+            request_class: {
+                service_name: process.distribution
+                for service_name, process in self.__entry_arrival_specs[
+                    request_class
+                ].items()
+            }
+            for request_class in self.get_request_classes()
+        }
+        self.__entry_arrival_scvs = {
+            request_class: {
+                service_name: process.scv
+                for service_name, process in self.__entry_arrival_specs[
+                    request_class
+                ].items()
+            }
+            for request_class in self.get_request_classes()
+        }
+
+    def __calculate_poisson_arrival_flags(self):
+        service_count = len(self.get_services())
+        flags = [True] * service_count
+        reachable_by_class = {}
+        for request_class in self.get_request_classes():
+            reachable = {
+                service.get_id()
+                for service in self.get_services().values()
+                if service.get_gamma(request_class) > 0.0
+            }
+            pending = list(reachable)
+            while pending:
+                source_id = pending.pop()
+                source = self.get_service_by_id(source_id)
+                for edge in source.get_adjacency_list(request_class):
+                    target = edge.get_target()
+                    if target is None or edge.get_routing_prob() <= 0.0:
+                        continue
+                    target_id = target.get_id()
+                    if target_id not in reachable:
+                        reachable.add(target_id)
+                        pending.append(target_id)
+            reachable_by_class[request_class] = reachable
+            for service in self.get_services().values():
+                if (
+                    service.get_gamma(request_class) > 0.0
+                    and self.__entry_arrival_distributions[request_class].get(
+                        service.get_name(), "exponential"
+                    )
+                    != "exponential"
+                ):
+                    flags[service.get_id()] = False
+
+        for _ in range(service_count):
+            changed = False
+            for request_class, reachable in reachable_by_class.items():
+                for source in self.get_services().values():
+                    source_id = source.get_id()
+                    if source_id not in reachable:
+                        continue
+                    poisson_departure = (
+                        flags[source_id]
+                        and self.__service_time_distributions[source.get_name()]
+                        == "exponential"
+                    )
+                    if poisson_departure:
+                        continue
+                    for edge in source.get_adjacency_list(request_class):
+                        target = edge.get_target()
+                        if target is None or edge.get_routing_prob() <= 0.0:
+                            continue
+                        target_id = target.get_id()
+                        if flags[target_id]:
+                            flags[target_id] = False
+                            changed = True
+            if not changed:
+                return tuple(flags)
+        return tuple(flags)
+
+    def __current_queueing_models(self):
+        models = [None] * len(self.get_services())
+        for service in self.get_services().values():
+            service_id = service.get_id()
+            models[service_id] = select_queueing_model(
+                poisson_arrivals=self.__poisson_arrival_flags[service_id],
+                exponential_service=(
+                    self.__service_time_distributions[service.get_name()]
+                    == "exponential"
+                ),
+                replicas=service.get_replicas(),
+            )
+        return tuple(models)
+
+    def __calculate_effective_arrival_scvs(
+        self,
+        request_class_rates,
+        utilizations,
+        replicas,
+    ):
+        service_count = len(self.get_services())
+        service_scvs = [0.0] * service_count
+        for service in self.get_services().values():
+            service_scvs[service.get_id()] = self.__service_time_scvs[
+                service.get_name()
+            ]
+
+        external_components = [[] for _ in range(service_count)]
+        routed_components = []
+        for request_class, class_rates in request_class_rates.items():
+            for service in self.get_services().values():
+                service_id = service.get_id()
+                external_rate = service.get_gamma(request_class)
+                if external_rate > 0.0:
+                    external_components[service_id].append(
+                        (
+                            external_rate,
+                            self.__entry_arrival_scvs[request_class].get(
+                                service.get_name(), 1.0
+                            ),
+                        )
+                    )
+                source_rate = float(class_rates[service_id])
+                if source_rate <= 0.0:
+                    continue
+                for edge in service.get_adjacency_list(request_class):
+                    target = edge.get_target()
+                    probability = edge.get_routing_prob()
+                    if target is None or probability <= 0.0:
+                        continue
+                    routed_components.append(
+                        (
+                            service_id,
+                            target.get_id(),
+                            source_rate * probability,
+                            probability,
+                        )
+                    )
+
+        arrival_scvs = [1.0] * service_count
+        for _ in range(200):
+            departure_scvs = [
+                approximate_departure_scv(
+                    arrival_scvs[service_id],
+                    service_scvs[service_id],
+                    float(utilizations[service_id]),
+                    int(replicas[service_id]),
+                )
+                for service_id in range(service_count)
+            ]
+            components = [list(values) for values in external_components]
+            for source_id, target_id, flow_rate, probability in routed_components:
+                components[target_id].append(
+                    (
+                        flow_rate,
+                        thinned_stream_scv(
+                            departure_scvs[source_id], probability
+                        ),
+                    )
+                )
+            raw = [
+                (
+                    1.0
+                    if self.__poisson_arrival_flags[service_id]
+                    else combine_independent_stream_scvs(
+                        components[service_id]
+                    )
+                )
+                for service_id in range(service_count)
+            ]
+            updated = [
+                0.5 * previous + 0.5 * candidate
+                for previous, candidate in zip(arrival_scvs, raw)
+            ]
+            if max(
+                abs(candidate - previous)
+                for candidate, previous in zip(updated, arrival_scvs)
+            ) <= 1e-10:
+                return updated
+            arrival_scvs = updated
+        raise ValueError(
+            "Analytical arrival-variability propagation did not converge."
+        )
 
     def __initialize_system_input(self, request_class_name):
         num_of_services = len(self.get_services())
@@ -269,37 +549,8 @@ class System:
             aggregate += arrival_rates
         return aggregate
 
-    def __mmc_latency(self, service_lambda, per_replica_mu, replicas):
-        if per_replica_mu <= 0 or replicas <= 0:
-            return float("inf")
-
-        if service_lambda == 0:
-            return 1 / per_replica_mu
-
-        rho = service_lambda / (replicas * per_replica_mu)
-
-        if rho >= 1:
-            return float("inf")
-
-        a = service_lambda / per_replica_mu
-
-        sum_terms = 0.0
-        for n in range(replicas):
-            sum_terms += (a**n) / math.factorial(n)
-
-        last_term = ((a**replicas) / math.factorial(replicas)) * (1 / (1 - rho))
-
-        p0 = 1 / (sum_terms + last_term)
-
-        p_wait = last_term * p0
-
-        wq = p_wait / (replicas * per_replica_mu - service_lambda)
-
-        response_time = (1 / per_replica_mu) + wq
-
-        return response_time
-
     def solve(self):
+        """Solve load and automatically selected per-service queueing models."""
         request_class_rates = self.__calculate_request_class_arrival_rates()
         lambdas = self.__calculate_aggregate_arrival_rates(request_class_rates)
 
@@ -310,16 +561,46 @@ class System:
 
         capacities = replicas * mus
         utilizations = lambdas / capacities
+        arrival_scvs = self.__calculate_effective_arrival_scvs(
+            request_class_rates,
+            utilizations,
+            replicas,
+        )
 
         lambdas = lambdas.tolist()
         mus = mus.tolist()
         replicas = replicas.tolist()
         utilizations = utilizations.tolist()
+        service_scvs = [0.0] * num_of_services
+        for service in self.get_services().values():
+            service_scvs[service.get_id()] = self.__service_time_scvs[
+                service.get_name()
+            ]
 
-        latencies = [
-            self.__mmc_latency(lambdas[i], mus[i], replicas[i])
-            for i in range(num_of_services)
-        ]
+        queueing_models = self.__current_queueing_models()
+        latencies = []
+        for service_id, model in enumerate(queueing_models):
+            if model is AnalyticalQueueingModel.MMC:
+                latency = mmc_mean_response_time(
+                    lambdas[service_id],
+                    mus[service_id],
+                    replicas[service_id],
+                )
+            elif model is AnalyticalQueueingModel.MG1:
+                latency = mg1_mean_response_time(
+                    lambdas[service_id],
+                    mus[service_id],
+                    service_scv=service_scvs[service_id],
+                )
+            else:
+                latency = variability_adjusted_mean_response_time(
+                    lambdas[service_id],
+                    mus[service_id],
+                    replicas[service_id],
+                    arrival_scv=arrival_scvs[service_id],
+                    service_scv=service_scvs[service_id],
+                )
+            latencies.append(latency)
 
         return Metrics(
             utilizations,
@@ -368,8 +649,7 @@ class System:
                 raise ValueError("warmup_duration must lie within the simulation.")
             if (
                 metrics_collector is not None
-                and metrics_collector.get_latency_collection_start()
-                != effective_warmup
+                and metrics_collector.get_latency_collection_start() != effective_warmup
             ):
                 raise ValueError(
                     "The collector and simulation warm-up durations must match."
@@ -453,6 +733,43 @@ class System:
     def get_name(self):
         return self.__name
 
+    def get_scenario_name(self):
+        """Return the selected versioned-workload scenario, if any."""
+        return self.__scenario_name
+
+    def get_workload_base_path(self):
+        return self.__workload_base_path
+
+    def get_analytical_latency_model(self):
+        models = self.get_analytical_queueing_models()
+        unique = tuple(dict.fromkeys(model.value for model in models.values()))
+        return unique[0] if len(unique) == 1 else "mixed per-service queueing models"
+
+    def native_simulation_supports_distributions(self):
+        return True
+
+    def get_analytical_queueing_models(self):
+        """Return the automatically selected queueing model per service."""
+        models = self.__current_queueing_models()
+        return {
+            service.get_name(): models[service.get_id()]
+            for service in self.get_services().values()
+        }
+
+    def get_analytical_model_details(self):
+        """Return model assumptions and variability inputs for diagnostics."""
+        arrival_scvs = self.get_effective_arrival_scvs()
+        models = self.__current_queueing_models()
+        return {
+            service.get_name(): {
+                "model": models[service.get_id()].value,
+                "exact": models[service.get_id()].exact,
+                "arrival_scv": arrival_scvs[service.get_id()],
+                "service_scv": self.__service_time_scvs[service.get_name()],
+            }
+            for service in self.get_services().values()
+        }
+
     def get_workload_spec(self):
         """Return an isolated copy suitable for constructing another System."""
         return copy.deepcopy(self.__workload_spec)
@@ -502,6 +819,39 @@ class System:
         request_class_rates = self.__calculate_request_class_arrival_rates()
         return self.__calculate_aggregate_arrival_rates(request_class_rates).tolist()
 
+    def get_effective_arrival_scvs(self):
+        """Return routed arrival-process SCV approximations in service-ID order."""
+        request_class_rates = self.__calculate_request_class_arrival_rates()
+        lambdas = self.__calculate_aggregate_arrival_rates(request_class_rates)
+        system_input = self.__initialize_system_input(self.__request_classes[0])
+        mus = np.array(system_input["mus"], dtype=float)
+        replicas = np.array(system_input["replicas"], dtype=int)
+        utilizations = lambdas / (replicas * mus)
+        return self.__calculate_effective_arrival_scvs(
+            request_class_rates,
+            utilizations,
+            replicas,
+        )
+
+    def get_service_time_scvs(self):
+        values = [0.0] * len(self.get_services())
+        for service in self.get_services().values():
+            values[service.get_id()] = self.__service_time_scvs[
+                service.get_name()
+            ]
+        return values
+
+    def get_service_time_distribution_specs(self):
+        """Return immutable validated service-time specifications by service."""
+        return dict(self.__service_time_specs)
+
+    def get_external_arrival_distribution_specs(self):
+        """Return validated external interarrival specifications by class/entry."""
+        return {
+            request_class: dict(streams)
+            for request_class, streams in self.__entry_arrival_specs.items()
+        }
+
     def get_minimum_stable_replicas(self):
         """Return the minimum per-service replicas for strict stability.
 
@@ -530,6 +880,30 @@ class System:
             request_class: arrival_rates.tolist()
             for request_class, arrival_rates in self.__calculate_request_class_arrival_rates().items()
         }
+
+    def get_request_class_mean_latencies(self):
+        """Estimate end-to-end mean latency from visit ratios and queue means.
+
+        These values are analytical means. They are not p95 estimates and do
+        not carry simulation confidence intervals.
+        """
+        service_latencies = self.solve().get_mean_latencies()
+        class_rates = self.__calculate_request_class_arrival_rates()
+        results = {}
+        for request_class, effective_rates in class_rates.items():
+            external_rate = sum(
+                service.get_gamma(request_class)
+                for service in self.get_services().values()
+            )
+            if external_rate <= 0.0:
+                raise ValueError(
+                    f"Request class {request_class!r} has no external traffic."
+                )
+            results[request_class] = sum(
+                float(rate) * float(latency)
+                for rate, latency in zip(effective_rates, service_latencies)
+            ) / external_rate
+        return results
 
     def configure_system_replicas(self, replicas_config):
         for service in self.get_services().values():

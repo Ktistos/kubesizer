@@ -1,7 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from calibration import (
     CalibrationOptions,
+    SeedNamespace,
+    SeedPolicy,
     MeasurementCalibrationError,
     WarmupCalibrationError,
     build_calibration_profile,
@@ -17,14 +19,18 @@ from calibration import (
 )
 from optimization import (
     DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
+    AnalyticalReplicaSizingProblem,
     CalibratedConfigurationEvaluator,
     CalibratedReplicaSizingProblem,
     OptimizationMode,
+    ReplicaEvaluationMode,
     ScalableReplicaOptimizer,
     ScalableReplicaSearchOptions,
     UniformCostReplicaOptimizer,
     replica_configuration_count,
     optimization_mode_decision,
+    normalize_replica_evaluation_mode,
+    optimize_replica_configuration as _optimize_replica_configuration,
     validate_final_configuration as _validate_final_configuration,
 )
 
@@ -225,7 +231,7 @@ def _calibration_seeds(warmup, measurement):
     return tuple(dict.fromkeys(values))
 
 
-def calibrate(
+def _calibrate_one(
     system,
     *,
     request_class_slos,
@@ -235,6 +241,7 @@ def calibrate(
     extra_representative_configurations=(),
     report_directory=None,
     progress_callback=None,
+    minimum_configuration=None,
 ):
     """Calibrate and freeze W, M, replication policy, CIs, and seed policy."""
     options = options or CalibrationOptions()
@@ -246,6 +253,7 @@ def calibrate(
         time_unit=options.time_unit,
         replication_count=options.warmup_replications,
         seed_start=warmup_namespace.start,
+        minimum_configuration=minimum_configuration,
     )
     try:
         warmup = calibrate_global_warmup(
@@ -306,6 +314,13 @@ def calibrate(
             )
         raise
     diagnostics = calibration_diagnostics_summary(warmup, measurement, options)
+    profile_representatives = representatives
+    analytical_minimum = tuple(system.get_minimum_stable_replicas())
+    if analytical_minimum not in profile_representatives:
+        profile_representatives = (
+            analytical_minimum,
+            *profile_representatives,
+        )
     profile = build_calibration_profile(
         system,
         maximum_configuration=maximum,
@@ -314,7 +329,7 @@ def calibrate(
         measurement_duration=measurement.global_measurement_duration,
         measurement_duration_candidates=measurement.candidate_durations,
         warmup_bucket_width=warmup.bucket_width,
-        representative_configurations=representatives,
+        representative_configurations=profile_representatives,
         calibration_diagnostics=diagnostics,
         options=options,
         calibration_seeds=_calibration_seeds(warmup, measurement),
@@ -328,6 +343,157 @@ def calibrate(
             diagnostics=diagnostics,
         )
     return profile
+
+
+def _scenario_calibration_options(options, scenario_index, scenario_count):
+    """Give each scenario a disjoint slice of every calibration namespace."""
+    namespaces = []
+    for namespace in options.seed_policy.namespaces:
+        slice_size = namespace.size // scenario_count
+        if slice_size == 0:
+            raise ValueError(
+                f"Seed namespace {namespace.name!r} is too small for "
+                f"{scenario_count} scenarios."
+            )
+        start = namespace.start + scenario_index * slice_size
+        stop = (
+            namespace.stop_exclusive
+            if scenario_index == scenario_count - 1
+            else start + slice_size
+        )
+        namespaces.append(SeedNamespace(namespace.name, start, stop))
+    return replace(
+        options,
+        seed_policy=SeedPolicy(options.seed_policy.version, tuple(namespaces)),
+    )
+
+
+def calibrate(
+    system,
+    *,
+    request_class_slos,
+    maximum_replicas,
+    options=None,
+    workers=1,
+    extra_representative_configurations=(),
+    report_directory=None,
+    progress_callback=None,
+):
+    """Calibrate one scenario or a conservative profile for every scenario."""
+    options = options or CalibrationOptions()
+    if not hasattr(system, "get_scenario_systems"):
+        return _calibrate_one(
+            system,
+            request_class_slos=request_class_slos,
+            maximum_replicas=maximum_replicas,
+            options=options,
+            workers=workers,
+            extra_representative_configurations=(
+                extra_representative_configurations
+            ),
+            report_directory=report_directory,
+            progress_callback=progress_callback,
+        )
+
+    scenario_systems = system.get_scenario_systems()
+    scenario_count = len(scenario_systems)
+    maximum = _maximum_configuration(system, maximum_replicas)
+    robust_minimum = tuple(system.get_minimum_stable_replicas())
+    scenario_profiles = []
+    for scenario_index, (scenario_name, scenario_system) in enumerate(
+        scenario_systems.items()
+    ):
+        scenario_options = _scenario_calibration_options(
+            options,
+            scenario_index,
+            scenario_count,
+        )
+
+        def scenario_progress(event, details, *, _name=scenario_name):
+            if progress_callback is not None:
+                progress_callback(event, {"scenario": _name, **details})
+
+        scenario_profiles.append(
+            (
+                scenario_name,
+                _calibrate_one(
+                    scenario_system,
+                    request_class_slos=request_class_slos,
+                    maximum_replicas=maximum,
+                    options=scenario_options,
+                    workers=workers,
+                    extra_representative_configurations=(
+                        extra_representative_configurations
+                    ),
+                    report_directory=None,
+                    progress_callback=scenario_progress,
+                    minimum_configuration=robust_minimum,
+                ),
+            )
+        )
+
+    global_warmup = max(
+        profile.warmup_duration for _, profile in scenario_profiles
+    )
+    global_measurement = max(
+        profile.measurement_duration for _, profile in scenario_profiles
+    )
+    candidates = tuple(
+        sorted(
+            {
+                duration
+                for _, profile in scenario_profiles
+                for duration in profile.measurement_duration_candidates
+            }
+        )
+    )
+    representatives = tuple(
+        dict.fromkeys(
+            configuration
+            for _, profile in scenario_profiles
+            for configuration in profile.representative_configurations
+            if all(
+                value >= required
+                for value, required in zip(configuration, robust_minimum)
+            )
+        )
+    )
+    calibration_seeds = tuple(
+        dict.fromkeys(
+            seed
+            for _, profile in scenario_profiles
+            for seed in profile.calibration_seeds
+        )
+    )
+    diagnostics = {
+        "scenario_policy": "all scenarios must pass",
+        "global_warmup": global_warmup,
+        "global_measurement_duration": global_measurement,
+        "scenarios": {
+            name: {
+                "warmup_duration": profile.warmup_duration,
+                "measurement_duration": profile.measurement_duration,
+                "warmup_bucket_width": profile.warmup_bucket_width,
+                "diagnostics": profile.diagnostics,
+            }
+            for name, profile in scenario_profiles
+        },
+    }
+    return build_calibration_profile(
+        system,
+        maximum_configuration=maximum,
+        request_class_slos=request_class_slos,
+        warmup_duration=global_warmup,
+        measurement_duration=global_measurement,
+        measurement_duration_candidates=candidates,
+        warmup_bucket_width=min(
+            profile.warmup_bucket_width for _, profile in scenario_profiles
+        ),
+        representative_configurations=representatives,
+        calibration_diagnostics=diagnostics,
+        options=options,
+        calibration_seeds=calibration_seeds,
+    )
 
 
 def evaluate_configuration(
@@ -360,6 +526,8 @@ def optimize_with_calibrated_simulation(
     exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     scalable_options=None,
     runtime_limit_calibration=None,
+    replica_costs=None,
+    structural_feasibility=None,
 ):
     """Run exact or bounded scalable statistically controlled replica sizing.
 
@@ -400,6 +568,8 @@ def optimize_with_calibrated_simulation(
         calibration_profile,
         heuristic=heuristic,
         simulation_workers=workers,
+        replica_costs=replica_costs,
+        structural_feasibility=structural_feasibility,
     )
     if optimizer is None:
         selected_mode, selection_reason = optimization_mode_decision(
@@ -442,6 +612,125 @@ def optimize_with_calibrated_simulation(
         ),
         calibration_profile_fingerprint=calibration_profile.profile_fingerprint,
         runtime_limit_calibration=runtime_limit_calibration,
+    )
+
+
+def optimize_with_analytical_model(
+    system,
+    *,
+    request_class_mean_latency_limits,
+    maximum_replicas,
+    optimizer=None,
+    mode=OptimizationMode.AUTO,
+    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
+    scalable_options=None,
+    replica_costs=None,
+    structural_feasibility=None,
+):
+    """Optimize analytical end-to-end mean latency without simulation.
+
+    EXACT proves minimum weighted replica cost only for the bounded analytical
+    model. SCALABLE (also accepted as APPROXIMATE) is a budgeted heuristic.
+    Neither mode estimates p95 latency or provides statistical SLO evidence.
+    """
+    problem = AnalyticalReplicaSizingProblem(
+        system,
+        request_class_mean_latency_limits,
+        maximum_replicas,
+        replica_costs=replica_costs,
+        structural_feasibility=structural_feasibility,
+    )
+    if optimizer is not None:
+        return optimizer.optimize(problem)
+    return _optimize_replica_configuration(
+        problem,
+        mode=mode,
+        exact_configuration_limit=exact_configuration_limit,
+        scalable_options=scalable_options,
+    )
+
+
+def optimize_replica_sizing(
+    system,
+    *,
+    evaluation_mode,
+    mode=OptimizationMode.AUTO,
+    calibration_profile=None,
+    request_class_mean_latency_limits=None,
+    maximum_replicas=None,
+    optimizer=None,
+    heuristic=None,
+    workers=1,
+    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
+    scalable_options=None,
+    runtime_limit_calibration=None,
+    replica_costs=None,
+    structural_feasibility=None,
+):
+    """Select evaluation evidence independently from the search algorithm.
+
+    ``evaluation_mode=ANALYTICAL`` uses analytical request-class mean-latency
+    constraints and performs no simulation. ``SIMULATION`` requires a frozen
+    calibration profile and uses its p95 confidence-bound classification.
+    Both modes support AUTO, EXACT, and SCALABLE/APPROXIMATE search.
+    """
+    evaluation_mode = normalize_replica_evaluation_mode(evaluation_mode)
+    if evaluation_mode == ReplicaEvaluationMode.ANALYTICAL:
+        if calibration_profile is not None:
+            raise ValueError(
+                "Analytical optimization does not consume a calibration profile."
+            )
+        if request_class_mean_latency_limits is None:
+            raise ValueError(
+                "Analytical optimization requires request-class mean-latency "
+                "limits."
+            )
+        if maximum_replicas is None:
+            raise ValueError(
+                "Analytical optimization requires maximum replica bounds."
+            )
+        return optimize_with_analytical_model(
+            system,
+            request_class_mean_latency_limits=(
+                request_class_mean_latency_limits
+            ),
+            maximum_replicas=maximum_replicas,
+            optimizer=optimizer,
+            mode=mode,
+            exact_configuration_limit=exact_configuration_limit,
+            scalable_options=scalable_options,
+            replica_costs=replica_costs,
+            structural_feasibility=structural_feasibility,
+        )
+
+    if calibration_profile is None:
+        raise ValueError(
+            "Simulation optimization requires a frozen calibration profile."
+        )
+    if request_class_mean_latency_limits is not None:
+        raise ValueError(
+            "Simulation optimization uses p95 SLOs from the calibration profile, "
+            "not analytical mean-latency limits."
+        )
+    if maximum_replicas is not None:
+        expected = tuple(calibration_profile.maximum_replica_configuration)
+        supplied = _maximum_configuration(system, maximum_replicas)
+        if supplied != expected:
+            raise ValueError(
+                "Simulation maximum bounds must match the calibration profile."
+            )
+    return optimize_with_calibrated_simulation(
+        system,
+        calibration_profile,
+        optimizer=optimizer,
+        heuristic=heuristic,
+        workers=workers,
+        mode=mode,
+        exact_configuration_limit=exact_configuration_limit,
+        scalable_options=scalable_options,
+        runtime_limit_calibration=runtime_limit_calibration,
+        replica_costs=replica_costs,
+        structural_feasibility=structural_feasibility,
     )
 
 

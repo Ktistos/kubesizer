@@ -29,9 +29,11 @@ from .mode import (
     DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT,
     DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     OptimizationMode,
+    ReplicaEvaluationMode,
     ScalablePlacementSearchOptions,
     ScalableReplicaSearchOptions,
     normalize_optimization_mode,
+    normalize_replica_evaluation_mode,
 )
 from .scalable_node_placement import (
     BeamVNSPlacementOptimizer,
@@ -66,6 +68,9 @@ from .replica_validation import (
 )
 from .result import OptimizationResult
 from .replica_sizing import (
+    AnalyticalClassification,
+    AnalyticalReplicaSizingEvaluation,
+    AnalyticalReplicaSizingProblem,
     AnalyticalStabilityHeuristic,
     CalibratedReplicaSizingProblem,
     ReplicaSizingEvaluation,
@@ -84,6 +89,7 @@ __all__ = [
     "DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT",
     "DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT",
     "OptimizationMode",
+    "ReplicaEvaluationMode",
     "ScalablePlacementSearchOptions",
     "ScalableReplicaSearchOptions",
     "ScalableNodePlacementOptimizationResult",
@@ -91,6 +97,7 @@ __all__ = [
     "ScalableReplicaOptimizationResult",
     "ScalableReplicaOptimizer",
     "normalize_optimization_mode",
+    "normalize_replica_evaluation_mode",
     "optimization_mode_decision",
     "optimize_node_placement",
     "optimize_replica_configuration",
@@ -101,6 +108,9 @@ __all__ = [
     "UniformCostReplicaOptimizer",
     "ReplicaOptimizationResult",
     "AnalyticalStabilityHeuristic",
+    "AnalyticalClassification",
+    "AnalyticalReplicaSizingEvaluation",
+    "AnalyticalReplicaSizingProblem",
     "CalibratedReplicaSizingProblem",
     "DEFAULT_COST_WEIGHTS",
     "ExhaustiveNodePlacementOptimizer",

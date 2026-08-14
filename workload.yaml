@@ -1,87 +1,81 @@
-read_heavy:
-  concurrency_weight: 0.7
-  services:
-    api:
-      gamma: 20.0
-      mu: 100.0
-      routes:
+schema_version: 2
+time_unit: seconds
+
+request_classes:
+  read_heavy:
+    routing:
+      api:
         auth: 0.2
         db: 0.6
         cache: 0.1
         worker: 0.05
-    auth:
-      gamma: 0.0
-      mu: 50.0
-      routes:
+      auth:
         db: 0.8
         cache: 0.05
-    db:
-      gamma: 0.0
-      mu: 5.0
-      routes:
+      db:
         cache: 0.05
-    cache:
-      gamma: 0.0
-      mu: 80.0
-      routes:
+      cache:
         worker: 0.05
-    worker:
-      gamma: 0.0
-      mu: 50.0
-      routes:
+      worker:
         db: 0.8
         cache: 0.05
-write_heavy:
-  concurrency_weight: 0.2
-  services:
-    api:
-      gamma: 8.0
-      mu: 100.0
-      routes:
+
+  write_heavy:
+    routing:
+      api:
         auth: 0.15
         db: 0.45
         worker: 0.3
-    auth:
-      gamma: 0.0
-      mu: 50.0
-      routes:
+      auth:
         db: 0.7
         worker: 0.2
-    db:
-      gamma: 0.0
-      mu: 5.0
-      routes:
+      db:
         worker: 0.2
-    worker:
-      gamma: 0.0
-      mu: 50.0
-      routes:
+      worker:
         db: 0.1
-compute_heavy:
-  concurrency_weight: 0.1
-  services:
-    api:
-      gamma: 5.0
-      mu: 100.0
-      routes:
+
+  compute_heavy:
+    routing:
+      api:
         auth: 0.1
         worker: 0.8
-    auth:
-      gamma: 0.0
-      mu: 50.0
-      routes:
+      auth:
         worker: 0.85
-    worker:
-      gamma: 0.0
-      mu: 50.0
-      routes:
+      worker:
         cache: 0.25
         db: 0.1
-    cache:
-      gamma: 0.0
-      mu: 80.0
-      routes:
+      cache:
         db: 0.05
-    db:
-      gamma: 0.0
-      mu: 5.0
+
+scenarios:
+  normal:
+    entry_services:
+      read_heavy:
+        api:
+          distribution: exponential
+          rate: 23.1
+      write_heavy:
+        api:
+          distribution: exponential
+          rate: 6.6
+      compute_heavy:
+        api:
+          distribution: exponential
+          rate: 3.3
+
+    service_times:
+      api:
+        distribution: exponential
+        rate: 100.0
+      auth:
+        distribution: exponential
+        rate: 50.0
+      db:
+        distribution: exponential
+        rate: 5.0
+      cache:
+        distribution: exponential
+        rate: 80.0
+      worker:
+        distribution: exponential
+        rate: 50.0
