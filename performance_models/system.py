@@ -33,6 +33,43 @@ class QueueingNetworkType(str, Enum):
     HYBRID = "hybrid"
 
 
+def _rescale_interarrival_spec(specification, target_rate):
+    """Preserve distribution shape while changing its mean arrival rate."""
+    target_rate = float(target_rate)
+    if target_rate <= 0.0:
+        raise ValueError("An external arrival distribution needs a positive rate.")
+    if math.isclose(
+        specification.rate,
+        target_rate,
+        rel_tol=1e-12,
+        abs_tol=0.0,
+    ):
+        return specification
+
+    target_mean = 1.0 / target_rate
+    time_scale = target_mean / specification.mean
+    parameters = dict(specification.parameters)
+    if "rate" in parameters:
+        parameters["rate"] = target_rate
+    if specification.distribution == "arrival_trace":
+        parameters["block_duration"] = (
+            float(parameters["block_duration"]) * time_scale
+        )
+    samples = specification.samples
+    if specification.distribution in {
+        "empirical_interarrival",
+        "arrival_trace",
+    }:
+        samples = tuple(value * time_scale for value in samples)
+    return DistributionSpec(
+        distribution=specification.distribution,
+        mean=target_mean,
+        scv=specification.scv,
+        parameters=tuple(sorted(parameters.items())),
+        samples=samples,
+    )
+
+
 class System:
 
     def __init__(
@@ -282,7 +319,15 @@ class System:
             scenario = self.__scenario_distribution_spec
             self.__service_time_specs = dict(scenario.service_times)
             self.__entry_arrival_specs = {
-                request_class: dict(scenario.entry_services[request_class])
+                request_class: {
+                    service_name: _rescale_interarrival_spec(
+                        process,
+                        self.get_service(service_name).get_gamma(request_class),
+                    )
+                    for service_name, process in scenario.entry_services[
+                        request_class
+                    ].items()
+                }
                 for request_class in self.get_request_classes()
             }
 

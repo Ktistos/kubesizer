@@ -38,6 +38,7 @@ class ParsedWorkload:
     schema_version: int
     time_unit: str
     request_classes: Mapping
+    concurrency_weights: Mapping
     scenarios: Mapping
     service_names: tuple[str, ...]
 
@@ -319,14 +320,30 @@ def _reachable_services(entry_services, routing):
     return reachable
 
 
-def _parse_routing(request_classes, service_names):
+def _parse_request_classes(request_classes, service_names):
     parsed = {}
+    concurrency_weights = {}
+    weighted_classes = []
     for request_class_name, request_class in request_classes.items():
         if not isinstance(request_class_name, str) or not request_class_name:
             raise ValueError("Request-class names must be nonempty strings.")
-        if not isinstance(request_class, Mapping) or set(request_class) != {"routing"}:
+        if not isinstance(request_class, Mapping) or set(request_class) not in (
+            {"routing"},
+            {"concurrency_weight", "routing"},
+        ):
             raise ValueError(
-                f"Request class {request_class_name!r} must contain exactly routing."
+                f"Request class {request_class_name!r} must contain routing and "
+                "may contain concurrency_weight."
+            )
+        weighted = "concurrency_weight" in request_class
+        weighted_classes.append(weighted)
+        if weighted:
+            concurrency_weights[request_class_name] = _finite_positive(
+                request_class["concurrency_weight"],
+                (
+                    f"request_classes.{request_class_name}."
+                    "concurrency_weight"
+                ),
             )
         routing = request_class["routing"]
         if not isinstance(routing, Mapping):
@@ -366,7 +383,19 @@ def _parse_routing(request_classes, service_names):
                 )
             class_routing[source] = _freeze_mapping(routes)
         parsed[request_class_name] = _freeze_mapping(class_routing)
-    return _freeze_mapping(parsed)
+    if any(weighted_classes) and not all(weighted_classes):
+        raise ValueError(
+            "Every request class must define concurrency_weight when any "
+            "request class defines it."
+        )
+    if weighted_classes and all(weighted_classes) and not math.isclose(
+        sum(concurrency_weights.values()),
+        1.0,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError("Request-class concurrency weights must sum to one.")
+    return _freeze_mapping(parsed), _freeze_mapping(concurrency_weights)
 
 
 def parse_workload_spec(workload, *, base_path=None):
@@ -410,7 +439,10 @@ def parse_workload_spec(workload, *, base_path=None):
     service_name_set = set(service_names)
     if any(not isinstance(name, str) or not name for name in service_names):
         raise ValueError("Service names must be nonempty strings.")
-    routing = _parse_routing(request_classes, service_name_set)
+    routing, concurrency_weights = _parse_request_classes(
+        request_classes,
+        service_name_set,
+    )
 
     scenarios = {}
     for scenario_name, scenario in raw_scenarios.items():
@@ -499,6 +531,7 @@ def parse_workload_spec(workload, *, base_path=None):
         schema_version=WORKLOAD_SCHEMA_VERSION,
         time_unit=time_unit,
         request_classes=routing,
+        concurrency_weights=concurrency_weights,
         scenarios=_freeze_mapping(scenarios),
         service_names=service_names,
     )
@@ -568,10 +601,14 @@ def normalize_workload_spec(workload, *, scenario_name=None, base_path=None):
         for request_class_name, rates in entry_rates.items()
     }
     total_rate = sum(class_totals.values())
-    concurrency_weights = {
-        request_class_name: class_rate / total_rate
-        for request_class_name, class_rate in class_totals.items()
-    }
+    concurrency_weights = (
+        dict(parsed.concurrency_weights)
+        if parsed.concurrency_weights
+        else {
+            request_class_name: class_rate / total_rate
+            for request_class_name, class_rate in class_totals.items()
+        }
+    )
 
     normalized = {}
     for request_class_name in parsed.request_classes:

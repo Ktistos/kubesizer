@@ -209,7 +209,7 @@ def test_native_protocol_rejects_invalid_weight_total():
     assert "weights must sum to one" in completed.stdout
 
 
-def test_repository_workload_uses_explicit_streams_and_derives_class_mix():
+def test_repository_workload_declares_concurrency_weight_for_every_class():
     workload_path = Path(__file__).resolve().parents[1] / "workload.yaml"
     workload = yaml.safe_load(workload_path.read_text(encoding="utf-8"))
 
@@ -233,6 +233,14 @@ def test_repository_workload_uses_explicit_streams_and_derives_class_mix():
         "compute_heavy": 3.3,
     }
     assert workload["schema_version"] == 2
+    assert {
+        name: specification["concurrency_weight"]
+        for name, specification in workload["request_classes"].items()
+    } == {
+        "read_heavy": 0.7,
+        "write_heavy": 0.2,
+        "compute_heavy": 0.1,
+    }
 
     system = System("repository-workload", workload, QueueingNetworkType.OPEN)
     class_rates = {

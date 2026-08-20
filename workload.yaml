@@ -3,6 +3,7 @@ time_unit: seconds
 
 request_classes:
   read_heavy:
+    concurrency_weight: 0.7
     routing:
       api:
         auth: 0.2
@@ -21,6 +22,7 @@ request_classes:
         cache: 0.05
 
   write_heavy:
+    concurrency_weight: 0.2
     routing:
       api:
         auth: 0.15
@@ -35,6 +37,7 @@ request_classes:
         db: 0.1
 
   compute_heavy:
+    concurrency_weight: 0.1
     routing:
       api:
         auth: 0.1
