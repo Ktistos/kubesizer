@@ -1,4 +1,3 @@
-from .astar import AStarOptimizer
 from .branch_and_bound_node_placement import (
     BranchAndBoundNodePlacementOptimizationResult,
     BranchAndBoundNodePlacementOptimizer,
@@ -15,10 +14,6 @@ from .exceptions import (
     NoFeasibleConfigurationError,
     RequestClassMetricsUnavailableError,
     StatisticalEvaluationError,
-)
-from .exhaustive_node_placement import (
-    ExhaustiveNodePlacementOptimizer,
-    NodePlacementOptimizationResult,
 )
 from .node_placement import (
     DEFAULT_COST_WEIGHTS,
@@ -83,7 +78,6 @@ from .replica_sizing import (
 )
 
 __all__ = [
-    "AStarOptimizer",
     "BeamVNSPlacementOptimizer",
     "FeasibilityStatus",
     "HeuristicTraceEntry",
@@ -121,7 +115,6 @@ __all__ = [
     "AnalyticalReplicaSizingProblem",
     "CalibratedReplicaSizingProblem",
     "DEFAULT_COST_WEIGHTS",
-    "ExhaustiveNodePlacementOptimizer",
     "CalibratedFinalValidationResult",
     "FinalValidationClassification",
     "FinalReplicaValidationError",
@@ -129,7 +122,6 @@ __all__ = [
     "GraphSearchProblem",
     "NoFeasibleConfigurationError",
     "NodePlacementEvaluation",
-    "NodePlacementOptimizationResult",
     "NodePlacementProblem",
     "OptimizationProblem",
     "OptimizationResult",

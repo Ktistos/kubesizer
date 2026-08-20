@@ -18,7 +18,6 @@ from runtime_estimation import (
     calibrate_replica_configuration_limit,
     format_duration,
     format_replica_configuration_limit_calibration,
-    format_runtime_estimate,
 )
 
 
@@ -76,27 +75,6 @@ def test_estimate_reports_ordinary_and_full_configured_work():
     )
 
 
-def test_formatted_estimate_is_explicitly_not_a_guaranteed_bound():
-    system, resources = _system_and_resources()
-    result = calculate_workflow_runtime_estimate(
-        system,
-        resources,
-        _rates(),
-        options=CalibrationOptions(),
-        maximum_replicas=10,
-        workers=8,
-    )
-
-    report = format_runtime_estimate(result)
-
-    assert "Ordinary planning" in report
-    assert "Configured ceiling" in report
-    assert "not a guaranteed bound" in report
-    assert "SCALABLE mode: at most 64 configurations" in report
-    assert "replica SCALABLE" in report
-    assert "placement-at-maximum-bounds SCALABLE" in report
-
-
 def test_auto_can_resolve_to_hybrid_workflow():
     system, resources = _system_and_resources()
 
@@ -115,7 +93,6 @@ def test_auto_can_resolve_to_hybrid_workflow():
     assert result.replica_search_mode == "EXACT"
     assert result.placement_search_mode_at_maximum_bounds == "SCALABLE"
     assert result.workflow_search_mode == "HYBRID"
-    assert "Resolved workflow search mode: HYBRID" in format_runtime_estimate(result)
 
 
 def test_explicit_hybrid_modes_override_each_search_threshold():

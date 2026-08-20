@@ -45,22 +45,20 @@ def _independent_model_workload():
         "gg": "deterministic",
     }
     return {
-        "schema_version": 2,
-        "time_unit": "seconds",
-        "request_classes": {"request": {"routing": {}}},
-        "scenarios": {
-            "models": {
-                "entry_services": {
-                    "request": {
-                        name: _distribution_spec(distribution, arrival=True)
-                        for name, distribution in arrivals.items()
-                    }
-                },
-                "service_times": {
-                    name: _distribution_spec(distribution, arrival=False)
-                    for name, distribution in services.items()
-                },
-            }
+        "request_classes": {
+            "request": {"concurrency_weight": 1.0, "routing": {}}
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {
+                    name: _distribution_spec(distribution, arrival=True)
+                    for name, distribution in arrivals.items()
+                }
+            },
+            "service_times": {
+                name: _distribution_spec(distribution, arrival=False)
+                for name, distribution in services.items()
+            },
         },
     }
 
@@ -149,33 +147,32 @@ def test_system_automatically_selects_all_four_queueing_models():
 
 def test_general_service_departure_makes_downstream_arrivals_general():
     workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
         "request_classes": {
-            "request": {"routing": {"upstream": {"downstream": 1.0}}}
-        },
-        "scenarios": {
-            "routed": {
-                "entry_services": {
-                    "request": {
-                        "upstream": {
-                            "distribution": "exponential",
-                            "rate": 4.0,
-                        }
-                    }
-                },
-                "service_times": {
-                    "upstream": {
-                        "distribution": "gamma",
-                        "mean": 0.1,
-                        "scv": 4.0,
-                    },
-                    "downstream": {
-                        "distribution": "exponential",
-                        "rate": 10.0,
-                    },
-                },
+            "request": {
+                "concurrency_weight": 1.0,
+                "routing": {"upstream": {"downstream": 1.0}},
             }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {
+                    "upstream": {
+                        "distribution": "exponential",
+                        "rate": 4.0,
+                    }
+                }
+            },
+            "service_times": {
+                "upstream": {
+                    "distribution": "gamma",
+                    "mean": 0.1,
+                    "scv": 4.0,
+                },
+                "downstream": {
+                    "distribution": "exponential",
+                    "rate": 10.0,
+                },
+            },
         },
     }
     system = System("routed", workload, QueueingNetworkType.OPEN)

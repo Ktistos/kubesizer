@@ -5,7 +5,6 @@ import pytest
 
 from optimization import (
     BranchAndBoundNodePlacementOptimizer,
-    ExhaustiveNodePlacementOptimizer,
     NoFeasibleConfigurationError,
     NodePlacementProblem,
     OptimizationMode,
@@ -213,6 +212,26 @@ def build_problem(
         cost_weights=cost_weights,
         service_resource_requests=service_resource_requests,
         hard_constraint=hard_constraint,
+    )
+
+
+def brute_force_optimum(problem):
+    """Small-instance oracle kept in tests, not as a production optimizer."""
+    feasible = tuple(
+        evaluation
+        for configuration in problem.iter_configurations()
+        if (evaluation := problem.evaluate(configuration)).valid
+    )
+    if not feasible:
+        raise NoFeasibleConfigurationError(
+            "No feasible fixed-replica node placement exists."
+        )
+    return min(
+        feasible,
+        key=lambda evaluation: (
+            evaluation.total_cost,
+            evaluation.configuration,
+        ),
     )
 
 
@@ -498,66 +517,6 @@ def test_current_workload_has_expected_exact_search_space_size():
     assert problem.configuration_count() == 45_360
 
 
-def test_exhaustive_optimizer_finds_global_network_minimum():
-    problem = build_problem(
-        {
-            "source": {
-                "gamma": 10.0,
-                "replicas": 1,
-                "routes": {"destination": 0.5},
-            },
-            "destination": {"gamma": 0.0, "replicas": 1},
-        },
-        {
-            "node-a": {"node-b": 0.2},
-            "node-b": {"node-a": 0.1},
-        },
-        cost_weights={"network": 1.0, "replica_spreading": 0.0},
-    )
-
-    result = ExhaustiveNodePlacementOptimizer().optimize(problem)
-
-    source_node = next(
-        node_name
-        for node_name, services in result.placement.items()
-        if services.get("source") == 1
-    )
-    destination_node = next(
-        node_name
-        for node_name, services in result.placement.items()
-        if services.get("destination") == 1
-    )
-
-    assert source_node == destination_node
-    assert result.cost == pytest.approx(0.0)
-    assert result.metrics.network_cost_raw == pytest.approx(0.0)
-    assert result.explored_states == 4
-    assert result.feasible_states == 4
-
-
-def test_exhaustive_optimizer_raises_when_capacity_rejects_every_placement():
-    problem = build_problem(
-        {"api": {"gamma": 0.0, "replicas": 1}},
-        {
-            "node-a": {"node-b": 0.1},
-            "node-b": {"node-a": 0.1},
-        },
-        service_resource_requests={
-            "api": {
-                "cpu_request_millicores": 2,
-                "memory_request_bytes": 1,
-            }
-        },
-        node_capacities={
-            "node-a": (1, 100),
-            "node-b": (1, 100),
-        },
-    )
-
-    with pytest.raises(NoFeasibleConfigurationError):
-        ExhaustiveNodePlacementOptimizer().optimize(problem)
-
-
 def test_partial_cost_bound_does_not_exceed_any_completion():
     problem = build_problem(
         {
@@ -593,18 +552,18 @@ def test_partial_cost_bound_does_not_exceed_any_completion():
     assert lower_bound <= min(completion_costs) + 1e-15
 
 
-def test_branch_and_bound_matches_exhaustive_on_current_workload():
+def test_branch_and_bound_matches_brute_force_on_current_workload():
     problem = build_problem(
         CURRENT_SERVICE_SPECS,
         CURRENT_NODE_LATENCIES,
     )
 
-    exhaustive = ExhaustiveNodePlacementOptimizer().optimize(problem)
+    optimum = brute_force_optimum(problem)
     bounded = BranchAndBoundNodePlacementOptimizer().optimize(problem)
 
-    assert bounded.configuration == exhaustive.configuration
-    assert bounded.cost == pytest.approx(exhaustive.cost)
-    assert bounded.metrics == exhaustive.metrics
+    assert bounded.configuration == optimum.configuration
+    assert bounded.cost == pytest.approx(optimum.total_cost)
+    assert bounded.metrics == optimum
     assert bounded.optimality_proven
     assert bounded.total_configurations == problem.configuration_count()
     assert (
@@ -672,7 +631,7 @@ def test_branch_and_bound_raises_when_capacity_rejects_every_placement():
 
 
 @pytest.mark.parametrize("seed", range(10))
-def test_branch_and_bound_matches_exhaustive_across_small_problems(seed):
+def test_branch_and_bound_matches_brute_force_across_small_problems(seed):
     random_source = random.Random(seed)
     service_names = ("service-a", "service-b", "service-c")
     service_specs = {}
@@ -707,11 +666,11 @@ def test_branch_and_bound_matches_exhaustive_across_small_problems(seed):
         },
     )
 
-    exhaustive = ExhaustiveNodePlacementOptimizer().optimize(problem)
+    optimum = brute_force_optimum(problem)
     bounded = BranchAndBoundNodePlacementOptimizer().optimize(problem)
 
-    assert bounded.configuration == exhaustive.configuration
-    assert bounded.cost == pytest.approx(exhaustive.cost)
+    assert bounded.configuration == optimum.configuration
+    assert bounded.cost == pytest.approx(optimum.total_cost)
 
 
 def test_scalable_placement_returns_feasible_locally_improved_result():

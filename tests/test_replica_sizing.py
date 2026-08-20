@@ -6,11 +6,11 @@ import pytest
 
 from metrics import Metrics, SimulationMetricsCollector
 from optimization import (
-    AStarOptimizer,
     AnalyticalStabilityHeuristic,
     ReplicaSizingEvaluation,
     ReplicaSizingProblem,
     RequestClassMetricsUnavailableError,
+    UniformCostReplicaOptimizer,
     zero_heuristic,
 )
 
@@ -290,7 +290,7 @@ def test_replica_cost_precedes_latency_and_latency_breaks_only_equal_cost_ties()
     assert equal_cost_faster.ranking_key() < equal_cost_slower.ranking_key()
 
 
-def test_astar_uses_normalized_p95_only_to_break_equal_replica_ties():
+def test_exact_search_uses_normalized_p95_only_to_break_equal_replica_ties():
     system = FakeSystem(
         (1, 1),
         (10, 10),
@@ -310,7 +310,7 @@ def test_astar_uses_normalized_p95_only_to_break_equal_replica_ties():
         heuristic=zero_heuristic,
     )
 
-    result = AStarOptimizer().optimize(problem)
+    result = UniformCostReplicaOptimizer().optimize(problem)
 
     assert result.configuration == (1, 2)
     assert result.metrics.cost == 3
@@ -388,12 +388,12 @@ def build_search_problem(heuristic):
     )
 
 
-def test_astar_returns_minimum_replica_configuration_and_full_path():
+def test_uniform_cost_returns_minimum_replica_configuration_and_full_path():
     system = FakeSystem((10, 1), (5, 10), lambda configuration: {})
     heuristic = AnalyticalStabilityHeuristic.from_system(system)
     _, problem = build_search_problem(heuristic)
 
-    result = AStarOptimizer().optimize(problem)
+    result = UniformCostReplicaOptimizer().optimize(problem)
 
     assert result.configuration == (3, 2)
     assert result.cost == 3
@@ -413,8 +413,8 @@ def test_zero_and_stability_heuristics_return_same_optimum():
     stability_heuristic = AnalyticalStabilityHeuristic.from_system(zero_system)
     _, stability_problem = build_search_problem(stability_heuristic)
 
-    zero_result = AStarOptimizer().optimize(zero_problem)
-    stability_result = AStarOptimizer().optimize(stability_problem)
+    zero_result = UniformCostReplicaOptimizer().optimize(zero_problem)
+    stability_result = UniformCostReplicaOptimizer().optimize(stability_problem)
 
     assert zero_result.configuration == stability_result.configuration == (3, 2)
     assert zero_result.cost == stability_result.cost == 3

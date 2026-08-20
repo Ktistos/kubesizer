@@ -1,9 +1,7 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from calibration import (
     CalibrationOptions,
-    SeedNamespace,
-    SeedPolicy,
     MeasurementCalibrationError,
     WarmupCalibrationError,
     build_calibration_profile,
@@ -378,29 +376,6 @@ def _calibrate_one(
     return profile
 
 
-def _scenario_calibration_options(options, scenario_index, scenario_count):
-    """Give each scenario a disjoint slice of every calibration namespace."""
-    namespaces = []
-    for namespace in options.seed_policy.namespaces:
-        slice_size = namespace.size // scenario_count
-        if slice_size == 0:
-            raise ValueError(
-                f"Seed namespace {namespace.name!r} is too small for "
-                f"{scenario_count} scenarios."
-            )
-        start = namespace.start + scenario_index * slice_size
-        stop = (
-            namespace.stop_exclusive
-            if scenario_index == scenario_count - 1
-            else start + slice_size
-        )
-        namespaces.append(SeedNamespace(namespace.name, start, stop))
-    return replace(
-        options,
-        seed_policy=SeedPolicy(options.seed_policy.version, tuple(namespaces)),
-    )
-
-
 def calibrate(
     system,
     *,
@@ -412,7 +387,7 @@ def calibrate(
     report_directory=None,
     progress_callback=None,
 ):
-    """Calibrate one scenario or a conservative profile for every scenario."""
+    """Calibrate the workload's single traffic model."""
     options = options or CalibrationOptions()
     declared_kind = _declared_latency_slo_kind(system)
     latency_slo_kind = declared_kind or "percentile"
@@ -425,120 +400,18 @@ def calibrate(
                 "Explicit simulation SLOs must match those declared by the workload."
             )
     if not request_class_slos:
-        raise ValueError("Simulation calibration requires at least one percentile SLO.")
-    if not hasattr(system, "get_scenario_systems"):
-        return _calibrate_one(
-            system,
-            request_class_slos=request_class_slos,
-            maximum_replicas=maximum_replicas,
-            options=options,
-            workers=workers,
-            extra_representative_configurations=(extra_representative_configurations),
-            report_directory=report_directory,
-            progress_callback=progress_callback,
-            latency_slo_kind=latency_slo_kind,
-        )
-
-    scenario_systems = system.get_scenario_systems()
-    scenario_count = len(scenario_systems)
-    maximum = _maximum_configuration(system, maximum_replicas)
-    robust_minimum = tuple(system.get_minimum_stable_replicas())
-    scenario_profiles = []
-    for scenario_index, (scenario_name, scenario_system) in enumerate(
-        scenario_systems.items()
-    ):
-        scenario_options = _scenario_calibration_options(
-            options,
-            scenario_index,
-            scenario_count,
-        )
-
-        def scenario_progress(event, details, *, _name=scenario_name):
-            if progress_callback is not None:
-                progress_callback(event, {"scenario": _name, **details})
-
-        scenario_profiles.append(
-            (
-                scenario_name,
-                _calibrate_one(
-                    scenario_system,
-                    request_class_slos=request_class_slos,
-                    maximum_replicas=maximum,
-                    options=scenario_options,
-                    workers=workers,
-                    extra_representative_configurations=(
-                        extra_representative_configurations
-                    ),
-                    report_directory=None,
-                    progress_callback=scenario_progress,
-                    minimum_configuration=robust_minimum,
-                    latency_slo_kind=latency_slo_kind,
-                ),
-            )
-        )
-
-    global_warmup = max(profile.warmup_duration for _, profile in scenario_profiles)
-    global_measurement = max(
-        profile.measurement_duration for _, profile in scenario_profiles
-    )
-    candidates = tuple(
-        sorted(
-            {
-                duration
-                for _, profile in scenario_profiles
-                for duration in profile.measurement_duration_candidates
-            }
-        )
-    )
-    representatives = tuple(
-        dict.fromkeys(
-            configuration
-            for _, profile in scenario_profiles
-            for configuration in profile.representative_configurations
-            if all(
-                value >= required
-                for value, required in zip(configuration, robust_minimum)
-            )
-        )
-    )
-    calibration_seeds = tuple(
-        dict.fromkeys(
-            seed
-            for _, profile in scenario_profiles
-            for seed in profile.calibration_seeds
-        )
-    )
-    diagnostics = {
-        "scenario_policy": "all scenarios must pass",
-        "global_warmup": global_warmup,
-        "global_measurement_duration": global_measurement,
-        "scenarios": {
-            name: {
-                "warmup_duration": profile.warmup_duration,
-                "measurement_duration": profile.measurement_duration,
-                "warmup_bucket_width": profile.warmup_bucket_width,
-                "diagnostics": profile.diagnostics,
-            }
-            for name, profile in scenario_profiles
-        },
-    }
-    return build_calibration_profile(
+        raise ValueError("Simulation calibration requires at least one latency SLO.")
+    return _calibrate_one(
         system,
-        maximum_configuration=maximum,
         request_class_slos=request_class_slos,
-        warmup_duration=global_warmup,
-        measurement_duration=global_measurement,
-        measurement_duration_candidates=candidates,
-        warmup_bucket_width=min(
-            profile.warmup_bucket_width for _, profile in scenario_profiles
-        ),
-        representative_configurations=representatives,
-        calibration_diagnostics=diagnostics,
+        maximum_replicas=maximum_replicas,
         options=options,
-        calibration_seeds=calibration_seeds,
+        workers=workers,
+        extra_representative_configurations=extra_representative_configurations,
+        report_directory=report_directory,
+        progress_callback=progress_callback,
         latency_slo_kind=latency_slo_kind,
     )
-
 
 def evaluate_configuration(
     system,

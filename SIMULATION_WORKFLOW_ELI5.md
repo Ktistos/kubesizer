@@ -427,44 +427,26 @@ If final validation fails, the program does not report the configuration as SLO-
 
 ---
 
-# What happens when main.py runs?
+# What happens when `kubesizer` runs?
 
-`main.py` performs the following steps:
+The command performs the following steps:
 
 1. Reads `workload.yaml` and `resources.yaml`.
 2. Builds the queueing network.
-3. Looks for `simulation_calibration_output/calibration_profile.yaml`.
-4. If the profile is missing, runs complete calibration.
-5. If the profile exists, verifies its fingerprints.
-6. Rejects an incompatible profile instead of silently using it.
-7. Runs calibrated replica optimization.
-8. Runs fresh final validation.
-9. Runs node placement only after final validation passes.
+3. For simulation evaluation, calibrates an in-memory profile.
+4. Runs replica optimization using the selected evaluation and search modes.
+5. Runs fresh final validation after simulation-based optimization.
+6. Runs node placement when resources are supplied and placement is not skipped.
+7. Prints only the service recommendations to standard output.
 
-Calibration reports are written under:
-
-```text
-simulation_calibration_output/
-```
-
-They can include:
-
-- the immutable YAML profile;
-- machine-readable JSON;
-- a human-readable Markdown report;
-- warm-up bucket data;
-- Welch state plots;
-- metric-specific warm-up cutoffs;
-- p95 versus measurement duration;
-- confidence-interval width versus measurement duration;
-- seed and sensitivity diagnostics;
-- explicit failure reports when calibration refuses a result.
+The command does not load a previous calibration profile and does not create
+calibration files. It writes the final result only when `--out` is supplied.
 
 ---
 
-# When can the profile be reused?
+# When is a calibration profile valid?
 
-The profile can be reused while all of these remain unchanged:
+The in-memory public API may reuse a profile while all of these remain unchanged:
 
 ```text
 same services

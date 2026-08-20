@@ -22,7 +22,7 @@ from .simulation_evaluation import (
 
 
 def zero_heuristic(configuration):
-    """Admissible heuristic that reduces A* to uniform-cost search."""
+    """Return a neutral remaining-cost estimate for graph-search problems."""
     return 0
 
 
@@ -109,8 +109,8 @@ class AnalyticalClassification(str, Enum):
 class AnalyticalReplicaSizingEvaluation:
     """Mean-latency evidence for an analytical-only replica evaluation.
 
-    The values are scenario-specific analytical expectations. They are not
-    p95 latency estimates and have no statistical confidence guarantee.
+    The values are analytical expectations. They are not p95 latency estimates
+    and have no statistical confidence guarantee.
     """
 
     configuration: tuple[int, ...]
@@ -119,18 +119,13 @@ class AnalyticalReplicaSizingEvaluation:
     tie_breaker: float
     analytical_metrics: Metrics
     classification: AnalyticalClassification
-    scenario_request_class_mean_latencies: tuple[
-        tuple[str, tuple[tuple[str, float], ...]], ...
-    ]
+    request_class_mean_latencies: tuple[tuple[str, float], ...]
     request_class_mean_latency_limits: tuple[tuple[str, float], ...]
     evaluation_basis: str = "ANALYTICAL_MEAN_LATENCY"
 
     @property
-    def scenario_means(self):
-        return {
-            scenario: dict(values)
-            for scenario, values in self.scenario_request_class_mean_latencies
-        }
+    def means(self):
+        return dict(self.request_class_mean_latencies)
 
     @property
     def limits(self):
@@ -345,30 +340,11 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         self.__normalize_configuration(state)
         return 0.0
 
-    def _scenario_means(self):
-        method = getattr(
-            self.__system,
-            "get_request_class_mean_latencies_by_scenario",
-            None,
-        )
-        if method is not None:
-            values = method()
-        else:
-            scenario_method = getattr(self.__system, "get_scenario_name", None)
-            scenario = scenario_method() if scenario_method is not None else None
-            values = {
-                scenario
-                or "default": (self.__system.get_request_class_mean_latencies())
-            }
+    def _request_class_means(self):
+        values = self.__system.get_request_class_mean_latencies()
         return tuple(
-            (
-                str(scenario),
-                tuple(
-                    (request_class, float(class_values[request_class]))
-                    for request_class in self.__request_classes
-                ),
-            )
-            for scenario, class_values in values.items()
+            (request_class, float(values[request_class]))
+            for request_class in self.__request_classes
         )
 
     def _evidence(self, configuration):
@@ -378,28 +354,29 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             return cached
         self.__system.configure_system_replicas(configuration)
         analytical = self.__system.solve()
-        scenario_means = self._scenario_means() if analytical.get_stability() else ()
-        evidence = (analytical, scenario_means)
+        class_means = (
+            self._request_class_means() if analytical.get_stability() else ()
+        )
+        evidence = (analytical, class_means)
         self.__evidence_cache[configuration] = evidence
         return evidence
 
-    def _worst_normalized_latency(self, scenario_means):
+    def _worst_normalized_latency(self, class_means):
         if not self.__limits:
             return 0.0
         return max(
             mean / self.__limits[request_class]
-            for _, class_values in scenario_means
-            for request_class, mean in class_values
+            for request_class, mean in class_means
             if request_class in self.__limits
         )
 
     def search_tie_breaker(self, configuration):
-        analytical, scenario_means = self._evidence(configuration)
-        if not analytical.get_stability() or not scenario_means:
+        analytical, class_means = self._evidence(configuration)
+        if not analytical.get_stability() or not class_means:
             raise ValueError(
                 "Analytical optimization search states must be strictly stable."
             )
-        value = self._worst_normalized_latency(scenario_means)
+        value = self._worst_normalized_latency(class_means)
         if not math.isfinite(value) or value < 0:
             raise ValueError("Analytical mean-latency ranking must be finite.")
         return value
@@ -418,7 +395,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         if cached is not None:
             return cached
 
-        analytical, scenario_means = self._evidence(configuration)
+        analytical, class_means = self._evidence(configuration)
         if not analytical.get_stability():
             classification = AnalyticalClassification.ANALYTICALLY_UNSTABLE
             feasible = False
@@ -426,9 +403,9 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         elif not self.candidate_is_structurally_feasible(configuration):
             classification = AnalyticalClassification.STRUCTURALLY_INFEASIBLE
             feasible = False
-            tie_breaker = self._worst_normalized_latency(scenario_means)
+            tie_breaker = self._worst_normalized_latency(class_means)
         else:
-            tie_breaker = self._worst_normalized_latency(scenario_means)
+            tie_breaker = self._worst_normalized_latency(class_means)
             feasible = tie_breaker <= 1.0
             classification = (
                 AnalyticalClassification.ANALYTICALLY_FEASIBLE
@@ -443,7 +420,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             tie_breaker=tie_breaker,
             analytical_metrics=analytical,
             classification=classification,
-            scenario_request_class_mean_latencies=scenario_means,
+            request_class_mean_latencies=class_means,
             request_class_mean_latency_limits=tuple(self.__limits.items()),
             evaluation_basis=(
                 "ANALYTICAL_MEAN_LATENCY" if self.__limits else "ANALYTICAL_STABILITY"
@@ -861,8 +838,8 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         if len(self.__maximum) != self.__service_count:
             raise ValueError("Calibration profile does not match service count.")
         # The calibrated anchor is already strictly stable, so stability adds
-        # no remaining-cost information. Keep a zero heuristic only for callers
-        # that explicitly inject the legacy A* optimizer.
+        # no remaining-cost information. Keep a zero heuristic for callers that
+        # provide a custom ranking heuristic.
         self.__heuristic = heuristic if heuristic is not None else zero_heuristic
         self.__evaluator = evaluator or CalibratedConfigurationEvaluator(
             system,
@@ -987,7 +964,7 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         return self.__replica_costs[service_id]
 
     def heuristic(self, state):
-        """Retain compatibility for callers that explicitly inject A*."""
+        """Return the caller-provided remaining-cost estimate."""
         return self.__heuristic(self.__normalize(state))
 
     def search_tie_breaker(self, configuration):

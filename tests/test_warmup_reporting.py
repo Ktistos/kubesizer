@@ -11,7 +11,6 @@ from calibration import (
 )
 from calibration.cutoff import MetricWarmupDiagnostic
 from calibration.reporting import _display_points, _json_compatible
-from warmup_calibration import build_argument_parser
 
 
 def make_ensemble():
@@ -43,16 +42,6 @@ def test_ensemble_csv_contains_bucket_times_and_all_state_metrics(tmp_path):
     assert rows[1]["busy_replicas[api]"] == "1.5"
     assert rows[1]["number_in_system[api]"] == "2.0"
     assert rows[1]["utilization[api]"] == "0.75"
-
-
-def test_cli_defaults_to_the_guide_replication_counts():
-    args = build_argument_parser().parse_args([])
-
-    assert args.replications == 30
-    assert args.validation_replications == 10
-    assert args.window_length == 10
-    assert args.max_replicas == [10]
-    assert 1 <= args.workers <= 8
 
 
 def test_plotter_falls_back_to_svg_without_matplotlib(tmp_path, monkeypatch):

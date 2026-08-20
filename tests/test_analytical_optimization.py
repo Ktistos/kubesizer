@@ -2,13 +2,12 @@ import pytest
 
 from optimization import (
     AnalyticalClassification,
-    AnalyticalReplicaSizingProblem,
     OptimizationMode,
     ReplicaEvaluationMode,
     ScalableReplicaSearchOptions,
     normalize_optimization_mode,
 )
-from performance_models import QueueingNetworkType, ScenarioSystem, System
+from performance_models import QueueingNetworkType, System
 from statistical_workflow import (
     optimize_replica_sizing,
     optimize_with_analytical_model,
@@ -62,28 +61,6 @@ def _structured_percentile_system():
         workload,
         QueueingNetworkType.OPEN,
     )
-
-
-def _scenario_workload():
-    return {
-        "schema_version": 2,
-        "time_unit": "seconds",
-        "request_classes": {"request": {"routing": {}}},
-        "scenarios": {
-            "light": {
-                "entry_services": {
-                    "request": {"api": {"distribution": "exponential", "rate": 2.0}}
-                },
-                "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
-            },
-            "heavy": {
-                "entry_services": {
-                    "request": {"api": {"distribution": "exponential", "rate": 8.0}}
-                },
-                "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
-            },
-        },
-    }
 
 
 def test_request_class_mean_latency_accounts_for_internal_visits():
@@ -243,31 +220,6 @@ def test_workload_without_slos_optimizes_to_the_stable_vector():
     assert result.configuration == tuple(system.get_minimum_stable_replicas())
     assert result.metrics.limits == {}
     assert result.metrics.evaluation_basis == "ANALYTICAL_STABILITY"
-
-
-def test_analytical_evaluation_requires_every_scenario_to_pass():
-    system = ScenarioSystem(
-        "scenarios",
-        _scenario_workload(),
-        QueueingNetworkType.OPEN,
-    )
-    configuration = tuple(system.get_minimum_stable_replicas())
-    system.configure_system_replicas(configuration)
-    scenario_means = system.get_request_class_mean_latencies_by_scenario()
-    light = scenario_means["light"]["request"]
-    heavy = scenario_means["heavy"]["request"]
-    assert heavy > light
-
-    problem = AnalyticalReplicaSizingProblem(
-        system,
-        {"request": (light + heavy) / 2.0},
-        configuration,
-    )
-    evaluation = problem.evaluate(configuration)
-
-    assert not evaluation.feasible
-    assert evaluation.classification == AnalyticalClassification.ANALYTICALLY_INFEASIBLE
-    assert set(evaluation.scenario_means) == {"light", "heavy"}
 
 
 def test_public_dispatcher_keeps_evaluation_and_search_choices_independent():

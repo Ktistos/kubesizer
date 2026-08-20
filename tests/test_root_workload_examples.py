@@ -56,8 +56,7 @@ def test_maximum_workload_exercises_all_single_model_parser_features():
         "mailer",
         "audit",
     )
-    assert system.get_scenario_name() == "traffic_model"
-    assert tuple(parsed.scenarios) == ("traffic_model",)
+    assert system.get_traffic_model_name() == "traffic_model"
     assert parsed.traffic_model.name == "traffic_model"
     assert system.get_request_class_latency_slo_kind() == "percentile"
     assert system.get_request_class_percentile_latency_limits() == {
@@ -66,13 +65,11 @@ def test_maximum_workload_exercises_all_single_model_parser_features():
     }
     distributions = {
         distribution.distribution
-        for scenario in parsed.scenarios.values()
-        for streams in scenario.entry_services.values()
+        for streams in parsed.traffic_model.entry_services.values()
         for distribution in streams.values()
     } | {
         distribution.distribution
-        for scenario in parsed.scenarios.values()
-        for distribution in scenario.service_times.values()
+        for distribution in parsed.traffic_model.service_times.values()
     }
     assert distributions == {
         "arrival_trace",

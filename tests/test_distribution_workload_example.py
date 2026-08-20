@@ -96,4 +96,4 @@ def test_distribution_example_is_accepted_by_the_strict_parser():
 
     parsed = parse_workload_spec(workload, base_path=EXAMPLE.parent)
 
-    assert tuple(parsed.scenarios) == ("traffic_model",)
+    assert parsed.traffic_model.name == "traffic_model"

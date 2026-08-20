@@ -1,4 +1,3 @@
-import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -114,18 +113,7 @@ class CalibratedConfigurationEvaluator:
             2
             * self.profile.maximum_sequential_looks
             * len(self.profile.request_class_slos)
-            * len(self.profile.required_scenarios)
         )
-
-    def _scenario_systems(self):
-        if hasattr(self.system, "get_scenario_systems"):
-            return self.system.get_scenario_systems()
-        return {self.profile.required_scenarios[0]: self.system}
-
-    def _interval_label(self, scenario, request_class):
-        if len(self.profile.required_scenarios) == 1:
-            return request_class
-        return f"{scenario}/{request_class}"
 
     def _normalize_configuration(self, configuration):
         configuration = tuple(configuration)
@@ -157,56 +145,53 @@ class CalibratedConfigurationEvaluator:
     def _calculate_intervals(
         self,
         configuration,
-        replications_by_scenario,
+        replications,
         look_index,
     ):
         intervals = []
         counts = []
         tail_alpha = self._tail_alpha()
-        for scenario, replications in replications_by_scenario.items():
-            for request_class, slo in self.profile.request_class_slos:
-                label = self._interval_label(scenario, request_class)
-                try:
-                    clusters = tuple(
-                        tuple(replication.request_class_latencies[request_class])
-                        for replication in replications
-                    )
-                except (AttributeError, KeyError, TypeError) as error:
-                    raise ValueError(
-                        f"Replication output has no raw cohort for {label!r}."
-                    ) from error
-                total = sum(len(cluster) for cluster in clusters)
-                nonempty = sum(bool(cluster) for cluster in clusters)
-                counts.append((label, total))
-                if total < self.profile.minimum_eligible_samples_per_request_class:
-                    continue
-                if nonempty < self.profile.minimum_nonempty_replications_per_request_class:
-                    continue
-                bootstrap = (
-                    replication_cluster_bootstrap_mean
-                    if self.profile.latency_slo_kind == "mean"
-                    else replication_cluster_bootstrap_p95
+        for request_class, slo in self.profile.request_class_slos:
+            try:
+                clusters = tuple(
+                    tuple(replication.request_class_latencies[request_class])
+                    for replication in replications
                 )
-                interval = bootstrap(
-                    clusters,
-                    request_class=request_class,
-                    slo=slo,
-                    resample_count=self.profile.bootstrap_resample_count,
-                    seed=self.profile.optimization_seed_policy.deterministic_seed(
-                        "bootstrap",
-                        "optimization-evaluation",
-                        self.profile.profile_fingerprint,
-                        configuration,
-                        scenario,
-                        request_class,
-                        look_index,
-                        len(replications),
-                    ),
-                    lower_tail_probability=tail_alpha,
-                    upper_tail_probability=1.0 - tail_alpha,
-                    minimum_tail_draws=self.profile.minimum_bootstrap_tail_draws,
-                )
-                intervals.append((label, interval))
+            except (AttributeError, KeyError, TypeError) as error:
+                raise ValueError(
+                    f"Replication output has no raw cohort for {request_class!r}."
+                ) from error
+            total = sum(len(cluster) for cluster in clusters)
+            nonempty = sum(bool(cluster) for cluster in clusters)
+            counts.append((request_class, total))
+            if total < self.profile.minimum_eligible_samples_per_request_class:
+                continue
+            if nonempty < self.profile.minimum_nonempty_replications_per_request_class:
+                continue
+            bootstrap = (
+                replication_cluster_bootstrap_mean
+                if self.profile.latency_slo_kind == "mean"
+                else replication_cluster_bootstrap_p95
+            )
+            interval = bootstrap(
+                clusters,
+                request_class=request_class,
+                slo=slo,
+                resample_count=self.profile.bootstrap_resample_count,
+                seed=self.profile.optimization_seed_policy.deterministic_seed(
+                    "bootstrap",
+                    "optimization-evaluation",
+                    self.profile.profile_fingerprint,
+                    configuration,
+                    request_class,
+                    look_index,
+                    len(replications),
+                ),
+                lower_tail_probability=tail_alpha,
+                upper_tail_probability=1.0 - tail_alpha,
+                minimum_tail_draws=self.profile.minimum_bootstrap_tail_draws,
+            )
+            intervals.append((request_class, interval))
         return tuple(intervals), tuple(counts)
 
     @staticmethod
@@ -278,8 +263,7 @@ class CalibratedConfigurationEvaluator:
                 )
 
             all_seeds = self.profile.optimization_seeds()
-            scenario_systems = self._scenario_systems()
-            replications = {name: [] for name in scenario_systems}
+            replications = []
             looks = []
             previous_count = 0
             final_intervals = ()
@@ -306,21 +290,17 @@ class CalibratedConfigurationEvaluator:
                     },
                 )
                 try:
-                    batches = {
-                        scenario: scenario_system.simulate_measurement_replications(
+                    batch = tuple(
+                        self.system.simulate_measurement_replications(
                             warmup_duration=self.profile.warmup_duration,
                             measurement_duration=self.profile.measurement_duration,
                             seeds=batch_seeds,
                             workers=self.workers,
                             maximum_drain_time=self.profile.maximum_drain_time,
                         )
-                        for scenario, scenario_system in scenario_systems.items()
-                    }
-                except Exception as error:
-                    completed_replications = min(
-                        (len(items) for items in replications.values()),
-                        default=0,
                     )
+                except Exception as error:
+                    completed_replications = len(replications)
                     return ConfigurationEvaluation(
                         configuration=configuration,
                         classification=SimulationClassification.SIMULATION_FAILURE,
@@ -337,17 +317,13 @@ class CalibratedConfigurationEvaluator:
                         simulation_diagnostics=(),
                         failure_reason=str(error),
                     )
-                if any(
-                    tuple(item.seed for item in batch) != batch_seeds
-                    for batch in batches.values()
-                ):
+                if tuple(item.seed for item in batch) != batch_seeds:
                     return self._failure(
                         configuration,
                         SimulationClassification.SIMULATION_FAILURE,
                         "Simulator returned a different seed sequence than requested.",
                     )
-                for scenario, batch in batches.items():
-                    replications[scenario].extend(batch)
+                replications.extend(batch)
                 self._progress(
                     "replication_batch_completed",
                     {
@@ -358,29 +334,24 @@ class CalibratedConfigurationEvaluator:
                         "maximum_replications": (
                             self.profile.maximum_optimization_replications
                         ),
-                        "scenario_count": len(scenario_systems),
                     },
                 )
                 processed_events += sum(
                     int(getattr(item, "processed_event_count", 0))
-                    for batch in batches.values()
                     for item in batch
                 )
                 external_arrivals += sum(
                     int(getattr(item, "external_arrival_count", 0))
-                    for batch in batches.values()
                     for item in batch
                 )
                 completed_requests += sum(
                     int(getattr(item, "completed_request_count", 0))
-                    for batch in batches.values()
                     for item in batch
                 )
                 maximum_stop_time = max(
                     maximum_stop_time,
                     *(
                         float(getattr(item, "stop_time", 0.0))
-                        for batch in batches.values()
                         for item in batch
                     ),
                 )
@@ -409,8 +380,7 @@ class CalibratedConfigurationEvaluator:
                     )
                 final_classification = self._classification(
                     final_intervals,
-                    len(self.profile.request_class_slos)
-                    * len(self.profile.required_scenarios),
+                    len(self.profile.request_class_slos),
                     replication_count == self.profile.maximum_optimization_replications,
                 )
                 looks.append(
@@ -451,10 +421,7 @@ class CalibratedConfigurationEvaluator:
                     ("external_arrival_count", external_arrivals),
                     ("completed_request_count", completed_requests),
                     ("maximum_stop_time", maximum_stop_time),
-                    (
-                        "scenario_replication_count",
-                        previous_count * len(scenario_systems),
-                    ),
+                    ("replication_count", previous_count),
                 ),
                 failure_reason=failure_reason,
             )

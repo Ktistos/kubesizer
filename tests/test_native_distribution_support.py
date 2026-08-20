@@ -13,14 +13,12 @@ MAXIMUM_WORKLOAD = ROOT / "workload.maximum.yaml"
 
 def _single_service_workload(arrival, service):
     return {
-        "schema_version": 2,
-        "time_unit": "seconds",
-        "request_classes": {"request": {"routing": {}}},
-        "scenarios": {
-            "test": {
-                "entry_services": {"request": {"service": arrival}},
-                "service_times": {"service": service},
-            }
+        "request_classes": {
+            "request": {"concurrency_weight": 1.0, "routing": {}}
+        },
+        "traffic_model": {
+            "entry_services": {"request": {"service": arrival}},
+            "service_times": {"service": service},
         },
     }
 

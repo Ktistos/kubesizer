@@ -28,7 +28,7 @@ from optimization import (
     ReplicaEvaluationMode,
     optimize_node_placement,
 )
-from performance_models import Cluster, QueueingNetworkType, ScenarioSystem, System
+from performance_models import Cluster, QueueingNetworkType, System
 from statistical_workflow import (
     calibrate,
     optimize_with_analytical_model,
@@ -88,15 +88,11 @@ def _read_yaml(path: Path, label: str) -> dict[str, Any]:
 
 def _load_system(
     workload_path: str | Path,
-) -> tuple[System | ScenarioSystem, Path]:
+) -> tuple[System, Path]:
     path = Path(workload_path).expanduser().resolve()
     workload = _read_yaml(path, "workload")
-    legacy_scenario_count = (
-        len(workload.get("scenarios", {})) if workload.get("schema_version") == 2 else 0
-    )
-    system_type = ScenarioSystem if legacy_scenario_count > 1 else System
     return (
-        system_type(
+        System(
             path.stem,
             workload,
             QueueingNetworkType.OPEN,

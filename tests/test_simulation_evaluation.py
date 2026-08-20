@@ -4,11 +4,11 @@ import pytest
 
 from calibration import CalibrationOptions, build_calibration_profile
 from optimization import (
-    AStarOptimizer,
     CalibratedConfigurationEvaluator,
     CalibratedReplicaSizingProblem,
     SimulationClassification,
     StatisticalEvaluationError,
+    UniformCostReplicaOptimizer,
 )
 from performance_models import QueueingNetworkType, System
 
@@ -246,7 +246,7 @@ def test_optimizer_accepts_only_statistically_feasible_goal_and_retains_inconclu
         heuristic=lambda _configuration: 0,
     )
 
-    result = AStarOptimizer().optimize(problem)
+    result = UniformCostReplicaOptimizer().optimize(problem)
 
     assert result.configuration == (2,)
     assert result.metrics.classification == (
@@ -278,7 +278,7 @@ def test_optimizer_aborts_instead_of_treating_simulation_failure_as_infeasible()
     )
 
     with pytest.raises(StatisticalEvaluationError, match="could not be drained") as error:
-        AStarOptimizer().optimize(problem)
+        UniformCostReplicaOptimizer().optimize(problem)
 
     assert error.value.evaluation.classification == (
         SimulationClassification.SIMULATION_FAILURE

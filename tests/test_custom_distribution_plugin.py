@@ -38,14 +38,12 @@ def _custom_spec(*, quantity, scale, symbol, parameters=(), scv=0.0):
 
 def _single_service_workload(arrival, service):
     return {
-        "schema_version": 2,
-        "time_unit": "seconds",
-        "request_classes": {"request": {"routing": {}}},
-        "scenarios": {
-            "test": {
-                "entry_services": {"request": {"service": arrival}},
-                "service_times": {"service": service},
-            }
+        "request_classes": {
+            "request": {"concurrency_weight": 1.0, "routing": {}}
+        },
+        "traffic_model": {
+            "entry_services": {"request": {"service": arrival}},
+            "service_times": {"service": service},
         },
     }
 
@@ -168,34 +166,30 @@ def test_two_point_plugin_matches_its_declared_mean_and_scv():
 def test_concurrency_weights_rescale_custom_interarrival_means():
     unit_symbol = "kubesizer_unit_multiplier"
     workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
         "request_classes": {
             "read": {"concurrency_weight": 0.5, "routing": {}},
             "write": {"concurrency_weight": 0.5, "routing": {}},
         },
-        "scenarios": {
-            "test": {
-                "entry_services": {
-                    "read": {
-                        "service": _custom_spec(
-                            quantity="rate",
-                            scale=8.0,
-                            symbol=unit_symbol,
-                        )
-                    },
-                    "write": {
-                        "service": _custom_spec(
-                            quantity="rate",
-                            scale=2.0,
-                            symbol=unit_symbol,
-                        )
-                    },
+        "traffic_model": {
+            "entry_services": {
+                "read": {
+                    "service": _custom_spec(
+                        quantity="rate",
+                        scale=8.0,
+                        symbol=unit_symbol,
+                    )
                 },
-                "service_times": {
-                    "service": {"distribution": "deterministic", "mean": 0.001}
+                "write": {
+                    "service": _custom_spec(
+                        quantity="rate",
+                        scale=2.0,
+                        symbol=unit_symbol,
+                    )
                 },
-            }
+            },
+            "service_times": {
+                "service": {"distribution": "deterministic", "mean": 0.001}
+            },
         },
     }
     system = System("weighted-custom", workload, QueueingNetworkType.OPEN)

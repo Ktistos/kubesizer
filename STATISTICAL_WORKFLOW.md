@@ -1,8 +1,8 @@
 # Statistically controlled simulation workflow
 
-The production experiment has three deliberately separate stages. `main.py`
-uses the public functions in `statistical_workflow.py`; there is no calibration
-CLI and no persistent configuration-evaluation cache.
+The production experiment has three deliberately separate stages. The
+`kubesizer` command uses the public functions in `statistical_workflow.py`; it
+does not load calibration profiles and has no persistent evaluation cache.
 
 ## Public interface
 
@@ -60,8 +60,8 @@ excluded from latency observations but continue to affect the network.
 The immutable YAML profile fingerprints service identities, routing,
 request-class definitions, arrival and service rates, SLOs, simulator semantics
 and replica bounds. Current replica counts are deliberately absent. A changed
-fingerprinted input invalidates the profile; `main.py` refuses an incompatible
-existing profile rather than silently using or replacing it.
+fingerprinted input invalidates the profile; the public API rejects an
+incompatible profile rather than silently using it.
 
 ## Stage B: optimization evaluation
 
@@ -94,10 +94,10 @@ Replica sizing uses uniform-cost search from the minimum analytically stable
 configuration. Since every transition adds exactly one replica, states are
 examined by the number of replicas added; heterogeneous replica costs can use
 the same algorithm with their actual non-negative step costs. Analytical
-bottleneck utilization orders candidates only within one cost level and is not
-an A* heuristic. After finding a goal, the search finishes that cost level to
-select the feasible configuration with the best confidence-bound/SLO margin.
-It never expands a feasible state.
+bottleneck utilization orders candidates only within one cost level. After
+finding a goal, the search finishes that cost level to select the feasible
+configuration with the best confidence-bound/SLO margin. It never expands a
+feasible state.
 
 A feasible candidate is a proven minimum-cost result only when every cheaper
 state was definitively classified. If a cheaper state reached `R_max` as

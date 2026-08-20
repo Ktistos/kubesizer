@@ -269,45 +269,6 @@ def test_repository_workload_declares_concurrency_weight_for_every_class():
     )
 
 
-def test_versioned_workload_rejects_an_incomplete_empirical_distribution():
-    workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
-        "request_classes": {"read": {"routing": {}}},
-        "scenarios": {
-            "observed": {
-                "entry_services": {
-                    "read": {
-                        "api": {
-                            "distribution": "empirical_interarrival",
-                            "rate": 10.0,
-                        }
-                    }
-                },
-                "service_times": {
-                    "api": {"distribution": "exponential", "rate": 100.0}
-                },
-            }
-        },
-    }
-
-    with pytest.raises(ValueError, match="source, column, and sampling"):
-        System("unsupported", workload, QueueingNetworkType.OPEN)
-
-
-def test_single_traffic_model_does_not_accept_a_scenario_selection():
-    workload_path = Path(__file__).resolve().parents[1] / "workload.yaml"
-    workload = yaml.safe_load(workload_path.read_text(encoding="utf-8"))
-
-    with pytest.raises(ValueError, match="one traffic_model"):
-        System(
-            "single-model",
-            workload,
-            QueueingNetworkType.OPEN,
-            scenario_name="peak",
-        )
-
-
 def test_concurrency_weight_change_invalidates_workload_fingerprint():
     first = weighted_single_service(read_weight=0.5, write_weight=0.5)
     second = weighted_single_service(read_weight=0.6, write_weight=0.4)

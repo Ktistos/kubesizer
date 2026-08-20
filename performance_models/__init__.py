@@ -1,12 +1,11 @@
 from .service import Service
 from .edge import Edge
 from .system import System, QueueingNetworkType
-from .scenario_system import ScenarioAnalyticalResult, ScenarioSystem
 from .workload import (
     DistributionSpec,
     EndToEndLatencySLOSpec,
     ParsedWorkload,
-    ScenarioSpec,
+    TrafficModelSpec,
     normalize_workload_spec,
     parse_workload_spec,
 )
@@ -17,12 +16,10 @@ __all__ = [
     "Service",
     "Edge",
     "System",
-    "ScenarioSystem",
-    "ScenarioAnalyticalResult",
     "QueueingNetworkType",
     "DistributionSpec",
     "EndToEndLatencySLOSpec",
-    "ScenarioSpec",
+    "TrafficModelSpec",
     "ParsedWorkload",
     "parse_workload_spec",
     "normalize_workload_spec",

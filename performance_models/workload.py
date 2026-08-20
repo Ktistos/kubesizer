@@ -9,8 +9,6 @@ from pathlib import Path
 from types import MappingProxyType
 
 
-WORKLOAD_SCHEMA_VERSION = 3
-LEGACY_SCENARIO_SCHEMA_VERSION = 2
 SINGLE_TRAFFIC_MODEL_NAME = "traffic_model"
 CUSTOM_DISTRIBUTION_ABI_VERSION = 1
 
@@ -31,7 +29,7 @@ class DistributionSpec:
 
 
 @dataclass(frozen=True)
-class ScenarioSpec:
+class TrafficModelSpec:
     name: str
     entry_services: Mapping
     service_times: Mapping
@@ -62,30 +60,11 @@ class EndToEndLatencySLOSpec:
 
 @dataclass(frozen=True)
 class ParsedWorkload:
-    schema_version: int
-    time_unit: str
     request_classes: Mapping
     concurrency_weights: Mapping
     request_class_latency_slos: Mapping
-    scenarios: Mapping
+    traffic_model: TrafficModelSpec
     service_names: tuple[str, ...]
-
-    @property
-    def traffic_model(self):
-        if self.schema_version != WORKLOAD_SCHEMA_VERSION:
-            raise ValueError(
-                "traffic_model is unavailable for legacy multi-scenario workloads."
-            )
-        return self.scenarios[SINGLE_TRAFFIC_MODEL_NAME]
-
-    def scenario(self, name):
-        try:
-            return self.scenarios[name]
-        except KeyError as error:
-            choices = ", ".join(self.scenarios)
-            raise ValueError(
-                f"Unknown workload scenario {name!r}; expected one of: {choices}."
-            ) from error
 
 
 def _freeze_mapping(values):
@@ -596,53 +575,22 @@ def _parse_request_classes(
 
 
 def parse_workload_spec(workload, *, base_path=None):
-    """Parse and validate one traffic model or a legacy v2 workload."""
+    """Parse and validate the repository's single traffic-model schema."""
 
     if not isinstance(workload, Mapping):
         raise ValueError("A structured workload must be a mapping.")
-    if "traffic_model" in workload:
-        schema_version = WORKLOAD_SCHEMA_VERSION
-        time_unit = "seconds"
-        expected_top_level = {"request_classes", "traffic_model"}
-        if set(workload) != expected_top_level:
-            raise ValueError(
-                "A single-model workload must contain exactly request_classes "
-                "and traffic_model."
-            )
-        raw_models = {SINGLE_TRAFFIC_MODEL_NAME: workload["traffic_model"]}
-    elif workload.get("schema_version") == LEGACY_SCENARIO_SCHEMA_VERSION:
-        schema_version = LEGACY_SCENARIO_SCHEMA_VERSION
-        expected_top_level = {
-            "schema_version",
-            "time_unit",
-            "request_classes",
-            "scenarios",
-        }
-        if set(workload) != expected_top_level:
-            raise ValueError(
-                "Schema-v2 workload must contain exactly schema_version, "
-                "time_unit, request_classes, and scenarios."
-            )
-        raw_models = workload["scenarios"]
-        time_unit = workload["time_unit"]
-        if not isinstance(time_unit, str) or not time_unit:
-            raise ValueError("time_unit must be a nonempty string.")
-    else:
+    expected_top_level = {"request_classes", "traffic_model"}
+    if set(workload) != expected_top_level:
         raise ValueError(
-            "A structured workload must contain traffic_model. Only legacy "
-            "schema_version 2 scenario files remain supported."
+            "A workload must contain exactly request_classes and traffic_model."
         )
+    raw_models = {SINGLE_TRAFFIC_MODEL_NAME: workload["traffic_model"]}
 
     request_classes = workload["request_classes"]
     if not isinstance(request_classes, Mapping) or not request_classes:
         raise ValueError("request_classes must be a nonempty mapping.")
     if not isinstance(raw_models, Mapping) or not raw_models:
-        name = (
-            "traffic_model"
-            if schema_version == WORKLOAD_SCHEMA_VERSION
-            else "scenarios"
-        )
-        raise ValueError(f"{name} must be a nonempty mapping.")
+        raise ValueError("traffic_model must be a nonempty mapping.")
 
     first_model = next(iter(raw_models.values()))
     if not isinstance(first_model, Mapping):
@@ -657,7 +605,7 @@ def parse_workload_spec(workload, *, base_path=None):
     routing, concurrency_weights, request_class_latency_slos = _parse_request_classes(
         request_classes,
         service_name_set,
-        require_concurrency_weights=(schema_version == WORKLOAD_SCHEMA_VERSION),
+        require_concurrency_weights=True,
     )
 
     models = {}
@@ -681,11 +629,7 @@ def parse_workload_spec(workload, *, base_path=None):
                 f"Traffic model {model_name!r}.service_times must define the same "
                 f"services as every other traffic model: {list(service_names)}."
             )
-        model_path = (
-            "traffic_model"
-            if schema_version == WORKLOAD_SCHEMA_VERSION
-            else f"scenarios.{model_name}"
-        )
+        model_path = "traffic_model"
         service_times = {
             service_name: _parse_distribution(
                 raw_service_times[service_name],
@@ -742,92 +686,38 @@ def parse_workload_spec(workload, *, base_path=None):
                     for service_name, arrival_process in raw_streams.items()
                 }
             )
-        models[model_name] = ScenarioSpec(
+        models[model_name] = TrafficModelSpec(
             name=model_name,
             entry_services=_freeze_mapping(entry_services),
             service_times=_freeze_mapping(service_times),
         )
 
     return ParsedWorkload(
-        schema_version=schema_version,
-        time_unit=time_unit,
         request_classes=routing,
         concurrency_weights=concurrency_weights,
         request_class_latency_slos=request_class_latency_slos,
-        scenarios=_freeze_mapping(models),
+        traffic_model=models[SINGLE_TRAFFIC_MODEL_NAME],
         service_names=service_names,
     )
 
 
-def scenario_names(workload):
-    if not isinstance(workload, Mapping):
-        return ()
-    if "traffic_model" in workload:
-        return (SINGLE_TRAFFIC_MODEL_NAME,)
-    scenarios = workload.get("scenarios")
-    if not isinstance(scenarios, Mapping):
-        return ()
-    return tuple(scenarios)
-
-
-def select_workload_scenario(workload, scenario_name=None):
-    """Return an isolated workload containing exactly one selected scenario."""
-
-    if isinstance(workload, Mapping) and "traffic_model" in workload:
-        if scenario_name not in (None, SINGLE_TRAFFIC_MODEL_NAME):
-            raise ValueError(
-                "Single-model workloads contain one traffic_model and do not "
-                "define selectable scenarios."
-            )
-        return copy.deepcopy(workload)
-    if not isinstance(workload, Mapping) or "schema_version" not in workload:
-        if scenario_name is not None:
-            raise ValueError("Legacy workloads do not define named scenarios.")
-        return copy.deepcopy(workload)
-    names = scenario_names(workload)
-    if scenario_name is None:
-        if len(names) != 1:
-            raise ValueError(
-                "A scenario_name is required when a workload defines multiple "
-                "scenarios."
-            )
-        scenario_name = names[0]
-    if scenario_name not in names:
-        choices = ", ".join(names)
-        raise ValueError(
-            f"Unknown workload scenario {scenario_name!r}; expected one of: {choices}."
-        )
-    selected = copy.deepcopy(workload)
-    selected["scenarios"] = {
-        scenario_name: copy.deepcopy(workload["scenarios"][scenario_name])
-    }
-    return selected
-
-
-def normalize_workload_spec(workload, *, scenario_name=None, base_path=None):
+def normalize_workload_spec(workload, *, base_path=None):
     """Return the mean-rate request-class mapping consumed by ``System``."""
 
     if not isinstance(workload, Mapping) or not (
-        "traffic_model" in workload or "schema_version" in workload
+        "traffic_model" in workload
     ):
         return copy.deepcopy(workload)
 
     parsed = parse_workload_spec(workload, base_path=base_path)
-    if scenario_name is None:
-        if len(parsed.scenarios) != 1:
-            raise ValueError(
-                "A scenario_name is required when a workload defines multiple "
-                "scenarios."
-            )
-        scenario_name = next(iter(parsed.scenarios))
-    scenario = parsed.scenario(scenario_name)
+    traffic_model = parsed.traffic_model
 
     entry_rates = {
         request_class_name: {
             service_name: process.rate
             for service_name, process in streams.items()
         }
-        for request_class_name, streams in scenario.entry_services.items()
+        for request_class_name, streams in traffic_model.entry_services.items()
     }
     class_totals = {
         request_class_name: sum(rates.values())
@@ -856,7 +746,7 @@ def normalize_workload_spec(workload, *, scenario_name=None, base_path=None):
                 continue
             normalized_services[service_name] = {
                 "gamma": entry_rates[request_class_name].get(service_name, 0.0),
-                "mu": scenario.service_times[service_name].rate,
+                "mu": traffic_model.service_times[service_name].rate,
                 "routes": dict(class_routing.get(service_name, {})),
             }
         normalized[request_class_name] = {

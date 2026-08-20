@@ -4,10 +4,9 @@ from enum import Enum
 from .service import Service
 from .workload import (
     DistributionSpec,
+    SINGLE_TRAFFIC_MODEL_NAME,
     normalize_workload_spec,
     parse_workload_spec,
-    scenario_names,
-    select_workload_scenario,
 )
 from .analytical import (
     AnalyticalQueueingModel,
@@ -78,34 +77,26 @@ class System:
         workload,
         type: QueueingNetworkType,
         *,
-        scenario_name=None,
         workload_base_path=None,
     ):
         self.__name = name
-        names = scenario_names(workload)
-        selected_workload = select_workload_scenario(workload, scenario_name)
-        self.__scenario_name = (
-            scenario_name
-            if scenario_name is not None
-            else (names[0] if len(names) == 1 else None)
-        )
-        self.__workload_spec = selected_workload
+        structured = isinstance(workload, dict) and "traffic_model" in workload
+        self.__traffic_model_name = SINGLE_TRAFFIC_MODEL_NAME if structured else None
+        self.__workload_spec = copy.deepcopy(workload)
         self.__workload_base_path = workload_base_path
-        self.__scenario_distribution_spec = None
+        self.__traffic_distribution_spec = None
         self.__request_class_latency_slos = {}
-        if names:
+        if structured:
             parsed = parse_workload_spec(
-                selected_workload,
+                workload,
                 base_path=workload_base_path,
             )
-            self.__scenario_distribution_spec = parsed.scenario(
-                self.__scenario_name
-            )
+            self.__traffic_distribution_spec = parsed.traffic_model
             self.__request_class_latency_slos = dict(
                 parsed.request_class_latency_slos
             )
         workload = normalize_workload_spec(
-            selected_workload,
+            workload,
             base_path=workload_base_path,
         )
         # type refers to either open or closed system
@@ -286,7 +277,7 @@ class System:
         self.__poisson_arrival_flags = self.__calculate_poisson_arrival_flags()
 
     def __initialize_distribution_metadata(self):
-        if self.__scenario_distribution_spec is None:
+        if self.__traffic_distribution_spec is None:
             self.__service_time_specs = {
                 service.get_name(): DistributionSpec(
                     distribution="exponential",
@@ -320,15 +311,15 @@ class System:
                 for request_class in self.get_request_classes()
             }
         else:
-            scenario = self.__scenario_distribution_spec
-            self.__service_time_specs = dict(scenario.service_times)
+            traffic_model = self.__traffic_distribution_spec
+            self.__service_time_specs = dict(traffic_model.service_times)
             self.__entry_arrival_specs = {
                 request_class: {
                     service_name: _rescale_interarrival_spec(
                         process,
                         self.get_service(service_name).get_gamma(request_class),
                     )
-                    for service_name, process in scenario.entry_services[
+                    for service_name, process in traffic_model.entry_services[
                         request_class
                     ].items()
                 }
@@ -782,9 +773,9 @@ class System:
     def get_name(self):
         return self.__name
 
-    def get_scenario_name(self):
-        """Return the selected versioned-workload scenario, if any."""
-        return self.__scenario_name
+    def get_traffic_model_name(self):
+        """Return the structured workload model name, if applicable."""
+        return self.__traffic_model_name
 
     def get_workload_base_path(self):
         return self.__workload_base_path

@@ -32,7 +32,7 @@ class SearchProblem(GraphSearchProblem):
         return dict(self.graph[current])[neighbor]
 
     def heuristic(self, state):
-        raise AssertionError("Uniform-cost search must not request an A* heuristic.")
+        raise AssertionError("Uniform-cost search must not request a heuristic.")
 
     def search_tie_breaker(self, state):
         return self.state_ordering.get(state, 0.0)

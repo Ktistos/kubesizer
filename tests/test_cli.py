@@ -41,7 +41,7 @@ def _fake_replica_result(*, solution_mode="EXACT"):
     metrics = SimpleNamespace(
         classification=_Classification(),
         evaluation_basis="ANALYTICAL_MEAN_LATENCY",
-        scenario_means={"default": {"request": 0.5}},
+        means={"request": 0.5},
         limits={"request": 1.0},
     )
     return SimpleNamespace(

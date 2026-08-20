@@ -324,27 +324,25 @@ def test_native_feedback_network_matches_analytical_visit_ratios():
 
 def test_native_gamma_service_matches_exact_mg1_mean():
     workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
-        "request_classes": {"request": {"routing": {}}},
-        "scenarios": {
-            "gamma-service": {
-                "entry_services": {
-                    "request": {
-                        "service": {
-                            "distribution": "exponential",
-                            "rate": 4.0,
-                        }
-                    }
-                },
-                "service_times": {
+        "request_classes": {
+            "request": {"concurrency_weight": 1.0, "routing": {}}
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {
                     "service": {
-                        "distribution": "gamma",
-                        "mean": 0.1,
-                        "scv": 2.0,
+                        "distribution": "exponential",
+                        "rate": 4.0,
                     }
-                },
-            }
+                }
+            },
+            "service_times": {
+                "service": {
+                    "distribution": "gamma",
+                    "mean": 0.1,
+                    "scv": 2.0,
+                }
+            },
         },
     }
     system = System("mg1", workload, QueueingNetworkType.OPEN)

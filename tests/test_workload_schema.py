@@ -44,10 +44,8 @@ def test_single_model_workload_has_no_schema_metadata_or_redundant_name():
     system = System("single-traffic-model", workload, QueueingNetworkType.OPEN)
 
     assert set(workload) == {"request_classes", "traffic_model"}
-    assert parsed.time_unit == "seconds"
-    assert tuple(parsed.scenarios) == ("traffic_model",)
     assert parsed.traffic_model.name == "traffic_model"
-    assert system.get_scenario_name() == "traffic_model"
+    assert system.get_traffic_model_name() == "traffic_model"
     assert system.get_service("api").get_gamma("request") == pytest.approx(2.0)
     assert parsed.request_class_latency_slos["request"].mean_seconds == 1.0
     assert system.get_request_class_latency_slo_kind() == "mean"
@@ -269,31 +267,27 @@ def test_workload_rejects_mixed_mean_and_percentile_slo_kinds():
         parse_workload_spec(workload)
 
 
-def test_versioned_workload_supports_independent_entry_stream_rates():
+def test_workload_supports_independent_entry_stream_rates():
     workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
         "request_classes": {
-            "read": {"routing": {}},
-            "write": {"routing": {}},
+            "read": {"concurrency_weight": 0.8, "routing": {}},
+            "write": {"concurrency_weight": 0.2, "routing": {}},
         },
-        "scenarios": {
-            "normal": {
-                "entry_services": {
-                    "read": {
-                        "api": {"distribution": "exponential", "rate": 6.0},
-                        "worker": {
-                            "distribution": "exponential",
-                            "rate": 2.0,
-                        },
+        "traffic_model": {
+            "entry_services": {
+                "read": {
+                    "api": {"distribution": "exponential", "rate": 6.0},
+                    "worker": {
+                        "distribution": "exponential",
+                        "rate": 2.0,
                     },
-                    "write": {"api": {"distribution": "exponential", "rate": 2.0}},
                 },
-                "service_times": {
-                    "api": {"distribution": "exponential", "rate": 100.0},
-                    "worker": {"distribution": "exponential", "rate": 50.0},
-                },
-            }
+                "write": {"api": {"distribution": "exponential", "rate": 2.0}},
+            },
+            "service_times": {
+                "api": {"distribution": "exponential", "rate": 100.0},
+                "worker": {"distribution": "exponential", "rate": 50.0},
+            },
         },
     }
 
@@ -308,28 +302,24 @@ def test_versioned_workload_supports_independent_entry_stream_rates():
     )
 
 
-def test_versioned_workload_applies_explicit_request_class_concurrency_weights():
+def test_workload_applies_explicit_request_class_concurrency_weights():
     workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
         "request_classes": {
             "read": {"concurrency_weight": 0.25, "routing": {}},
             "write": {"concurrency_weight": 0.75, "routing": {}},
         },
-        "scenarios": {
-            "normal": {
-                "entry_services": {
-                    "read": {
-                        "api": {"distribution": "exponential", "rate": 8.0}
-                    },
-                    "write": {
-                        "api": {"distribution": "exponential", "rate": 2.0}
-                    },
+        "traffic_model": {
+            "entry_services": {
+                "read": {
+                    "api": {"distribution": "exponential", "rate": 8.0}
                 },
-                "service_times": {
-                    "api": {"distribution": "exponential", "rate": 100.0}
+                "write": {
+                    "api": {"distribution": "exponential", "rate": 2.0}
                 },
-            }
+            },
+            "service_times": {
+                "api": {"distribution": "exponential", "rate": 100.0}
+            },
         },
     }
 
@@ -369,26 +359,22 @@ def test_versioned_workload_applies_explicit_request_class_concurrency_weights()
         ),
     ),
 )
-def test_versioned_workload_rejects_invalid_concurrency_weights(
+def test_workload_rejects_invalid_concurrency_weights(
     request_classes,
     message,
 ):
     workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
         "request_classes": request_classes,
-        "scenarios": {
-            "normal": {
-                "entry_services": {
-                    name: {
-                        "api": {"distribution": "exponential", "rate": 1.0}
-                    }
-                    for name in request_classes
-                },
-                "service_times": {
-                    "api": {"distribution": "exponential", "rate": 10.0}
-                },
-            }
+        "traffic_model": {
+            "entry_services": {
+                name: {
+                    "api": {"distribution": "exponential", "rate": 1.0}
+                }
+                for name in request_classes
+            },
+            "service_times": {
+                "api": {"distribution": "exponential", "rate": 10.0}
+            },
         },
     }
 
@@ -396,23 +382,19 @@ def test_versioned_workload_rejects_invalid_concurrency_weights(
         System("invalid-class-mix", workload, QueueingNetworkType.OPEN)
 
 
-def test_versioned_workload_requires_every_request_class_entry_stream():
+def test_workload_requires_every_request_class_entry_stream():
     workload = {
-        "schema_version": 2,
-        "time_unit": "seconds",
         "request_classes": {
-            "read": {"routing": {}},
-            "write": {"routing": {}},
+            "read": {"concurrency_weight": 0.5, "routing": {}},
+            "write": {"concurrency_weight": 0.5, "routing": {}},
         },
-        "scenarios": {
-            "normal": {
-                "entry_services": {
-                    "read": {"api": {"distribution": "exponential", "rate": 6.0}}
-                },
-                "service_times": {
-                    "api": {"distribution": "exponential", "rate": 100.0}
-                },
-            }
+        "traffic_model": {
+            "entry_services": {
+                "read": {"api": {"distribution": "exponential", "rate": 6.0}}
+            },
+            "service_times": {
+                "api": {"distribution": "exponential", "rate": 100.0}
+            },
         },
     }
 
