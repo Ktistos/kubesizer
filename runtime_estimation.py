@@ -16,9 +16,11 @@ from optimization import (
     DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     NodePlacementProblem,
     OptimizationMode,
+    OptimizationModes,
     ScalablePlacementSearchOptions,
     ScalableReplicaSearchOptions,
     normalize_optimization_mode,
+    optimization_workflow_mode,
     resolve_optimization_mode,
 )
 from performance_models import Cluster
@@ -90,6 +92,13 @@ class WorkflowRuntimeEstimate:
     @property
     def total_configured_ceiling_seconds(self):
         return sum(stage.configured_ceiling_seconds for stage in self.stages)
+
+    @property
+    def workflow_search_mode(self):
+        return optimization_workflow_mode(
+            self.replica_search_mode,
+            self.placement_search_mode_at_maximum_bounds,
+        )
 
 
 def _bounded_configuration(maximum_replicas, service_count):
@@ -472,6 +481,7 @@ def calculate_workflow_runtime_estimate(
     workers=1,
     safety_factor=DEFAULT_RUNTIME_SAFETY_FACTOR,
     optimization_mode=OptimizationMode.AUTO,
+    optimization_modes=None,
     exact_replica_configuration_limit=(
         DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT
     ),
@@ -597,8 +607,15 @@ def calculate_workflow_runtime_estimate(
     replica_configuration_count = math.prod(
         high - low + 1 for low, high in zip(minimum, maximum)
     )
+    mode_policy = (
+        OptimizationModes.uniform(optimization_mode)
+        if optimization_modes is None
+        else optimization_modes
+    )
+    if not isinstance(mode_policy, OptimizationModes):
+        raise TypeError("optimization_modes must be an OptimizationModes value.")
     selected_replica_mode = resolve_optimization_mode(
-        optimization_mode,
+        mode_policy.replica,
         replica_configuration_count,
         exact_replica_configuration_limit,
     )
@@ -707,7 +724,7 @@ def calculate_workflow_runtime_estimate(
         for replica_count in maximum
     )
     selected_placement_mode = resolve_optimization_mode(
-        optimization_mode,
+        mode_policy.placement,
         maximum_placement_count,
         exact_placement_configuration_limit,
     )
@@ -851,6 +868,7 @@ def estimate_workflow_runtime(
     workers=1,
     safety_factor=DEFAULT_RUNTIME_SAFETY_FACTOR,
     optimization_mode=OptimizationMode.AUTO,
+    optimization_modes=None,
     exact_replica_configuration_limit=(
         DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT
     ),
@@ -876,6 +894,7 @@ def estimate_workflow_runtime(
         workers=workers,
         safety_factor=safety_factor,
         optimization_mode=optimization_mode,
+        optimization_modes=optimization_modes,
         exact_replica_configuration_limit=exact_replica_configuration_limit,
         exact_placement_configuration_limit=exact_placement_configuration_limit,
         scalable_replica_options=scalable_replica_options,
@@ -904,7 +923,8 @@ def format_runtime_estimate(estimate):
             f"safety factor: {estimate.safety_factor:g}x"
         ),
         (
-            "  Pre-calibration hard-cap modes: replica "
+            "  Resolved workflow search mode: "
+            f"{estimate.workflow_search_mode}; replica "
             f"{estimate.replica_search_mode}; placement-at-maximum-bounds "
             f"{estimate.placement_search_mode_at_maximum_bounds}."
         ),

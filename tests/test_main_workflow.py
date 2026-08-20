@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import pytest
 
 import main
-from optimization import ReplicaEvaluationMode
+from optimization import (
+    OptimizationMode,
+    OptimizationModes,
+    ReplicaEvaluationMode,
+    WorkflowOptimizationMode,
+)
 
 
 def test_calibrate_before_optimization_always_runs_complete_calibration(monkeypatch):
@@ -51,6 +56,15 @@ def test_optimization_and_final_validation_use_public_profile_interface(monkeypa
     monkeypatch.setattr(main, "validate_final_configuration", fake_validate)
 
     runtime_limit_calibration = object()
+    monkeypatch.setattr(
+        main,
+        "OPTIMIZATION_MODES",
+        OptimizationModes(
+            mode=WorkflowOptimizationMode.HYBRID,
+            replica=OptimizationMode.EXACT,
+            placement=OptimizationMode.SCALABLE,
+        ),
+    )
     assert (
         main.optimize_replicas(
             object(),
@@ -62,6 +76,7 @@ def test_optimization_and_final_validation_use_public_profile_interface(monkeypa
     assert optimization_arguments["runtime_limit_calibration"] is (
         runtime_limit_calibration
     )
+    assert optimization_arguments["mode"] == OptimizationMode.EXACT
     result = SimpleNamespace(configuration=(2,))
     assert main.validate_optimizer_result(object(), result, profile) is validated
     assert "report_directory" not in validation_arguments

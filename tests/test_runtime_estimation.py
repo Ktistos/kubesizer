@@ -5,7 +5,12 @@ import pytest
 import yaml
 
 from calibration import CalibrationOptions, initial_measurement_duration
-from optimization import ScalableReplicaSearchOptions
+from optimization import (
+    OptimizationMode,
+    OptimizationModes,
+    ScalableReplicaSearchOptions,
+    WorkflowOptimizationMode,
+)
 from performance_models import QueueingNetworkType, System
 from runtime_estimation import (
     RuntimeBenchmarkRates,
@@ -58,6 +63,7 @@ def test_estimate_reports_ordinary_and_full_configured_work():
     assert result.maximum_placement_count == 66**5
     assert result.replica_search_mode == "SCALABLE"
     assert result.placement_search_mode_at_maximum_bounds == "SCALABLE"
+    assert result.workflow_search_mode == "SCALABLE"
     assert result.measurement_duration_ceiling == pytest.approx(
         4 * initial_measurement_duration(system, options)
     )
@@ -89,6 +95,51 @@ def test_formatted_estimate_is_explicitly_not_a_guaranteed_bound():
     assert "SCALABLE mode: at most 64 configurations" in report
     assert "replica SCALABLE" in report
     assert "placement-at-maximum-bounds SCALABLE" in report
+
+
+def test_auto_can_resolve_to_hybrid_workflow():
+    system, resources = _system_and_resources()
+
+    result = calculate_workflow_runtime_estimate(
+        system,
+        resources,
+        _rates(),
+        options=CalibrationOptions(),
+        maximum_replicas=10,
+        workers=8,
+        exact_replica_configuration_limit=100_000,
+        exact_placement_configuration_limit=1,
+        optimization_modes=OptimizationModes(),
+    )
+
+    assert result.replica_search_mode == "EXACT"
+    assert result.placement_search_mode_at_maximum_bounds == "SCALABLE"
+    assert result.workflow_search_mode == "HYBRID"
+    assert "Resolved workflow search mode: HYBRID" in format_runtime_estimate(result)
+
+
+def test_explicit_hybrid_modes_override_each_search_threshold():
+    system, resources = _system_and_resources()
+
+    result = calculate_workflow_runtime_estimate(
+        system,
+        resources,
+        _rates(),
+        options=CalibrationOptions(),
+        maximum_replicas=10,
+        workers=8,
+        exact_replica_configuration_limit=1,
+        exact_placement_configuration_limit=10**15,
+        optimization_modes=OptimizationModes(
+            mode=WorkflowOptimizationMode.HYBRID,
+            replica=OptimizationMode.EXACT,
+            placement=OptimizationMode.SCALABLE,
+        ),
+    )
+
+    assert result.replica_search_mode == "EXACT"
+    assert result.placement_search_mode_at_maximum_bounds == "SCALABLE"
+    assert result.workflow_search_mode == "HYBRID"
 
 
 def test_scalable_replica_mode_caps_projected_configuration_work():

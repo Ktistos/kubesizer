@@ -12,6 +12,63 @@ class OptimizationMode(str, Enum):
     APPROXIMATE = "SCALABLE"
 
 
+class WorkflowOptimizationMode(str, Enum):
+    AUTO = "AUTO"
+    EXACT = "EXACT"
+    SCALABLE = "SCALABLE"
+    HYBRID = "HYBRID"
+
+
+@dataclass(frozen=True)
+class OptimizationModes:
+    """Independent search-mode policy for replica sizing and placement.
+
+    Each optimizer still receives only a mode it can execute.  A workflow is
+    described as HYBRID when the two modes differ, whether they were selected
+    explicitly or resolved independently from AUTO.
+    """
+
+    mode: WorkflowOptimizationMode = WorkflowOptimizationMode.AUTO
+    replica: OptimizationMode | None = None
+    placement: OptimizationMode | None = None
+
+    def __post_init__(self):
+        workflow_mode = normalize_workflow_optimization_mode(self.mode)
+        object.__setattr__(self, "mode", workflow_mode)
+        if workflow_mode == WorkflowOptimizationMode.HYBRID:
+            if self.replica is None or self.placement is None:
+                raise ValueError(
+                    "HYBRID mode requires explicit replica and placement modes."
+                )
+            replica = normalize_optimization_mode(self.replica)
+            placement = normalize_optimization_mode(self.placement)
+            if OptimizationMode.AUTO in {replica, placement}:
+                raise ValueError(
+                    "HYBRID replica and placement modes must be EXACT or SCALABLE."
+                )
+            if replica == placement:
+                raise ValueError(
+                    "HYBRID mode requires replica and placement modes to differ."
+                )
+        else:
+            if self.replica is not None or self.placement is not None:
+                raise ValueError(
+                    "Per-optimizer modes may only be specified in HYBRID mode."
+                )
+            replica = OptimizationMode(workflow_mode.value)
+            placement = replica
+        object.__setattr__(self, "replica", replica)
+        object.__setattr__(self, "placement", placement)
+
+    @classmethod
+    def uniform(cls, mode):
+        return cls(mode=normalize_workflow_optimization_mode(mode))
+
+    @property
+    def workflow_mode(self):
+        return self.mode.value
+
+
 class ReplicaEvaluationMode(str, Enum):
     """Choose deterministic analytical means or statistical p95 simulation."""
 
@@ -29,6 +86,31 @@ def normalize_optimization_mode(value):
     except ValueError as error:
         choices = "AUTO, EXACT, SCALABLE (or APPROXIMATE)"
         raise ValueError(f"optimization mode must be one of: {choices}.") from error
+
+
+def normalize_workflow_optimization_mode(value):
+    if isinstance(value, WorkflowOptimizationMode):
+        return value
+    if isinstance(value, OptimizationMode):
+        return WorkflowOptimizationMode(value.value)
+    if str(value).upper() == "APPROXIMATE":
+        return WorkflowOptimizationMode.SCALABLE
+    try:
+        return WorkflowOptimizationMode(str(value).upper())
+    except ValueError as error:
+        choices = "AUTO, EXACT, SCALABLE, HYBRID (or APPROXIMATE)"
+        raise ValueError(
+            f"workflow optimization mode must be one of: {choices}."
+        ) from error
+
+
+def optimization_workflow_mode(replica_mode, placement_mode):
+    """Describe the combined result of two independently selected modes."""
+    replica_mode = normalize_optimization_mode(replica_mode)
+    placement_mode = normalize_optimization_mode(placement_mode)
+    if replica_mode == placement_mode:
+        return replica_mode.value
+    return "HYBRID"
 
 
 def normalize_replica_evaluation_mode(value):

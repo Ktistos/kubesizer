@@ -5,7 +5,10 @@ from calibration import CalibrationOptions
 from optimization import (
     NodePlacementProblem,
     OptimizationMode,
+    OptimizationModes,
     ReplicaEvaluationMode,
+    WorkflowOptimizationMode,
+    optimization_workflow_mode,
     optimize_node_placement,
 )
 from performance_models import Cluster, QueueingNetworkType, ScenarioSystem, System
@@ -38,7 +41,11 @@ ANALYTICAL_REQUEST_CLASS_MEAN_LATENCY_LIMITS = {
 MAX_REPLICAS_PER_SERVICE = 10
 SIMULATION_WORKERS = min(8, os.cpu_count() or 1)
 REPLICA_EVALUATION_MODE = ReplicaEvaluationMode.SIMULATION
-OPTIMIZATION_MODE = OptimizationMode.AUTO
+# AUTO is resolved independently for the two search spaces. An explicit HYBRID
+# selection must name which optimizer is EXACT and which is SCALABLE.
+OPTIMIZATION_MODES = OptimizationModes(
+    mode=WorkflowOptimizationMode.AUTO,
+)
 EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS = 600.0
 RUNTIME_LIMIT_SAFETY_FACTOR = 3.0
 
@@ -66,7 +73,7 @@ def optimize_replicas(
         system,
         calibration_profile,
         workers=SIMULATION_WORKERS,
-        mode=OPTIMIZATION_MODE,
+        mode=OPTIMIZATION_MODES.replica,
         runtime_limit_calibration=runtime_limit_calibration,
     )
 
@@ -79,7 +86,7 @@ def optimize_replicas_analytically(system):
             ANALYTICAL_REQUEST_CLASS_MEAN_LATENCY_LIMITS
         ),
         maximum_replicas=MAX_REPLICAS_PER_SERVICE,
-        mode=OPTIMIZATION_MODE,
+        mode=OPTIMIZATION_MODES.replica,
     )
 
 
@@ -188,7 +195,7 @@ def main():
                 options=options,
                 maximum_replicas=MAX_REPLICAS_PER_SERVICE,
                 workers=SIMULATION_WORKERS,
-                optimization_mode=OPTIMIZATION_MODE,
+                optimization_modes=OPTIMIZATION_MODES,
             )
         except Exception as error:
             print(f"Runtime speculation unavailable: {error}")
@@ -221,7 +228,7 @@ def main():
                         EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS
                     ),
                     safety_factor=RUNTIME_LIMIT_SAFETY_FACTOR,
-                    mode=OPTIMIZATION_MODE,
+                    mode=OPTIMIZATION_MODES.replica,
                 )
             except Exception as error:
                 print(
@@ -261,7 +268,7 @@ def main():
     cluster = Cluster("okeanos", resources, system)
     placement_result = optimize_node_placement(
         NodePlacementProblem(cluster),
-        mode=OPTIMIZATION_MODE,
+        mode=OPTIMIZATION_MODES.placement,
     )
     print("Node placement:", placement_result.configuration)
     print(
@@ -280,6 +287,12 @@ def main():
                 False,
             ),
         },
+    )
+    replica_mode = str(getattr(replica_result, "solution_mode", "EXACT"))
+    placement_mode = str(getattr(placement_result, "solution_mode", "EXACT"))
+    print(
+        "Resolved workflow search mode:",
+        optimization_workflow_mode(replica_mode, placement_mode),
     )
 
 
