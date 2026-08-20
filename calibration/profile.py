@@ -579,7 +579,7 @@ def _scenario_systems(system):
 
 
 def _distribution_fingerprint(specification):
-    nonsemantic_fields = {"source", "column", "timestamp_column"}
+    nonsemantic_fields = {"source", "column", "timestamp_column", "library"}
     return {
         "distribution": specification.distribution,
         "mean": float(specification.mean),

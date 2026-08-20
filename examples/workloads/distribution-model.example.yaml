@@ -1,0 +1,94 @@
+# All built-in arrival and service-time distribution families in one traffic
+# model. Change these declarations and rerun to analyze another workload.
+request_classes:
+  interactive:
+    concurrency_weight: 0.8
+    routing:
+      gateway:
+        database: 0.25
+        worker: 0.20
+        cache: 0.15
+        search: 0.15
+        mailer: 0.10
+      worker:
+        database: 0.40
+        audit: 0.10
+      cache:
+        database: 0.10
+      search:
+        database: 0.20
+      mailer:
+        audit: 0.10
+      database:
+        audit: 0.05
+
+  batch:
+    concurrency_weight: 0.2
+    routing:
+      worker:
+        database: 0.65
+        audit: 0.20
+      audit:
+        worker: 0.05
+
+traffic_model:
+  entry_services:
+    interactive:
+      gateway:
+        distribution: exponential
+        rate: 8.0
+      cache:
+        distribution: deterministic
+        rate: 2.0
+      search:
+        distribution: gamma
+        rate: 2.0
+        scv: 3.0
+      mailer:
+        distribution: lognormal
+        rate: 1.0
+        scv: 2.0
+      database:
+        distribution: empirical_interarrival
+        source: data/interactive-gateway-interarrivals.csv
+        column: interarrival_seconds
+        sampling: iid_with_replacement
+    batch:
+      worker:
+        distribution: weibull
+        rate: 3.0
+        shape: 0.9
+      audit:
+        distribution: arrival_trace
+        source: data/interactive-gateway-arrival-trace.csv
+        timestamp_column: arrival_offset_seconds
+        sampling: block_bootstrap
+        block_duration: 10.0
+
+  service_times:
+    gateway:
+      distribution: exponential
+      rate: 50.0
+    database:
+      distribution: empirical
+      source: data/database-service-times.csv
+      column: service_time_seconds
+      sampling: iid_with_replacement
+    worker:
+      distribution: gamma
+      mean: 0.050
+      scv: 1.5
+    cache:
+      distribution: deterministic
+      mean: 0.0125
+    search:
+      distribution: lognormal
+      mean: 0.040
+      scv: 2.0
+    mailer:
+      distribution: weibull
+      mean: 0.060
+      shape: 1.4
+    audit:
+      distribution: exponential
+      rate: 40.0

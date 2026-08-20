@@ -60,28 +60,20 @@ def _multi_scenario_workload():
     }
 
 
-def test_parser_loads_every_supported_distribution_and_empirical_moments():
-    path = ROOT / "examples" / "workloads" / "distribution-scenarios.example.yaml"
+def test_parser_loads_single_model_distributions_and_empirical_moments():
+    path = ROOT / "examples" / "workloads" / "distribution-model.example.yaml"
     workload = yaml.safe_load(path.read_text(encoding="utf-8"))
 
     parsed = parse_workload_spec(workload, base_path=path.parent)
 
-    assert tuple(parsed.scenarios) == (
-        "baseline_exponential",
-        "variable_parametric",
-        "empirical_iid",
-        "correlated_arrival_trace",
-    )
-    assert parsed.scenario("variable_parametric").entry_services["interactive"][
-        "gateway"
-    ].scv == pytest.approx(3.0)
-    empirical = parsed.scenario("empirical_iid").service_times["database"]
+    assert tuple(parsed.scenarios) == ("traffic_model",)
+    model = parsed.traffic_model
+    assert model.entry_services["interactive"]["search"].scv == pytest.approx(3.0)
+    empirical = model.service_times["database"]
     assert empirical.distribution == "empirical"
     assert empirical.mean > 0.0
     assert empirical.scv >= 0.0
-    trace = parsed.scenario("correlated_arrival_trace").entry_services[
-        "interactive"
-    ]["gateway"]
+    trace = model.entry_services["batch"]["audit"]
     assert trace.distribution == "arrival_trace"
     assert trace.rate > 0.0
 

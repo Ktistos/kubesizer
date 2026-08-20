@@ -1,6 +1,53 @@
 import pytest
 
-from performance_models import QueueingNetworkType, System
+from performance_models import QueueingNetworkType, System, parse_workload_spec
+
+
+def test_single_model_workload_has_no_schema_metadata_or_redundant_name():
+    workload = {
+        "request_classes": {
+            "request": {"concurrency_weight": 1.0, "routing": {}}
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {
+                    "api": {"distribution": "exponential", "rate": 2.0}
+                }
+            },
+            "service_times": {
+                "api": {"distribution": "exponential", "rate": 10.0}
+            },
+        },
+    }
+
+    parsed = parse_workload_spec(workload)
+    system = System("single-traffic-model", workload, QueueingNetworkType.OPEN)
+
+    assert set(workload) == {"request_classes", "traffic_model"}
+    assert parsed.time_unit == "seconds"
+    assert tuple(parsed.scenarios) == ("traffic_model",)
+    assert parsed.traffic_model.name == "traffic_model"
+    assert system.get_scenario_name() == "traffic_model"
+    assert system.get_service("api").get_gamma("request") == pytest.approx(2.0)
+
+
+def test_single_model_workload_requires_explicit_concurrency_weights():
+    workload = {
+        "request_classes": {"request": {"routing": {}}},
+        "traffic_model": {
+            "entry_services": {
+                "request": {
+                    "api": {"distribution": "exponential", "rate": 2.0}
+                }
+            },
+            "service_times": {
+                "api": {"distribution": "exponential", "rate": 10.0}
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="single-model workload"):
+        System("missing-weight", workload, QueueingNetworkType.OPEN)
 
 
 def test_versioned_workload_supports_independent_entry_stream_rates():

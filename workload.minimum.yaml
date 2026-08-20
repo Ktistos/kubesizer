@@ -1,19 +1,16 @@
 # Smallest versioned workload accepted by the current analytical and C++ paths.
-schema_version: 2
-time_unit: seconds
-
 request_classes:
   request:
+    concurrency_weight: 1.0
     routing: {}
 
-scenarios:
-  baseline:
-    entry_services:
-      request:
-        service:
-          distribution: exponential
-          rate: 1.0
-    service_times:
+traffic_model:
+  entry_services:
+    request:
       service:
         distribution: exponential
-        rate: 2.0
+        rate: 1.0
+  service_times:
+    service:
+      distribution: exponential
+      rate: 2.0

@@ -158,8 +158,12 @@ def main():
     with open("resources.yaml", "r", encoding="utf-8") as resources_file:
         resources = yaml.safe_load(resources_file)
 
-    scenario_count = len(workload.get("scenarios", {}))
-    system_type = ScenarioSystem if scenario_count > 1 else System
+    legacy_scenario_count = (
+        len(workload.get("scenarios", {}))
+        if workload.get("schema_version") == 2
+        else 0
+    )
+    system_type = ScenarioSystem if legacy_scenario_count > 1 else System
     system = system_type(
         "STELAR",
         workload,

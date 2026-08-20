@@ -116,15 +116,30 @@ kernel.
 
 ## Weighted concurrent request classes
 
+The current workload format defines exactly one `traffic_model`. There is no
+scenario collection or redundant name such as `normal`; to evaluate another
+operating condition, change the model's distributions and rerun calibration
+and optimization. Numeric rates, means, horizons, and SLOs use seconds by
+convention.
+
 The weighted workload schema is:
 
 ```yaml
-read_heavy:
-  concurrency_weight: 0.7
-  services:
-    api:
-      gamma: 20.0
-      mu: 100.0
+request_classes:
+  read_heavy:
+    concurrency_weight: 0.7
+    routing: {}
+  write_heavy:
+    concurrency_weight: 0.3
+    routing: {}
+traffic_model:
+  entry_services:
+    read_heavy:
+      api: {distribution: exponential, rate: 7.0}
+    write_heavy:
+      api: {distribution: exponential, rate: 3.0}
+  service_times:
+    api: {distribution: exponential, rate: 100.0}
 ```
 
 All request classes still run concurrently and share the same FIFO queues and
@@ -146,13 +161,44 @@ between multiple entry services inside one class. The repository workload uses
 weights 0.7, 0.2, and 0.1, so its original total rate of 33 becomes class rates
 23.1, 6.6, and 3.3.
 
-Legacy in-code workload dictionaries remain supported. Their weights are
-derived from their existing external rates, making their effective rates
-unchanged. A workload cannot mix legacy and weighted class shapes.
+Every request class must declare a concurrency weight, and the weights must sum
+to one. Legacy schema-v2 files and in-code workload dictionaries remain
+read-compatible; new workload files use `request_classes` and `traffic_model`
+without schema metadata.
+
+## Custom distribution plugins
+
+Custom arrival and service-time samplers may be supplied as trusted native
+shared libraries. The public C ABI is declared in
+`cpp/include/kubesizer/custom_distribution.h`. Build the bundled example and
+inspect `examples/workloads/custom-distribution.example.yaml`:
+
+```bash
+native_backend/cpp/build.sh
+```
+
+A custom distribution declares `library`, `symbol`, `abi_version`, numeric
+`parameters`, and analytical `scv`. Interarrival distributions declare `rate`;
+service-time distributions declare `mean`. A sampler receives a callback to
+the replication's deterministic random stream and returns a positive, finite,
+dimensionless multiplier with expected mean one. The kernel multiplies that
+value by the declared mean. Plugins must be reentrant, thread-safe, must not
+retain callback state, and must not throw exceptions across the C ABI.
+
+The parser resolves the library path and fingerprints its SHA-256 content, so
+changing the plugin invalidates statistical calibration. The kernel verifies
+the ABI version and exported sampler symbol when loading the plugin.
+
+Custom plugins execute native code with the user's permissions inside the
+simulator subprocess. Workload files must therefore reference only trusted
+libraries. Declared means and SCVs are inputs to analytical approximations and
+are not proof that a plugin actually produces those moments; validate custom
+samplers statistically before relying on analytical optimization.
 
 ## Frozen execution semantics
 
-- exponential external interarrival and service times;
+- exponential, deterministic, gamma, lognormal, Weibull, empirical, trace, and
+  trusted custom-plugin sampling as applicable to arrivals and service times;
 - one independent `std::mt19937_64` stream per replication;
 - FIFO waiting queues and fixed per-service replica capacities;
 - fixed probabilistic routing, exits, revisits, and loops;
@@ -172,7 +218,7 @@ reproducible within this backend.
 ## Protocol and failures
 
 The adapter sends one JSON request on standard input and expects one JSON
-response on standard output. Protocol version 3 supports:
+response on standard output. Protocol version 4 supports:
 
 - `simulate`;
 - `warmup_ensemble`;

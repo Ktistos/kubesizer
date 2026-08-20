@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import os
@@ -8,7 +9,7 @@ from pathlib import Path
 
 
 PROTOCOL_VERSION = 4
-SIMULATOR_SEMANTICS_VERSION = "native-event-kernel-distributions-cohort-v4"
+SIMULATOR_SEMANTICS_VERSION = "native-event-kernel-custom-distributions-cohort-v5"
 
 
 class NativeBackendError(RuntimeError):
@@ -112,6 +113,31 @@ def _serialize_distribution(specification):
     for field in ("shape", "sampling", "block_duration"):
         if field in parameters:
             result[field] = parameters[field]
+    if specification.distribution == "custom":
+        library = Path(parameters["library"])
+        digest = hashlib.sha256()
+        try:
+            with library.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError as error:
+            raise NativeBackendError(
+                f"Cannot read custom distribution library: {library}"
+            ) from error
+        if digest.hexdigest() != parameters["library_sha256"]:
+            raise NativeBackendError(
+                "Custom distribution library changed after workload parsing: "
+                f"{library}"
+            )
+        result.update(
+            {
+                "library": parameters["library"],
+                "library_sha256": parameters["library_sha256"],
+                "symbol": parameters["symbol"],
+                "abi_version": parameters["abi_version"],
+                "parameters": list(parameters["parameters"]),
+            }
+        )
     if specification.samples:
         result["samples"] = list(specification.samples)
     return result

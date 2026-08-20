@@ -89,22 +89,12 @@ def test_serializer_embeds_empirical_samples_instead_of_csv_paths(tmp_path):
     assert "source" not in arrival_distribution
 
 
-@pytest.mark.parametrize(
-    "scenario_name",
-    (
-        "baseline_exponential",
-        "variable_parametric",
-        "empirical_iid",
-        "correlated_arrival_trace",
-    ),
-)
-def test_every_declared_distribution_scenario_runs_reproducibly(scenario_name):
+def test_declared_distribution_model_runs_reproducibly():
     workload = yaml.safe_load(MAXIMUM_WORKLOAD.read_text(encoding="utf-8"))
     system = System(
         "distribution-smoke",
         workload,
         QueueingNetworkType.OPEN,
-        scenario_name=scenario_name,
         workload_base_path=MAXIMUM_WORKLOAD.parent,
     )
     system.configure_system_replicas(

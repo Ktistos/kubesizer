@@ -4,7 +4,6 @@ import yaml
 
 from performance_models import (
     QueueingNetworkType,
-    ScenarioSystem,
     System,
     parse_workload_spec,
 )
@@ -32,10 +31,10 @@ def test_minimum_workload_is_valid_and_analytically_stable():
     assert system.solve().get_stability()
 
 
-def test_maximum_workload_exercises_all_parser_and_scenario_features():
+def test_maximum_workload_exercises_all_single_model_parser_features():
     workload = _load("workload.maximum.yaml")
     parsed = parse_workload_spec(workload, base_path=ROOT)
-    system = ScenarioSystem(
+    system = System(
         "maximum",
         workload,
         QueueingNetworkType.OPEN,
@@ -46,13 +45,18 @@ def test_maximum_workload_exercises_all_parser_and_scenario_features():
         "interactive",
         "batch",
     )
-    assert tuple(system.get_services()) == ("gateway", "database", "worker")
-    assert system.get_scenario_names() == (
-        "baseline_exponential",
-        "variable_parametric",
-        "empirical_iid",
-        "correlated_arrival_trace",
+    assert tuple(system.get_services()) == (
+        "gateway",
+        "database",
+        "worker",
+        "cache",
+        "search",
+        "mailer",
+        "audit",
     )
+    assert system.get_scenario_name() == "traffic_model"
+    assert tuple(parsed.scenarios) == ("traffic_model",)
+    assert parsed.traffic_model.name == "traffic_model"
     distributions = {
         distribution.distribution
         for scenario in parsed.scenarios.values()

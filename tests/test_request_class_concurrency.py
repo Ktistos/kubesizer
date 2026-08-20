@@ -214,25 +214,21 @@ def test_repository_workload_declares_concurrency_weight_for_every_class():
     workload = yaml.safe_load(workload_path.read_text(encoding="utf-8"))
 
     assert set(workload) == {
-        "schema_version",
-        "time_unit",
         "request_classes",
-        "scenarios",
+        "traffic_model",
     }
-    assert set(workload["scenarios"]) == {"normal"}
-    assert set(workload["scenarios"]["normal"]) == {
+    assert set(workload["traffic_model"]) == {
         "entry_services",
         "service_times",
     }
     assert {
         name: streams["api"]["rate"]
-        for name, streams in workload["scenarios"]["normal"]["entry_services"].items()
+        for name, streams in workload["traffic_model"]["entry_services"].items()
     } == {
         "read_heavy": 23.1,
         "write_heavy": 6.6,
         "compute_heavy": 3.3,
     }
-    assert workload["schema_version"] == 2
     assert {
         name: specification["concurrency_weight"]
         for name, specification in workload["request_classes"].items()
@@ -293,22 +289,17 @@ def test_versioned_workload_rejects_an_incomplete_empirical_distribution():
         System("unsupported", workload, QueueingNetworkType.OPEN)
 
 
-def test_system_requires_an_explicit_selection_for_multiple_scenarios():
+def test_single_traffic_model_does_not_accept_a_scenario_selection():
     workload_path = Path(__file__).resolve().parents[1] / "workload.yaml"
     workload = yaml.safe_load(workload_path.read_text(encoding="utf-8"))
-    workload["scenarios"]["peak"] = workload["scenarios"]["normal"]
 
-    with pytest.raises(ValueError, match="scenario_name is required"):
-        System("multiple", workload, QueueingNetworkType.OPEN)
-
-    selected = System(
-        "multiple",
-        workload,
-        QueueingNetworkType.OPEN,
-        scenario_name="peak",
-    )
-
-    assert selected.get_scenario_name() == "peak"
+    with pytest.raises(ValueError, match="one traffic_model"):
+        System(
+            "single-model",
+            workload,
+            QueueingNetworkType.OPEN,
+            scenario_name="peak",
+        )
 
 
 def test_concurrency_weight_change_invalidates_workload_fingerprint():

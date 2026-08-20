@@ -1,5 +1,6 @@
 import copy
 import csv
+import hashlib
 import math
 from collections import deque
 from collections.abc import Mapping
@@ -8,7 +9,10 @@ from pathlib import Path
 from types import MappingProxyType
 
 
-WORKLOAD_SCHEMA_VERSION = 2
+WORKLOAD_SCHEMA_VERSION = 3
+LEGACY_SCENARIO_SCHEMA_VERSION = 2
+SINGLE_TRAFFIC_MODEL_NAME = "traffic_model"
+CUSTOM_DISTRIBUTION_ABI_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,14 @@ class ParsedWorkload:
     concurrency_weights: Mapping
     scenarios: Mapping
     service_names: tuple[str, ...]
+
+    @property
+    def traffic_model(self):
+        if self.schema_version != WORKLOAD_SCHEMA_VERSION:
+            raise ValueError(
+                "traffic_model is unavailable for legacy multi-scenario workloads."
+            )
+        return self.scenarios[SINGLE_TRAFFIC_MODEL_NAME]
 
     def scenario(self, name):
         try:
@@ -114,6 +126,28 @@ def _csv_values(source, column, label, base_path):
         raise ValueError(
             f"{label}.source column {column!r} must contain numeric values."
         ) from error
+
+
+def _resolved_file(source, label, base_path):
+    if not isinstance(source, str) or not source:
+        raise ValueError(f"{label} must be a nonempty path string.")
+    path = Path(source)
+    if not path.is_absolute():
+        if base_path is None:
+            raise ValueError(f"{label} is relative; workload_base_path is required.")
+        path = Path(base_path) / path
+    path = path.resolve()
+    if not path.is_file():
+        raise ValueError(f"{label} does not identify a file: {path}.")
+    return path
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _parameter_items(specification, *, resolved_source=None):
@@ -297,10 +331,69 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             tuple(timestamps),
         )
 
+    if distribution == "custom":
+        expected = {
+            "distribution",
+            scale_field,
+            "scv",
+            "library",
+            "symbol",
+            "abi_version",
+            "parameters",
+        }
+        if set(specification) != expected:
+            raise ValueError(
+                f"{label} must contain exactly distribution, {scale_field}, scv, "
+                "library, symbol, abi_version, and parameters."
+            )
+        scale = _finite_positive(
+            specification[scale_field], f"{label}.{scale_field}"
+        )
+        scv = _finite_nonnegative(specification["scv"], f"{label}.scv")
+        if specification["abi_version"] != CUSTOM_DISTRIBUTION_ABI_VERSION:
+            raise ValueError(
+                f"{label}.abi_version must be "
+                f"{CUSTOM_DISTRIBUTION_ABI_VERSION}."
+            )
+        symbol = specification["symbol"]
+        if not isinstance(symbol, str) or not symbol:
+            raise ValueError(f"{label}.symbol must be a nonempty string.")
+        raw_parameters = specification["parameters"]
+        if not isinstance(raw_parameters, (list, tuple)):
+            raise ValueError(f"{label}.parameters must be an array.")
+        parameters = []
+        for index, value in enumerate(raw_parameters):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(
+                    f"{label}.parameters[{index}] must be a finite number."
+                )
+            parameters.append(float(value))
+        library = _resolved_file(
+            specification["library"],
+            f"{label}.library",
+            base_path,
+        )
+        resolved_specification = dict(specification)
+        resolved_specification["library"] = str(library)
+        resolved_specification["library_sha256"] = _file_sha256(library)
+        resolved_specification["parameters"] = tuple(parameters)
+        mean = 1.0 / scale if scale_field == "rate" else scale
+        return DistributionSpec(
+            distribution,
+            mean,
+            scv,
+            _parameter_items(resolved_specification),
+        )
+
     supported = (
         "exponential, deterministic, gamma, lognormal, weibull, "
         f"{empirical_name}"
         + (", arrival_trace" if quantity == "interarrival" else "")
+        + ", custom"
     )
     raise ValueError(
         f"{label} uses unsupported {quantity} distribution {distribution!r}; "
@@ -320,7 +413,12 @@ def _reachable_services(entry_services, routing):
     return reachable
 
 
-def _parse_request_classes(request_classes, service_names):
+def _parse_request_classes(
+    request_classes,
+    service_names,
+    *,
+    require_concurrency_weights=False,
+):
     parsed = {}
     concurrency_weights = {}
     weighted_classes = []
@@ -388,6 +486,11 @@ def _parse_request_classes(request_classes, service_names):
             "Every request class must define concurrency_weight when any "
             "request class defines it."
         )
+    if require_concurrency_weights and not all(weighted_classes):
+        raise ValueError(
+            "Every request class in a single-model workload must define "
+            "concurrency_weight."
+        )
     if weighted_classes and all(weighted_classes) and not math.isclose(
         sum(concurrency_weights.values()),
         1.0,
@@ -399,42 +502,60 @@ def _parse_request_classes(request_classes, service_names):
 
 
 def parse_workload_spec(workload, *, base_path=None):
-    """Parse and validate all scenarios in a versioned workload."""
+    """Parse and validate one traffic model or a legacy v2 workload."""
 
-    if not isinstance(workload, Mapping) or "schema_version" not in workload:
-        raise ValueError("parse_workload_spec requires a versioned workload.")
-    expected_top_level = {
-        "schema_version",
-        "time_unit",
-        "request_classes",
-        "scenarios",
-    }
-    if set(workload) != expected_top_level:
+    if not isinstance(workload, Mapping):
+        raise ValueError("A structured workload must be a mapping.")
+    if "traffic_model" in workload:
+        schema_version = WORKLOAD_SCHEMA_VERSION
+        time_unit = "seconds"
+        expected_top_level = {"request_classes", "traffic_model"}
+        if set(workload) != expected_top_level:
+            raise ValueError(
+                "A single-model workload must contain exactly request_classes "
+                "and traffic_model."
+            )
+        raw_models = {SINGLE_TRAFFIC_MODEL_NAME: workload["traffic_model"]}
+    elif workload.get("schema_version") == LEGACY_SCENARIO_SCHEMA_VERSION:
+        schema_version = LEGACY_SCENARIO_SCHEMA_VERSION
+        expected_top_level = {
+            "schema_version",
+            "time_unit",
+            "request_classes",
+            "scenarios",
+        }
+        if set(workload) != expected_top_level:
+            raise ValueError(
+                "Schema-v2 workload must contain exactly schema_version, "
+                "time_unit, request_classes, and scenarios."
+            )
+        raw_models = workload["scenarios"]
+        time_unit = workload["time_unit"]
+        if not isinstance(time_unit, str) or not time_unit:
+            raise ValueError("time_unit must be a nonempty string.")
+    else:
         raise ValueError(
-            "Versioned workload must contain exactly schema_version, time_unit, "
-            "request_classes, and scenarios."
+            "A structured workload must contain traffic_model. Only legacy "
+            "schema_version 2 scenario files remain supported."
         )
-    if workload["schema_version"] != WORKLOAD_SCHEMA_VERSION:
-        raise ValueError(
-            f"Unsupported workload schema_version {workload['schema_version']!r}."
-        )
-    time_unit = workload["time_unit"]
-    if not isinstance(time_unit, str) or not time_unit:
-        raise ValueError("time_unit must be a nonempty string.")
 
     request_classes = workload["request_classes"]
-    raw_scenarios = workload["scenarios"]
     if not isinstance(request_classes, Mapping) or not request_classes:
         raise ValueError("request_classes must be a nonempty mapping.")
-    if not isinstance(raw_scenarios, Mapping) or not raw_scenarios:
-        raise ValueError("scenarios must be a nonempty mapping.")
+    if not isinstance(raw_models, Mapping) or not raw_models:
+        name = (
+            "traffic_model"
+            if schema_version == WORKLOAD_SCHEMA_VERSION
+            else "scenarios"
+        )
+        raise ValueError(f"{name} must be a nonempty mapping.")
 
-    first_scenario = next(iter(raw_scenarios.values()))
-    if not isinstance(first_scenario, Mapping):
-        raise ValueError("Every scenario must be a mapping.")
-    raw_first_services = first_scenario.get("service_times")
+    first_model = next(iter(raw_models.values()))
+    if not isinstance(first_model, Mapping):
+        raise ValueError("Every traffic model must be a mapping.")
+    raw_first_services = first_model.get("service_times")
     if not isinstance(raw_first_services, Mapping) or not raw_first_services:
-        raise ValueError("Every scenario needs a nonempty service_times mapping.")
+        raise ValueError("Every traffic model needs a nonempty service_times mapping.")
     service_names = tuple(raw_first_services)
     service_name_set = set(service_names)
     if any(not isinstance(name, str) or not name for name in service_names):
@@ -442,40 +563,46 @@ def parse_workload_spec(workload, *, base_path=None):
     routing, concurrency_weights = _parse_request_classes(
         request_classes,
         service_name_set,
+        require_concurrency_weights=(schema_version == WORKLOAD_SCHEMA_VERSION),
     )
 
-    scenarios = {}
-    for scenario_name, scenario in raw_scenarios.items():
-        if not isinstance(scenario_name, str) or not scenario_name:
-            raise ValueError("Scenario names must be nonempty strings.")
-        if not isinstance(scenario, Mapping) or set(scenario) != {
+    models = {}
+    for model_name, model in raw_models.items():
+        if not isinstance(model_name, str) or not model_name:
+            raise ValueError("Traffic-model names must be nonempty strings.")
+        if not isinstance(model, Mapping) or set(model) != {
             "entry_services",
             "service_times",
         }:
             raise ValueError(
-                f"Scenario {scenario_name!r} must contain exactly entry_services "
+                f"Traffic model {model_name!r} must contain exactly entry_services "
                 "and service_times."
             )
-        raw_service_times = scenario["service_times"]
+        raw_service_times = model["service_times"]
         if (
             not isinstance(raw_service_times, Mapping)
             or set(raw_service_times) != service_name_set
         ):
             raise ValueError(
-                f"Scenario {scenario_name!r}.service_times must define the same "
-                f"services as every other scenario: {list(service_names)}."
+                f"Traffic model {model_name!r}.service_times must define the same "
+                f"services as every other traffic model: {list(service_names)}."
             )
+        model_path = (
+            "traffic_model"
+            if schema_version == WORKLOAD_SCHEMA_VERSION
+            else f"scenarios.{model_name}"
+        )
         service_times = {
             service_name: _parse_distribution(
                 raw_service_times[service_name],
-                f"scenarios.{scenario_name}.service_times.{service_name}",
+                f"{model_path}.service_times.{service_name}",
                 quantity="service_time",
                 base_path=base_path,
             )
             for service_name in service_names
         }
 
-        raw_entries = scenario["entry_services"]
+        raw_entries = model["entry_services"]
         if not isinstance(raw_entries, Mapping) or set(raw_entries) != set(
             request_classes
         ):
@@ -490,7 +617,7 @@ def parse_workload_spec(workload, *, base_path=None):
                 else set()
             )
             raise ValueError(
-                f"Scenario {scenario_name!r}.entry_services must define every "
+                f"Traffic model {model_name!r}.entry_services must define every "
                 f"request class exactly once; missing={sorted(missing)}, "
                 f"unknown={sorted(unknown)}."
             )
@@ -512,7 +639,7 @@ def parse_workload_spec(workload, *, base_path=None):
                     service_name: _parse_distribution(
                         arrival_process,
                         (
-                            f"scenarios.{scenario_name}.entry_services."
+                            f"{model_path}.entry_services."
                             f"{request_class_name}.{service_name}"
                         ),
                         quantity="interarrival",
@@ -521,25 +648,27 @@ def parse_workload_spec(workload, *, base_path=None):
                     for service_name, arrival_process in raw_streams.items()
                 }
             )
-        scenarios[scenario_name] = ScenarioSpec(
-            name=scenario_name,
+        models[model_name] = ScenarioSpec(
+            name=model_name,
             entry_services=_freeze_mapping(entry_services),
             service_times=_freeze_mapping(service_times),
         )
 
     return ParsedWorkload(
-        schema_version=WORKLOAD_SCHEMA_VERSION,
+        schema_version=schema_version,
         time_unit=time_unit,
         request_classes=routing,
         concurrency_weights=concurrency_weights,
-        scenarios=_freeze_mapping(scenarios),
+        scenarios=_freeze_mapping(models),
         service_names=service_names,
     )
 
 
 def scenario_names(workload):
-    if not isinstance(workload, Mapping) or "schema_version" not in workload:
+    if not isinstance(workload, Mapping):
         return ()
+    if "traffic_model" in workload:
+        return (SINGLE_TRAFFIC_MODEL_NAME,)
     scenarios = workload.get("scenarios")
     if not isinstance(scenarios, Mapping):
         return ()
@@ -549,6 +678,13 @@ def scenario_names(workload):
 def select_workload_scenario(workload, scenario_name=None):
     """Return an isolated workload containing exactly one selected scenario."""
 
+    if isinstance(workload, Mapping) and "traffic_model" in workload:
+        if scenario_name not in (None, SINGLE_TRAFFIC_MODEL_NAME):
+            raise ValueError(
+                "Single-model workloads contain one traffic_model and do not "
+                "define selectable scenarios."
+            )
+        return copy.deepcopy(workload)
     if not isinstance(workload, Mapping) or "schema_version" not in workload:
         if scenario_name is not None:
             raise ValueError("Legacy workloads do not define named scenarios.")
@@ -576,7 +712,9 @@ def select_workload_scenario(workload, scenario_name=None):
 def normalize_workload_spec(workload, *, scenario_name=None, base_path=None):
     """Return the mean-rate request-class mapping consumed by ``System``."""
 
-    if not isinstance(workload, Mapping) or "schema_version" not in workload:
+    if not isinstance(workload, Mapping) or not (
+        "traffic_model" in workload or "schema_version" in workload
+    ):
         return copy.deepcopy(workload)
 
     parsed = parse_workload_spec(workload, base_path=base_path)

@@ -1,4 +1,5 @@
 #include <jansson.h>
+#include "kubesizer/custom_distribution.h"
 
 #include <algorithm>
 #include <atomic>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <dlfcn.h>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -35,7 +37,8 @@ enum class DistributionKind {
     Lognormal,
     Weibull,
     Empirical,
-    ArrivalTrace
+    ArrivalTrace,
+    Custom
 };
 
 struct Distribution {
@@ -45,6 +48,9 @@ struct Distribution {
     double shape{};
     double block_duration{};
     std::vector<double> samples;
+    std::shared_ptr<void> custom_library_handle;
+    kubesizer_custom_sample_fn custom_sampler{};
+    std::vector<double> custom_parameters;
 };
 
 struct Service {
@@ -447,6 +453,12 @@ class Kernel {
         return -std::log(1.0 - draw) * mean;
     }
 
+    static double custom_uniform(void* state) {
+        auto* random = static_cast<std::mt19937_64*>(state);
+        std::uniform_real_distribution<double> uniform(0.0, 1.0);
+        return uniform(*random);
+    }
+
     double sample(
         const Distribution& distribution,
         TraceSamplerState* trace_state = nullptr
@@ -520,6 +532,17 @@ class Kernel {
                 trace_state->elapsed += result;
                 break;
             }
+            case DistributionKind::Custom:
+                if (distribution.custom_sampler == nullptr) {
+                    throw std::runtime_error("custom distribution has no sampler");
+                }
+                result = distribution.mean * distribution.custom_sampler(
+                    custom_uniform,
+                    &random_,
+                    distribution.custom_parameters.data(),
+                    distribution.custom_parameters.size()
+                );
+                break;
         }
         if (!std::isfinite(result) || result <= 0.0) {
             throw std::runtime_error(
@@ -761,6 +784,20 @@ bool required_boolean(json_t* object, const char* key) {
     return json_is_true(value);
 }
 
+template <typename Function>
+Function load_custom_symbol(void* library, const std::string& symbol) {
+    dlerror();
+    void* raw_symbol = dlsym(library, symbol.c_str());
+    const char* error = dlerror();
+    if (error != nullptr || raw_symbol == nullptr) {
+        throw std::runtime_error(
+            "cannot load custom distribution symbol '" + symbol + "': "
+            + (error == nullptr ? "symbol not found" : error)
+        );
+    }
+    return reinterpret_cast<Function>(raw_symbol);
+}
+
 Distribution parse_distribution(json_t* raw, bool allow_arrival_trace) {
     Distribution result;
     const std::string name = json_text(raw, "distribution");
@@ -805,6 +842,62 @@ Distribution parse_distribution(json_t* raw, bool allow_arrival_trace) {
         if (result.block_duration <= 0.0) {
             throw std::runtime_error("arrival_trace block_duration must be positive");
         }
+    } else if (name == "custom") {
+        const std::int64_t abi_version = required_integer(raw, "abi_version");
+        if (abi_version != KUBESIZER_CUSTOM_DISTRIBUTION_ABI_VERSION) {
+            throw std::runtime_error("unsupported custom distribution ABI version");
+        }
+        const std::string library_path = json_text(raw, "library");
+        const std::string symbol = json_text(raw, "symbol");
+        static_cast<void>(json_text(raw, "library_sha256"));
+        json_t* raw_parameters = required(raw, "parameters");
+        if (!json_is_array(raw_parameters)) {
+            throw std::runtime_error("custom distribution parameters must be an array");
+        }
+        std::size_t parameter_index;
+        json_t* raw_parameter;
+        json_array_foreach(raw_parameters, parameter_index, raw_parameter) {
+            if (!json_is_number(raw_parameter)) {
+                throw std::runtime_error(
+                    "custom distribution parameters must be numeric"
+                );
+            }
+            const double parameter = json_number_value(raw_parameter);
+            if (!std::isfinite(parameter)) {
+                throw std::runtime_error(
+                    "custom distribution parameters must be finite"
+                );
+            }
+            result.custom_parameters.push_back(parameter);
+        }
+        void* raw_library = dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (raw_library == nullptr) {
+            const char* error = dlerror();
+            throw std::runtime_error(
+                "cannot load custom distribution library '" + library_path
+                + "': " + (error == nullptr ? "unknown error" : error)
+            );
+        }
+        result.custom_library_handle = std::shared_ptr<void>(
+            raw_library,
+            [](void* library) {
+                if (library != nullptr) dlclose(library);
+            }
+        );
+        const auto plugin_abi = load_custom_symbol<
+            kubesizer_custom_abi_version_fn
+        >(
+            raw_library,
+            "kubesizer_custom_distribution_abi_version"
+        );
+        if (plugin_abi() != KUBESIZER_CUSTOM_DISTRIBUTION_ABI_VERSION) {
+            throw std::runtime_error("custom distribution plugin ABI mismatch");
+        }
+        result.custom_sampler = load_custom_symbol<kubesizer_custom_sample_fn>(
+            raw_library,
+            symbol
+        );
+        result.kind = DistributionKind::Custom;
     } else {
         throw std::runtime_error("unsupported distribution: " + name);
     }
