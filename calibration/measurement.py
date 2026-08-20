@@ -419,6 +419,16 @@ def calibrate_measurement_duration(
                     workers=workers,
                     maximum_drain_time=options.maximum_drain_time,
                 )
+                if progress_callback is not None:
+                    progress_callback(
+                        "measurement_trajectories_completed",
+                        {
+                            "configuration": configuration,
+                            "simulation_duration": simulated_duration,
+                            "replications": len(replications),
+                            "workers": workers,
+                        },
+                    )
                 analysis_durations = tuple(
                     dict.fromkeys(
                         value

@@ -64,14 +64,28 @@ class ConfigurationEvaluation:
 class CalibratedConfigurationEvaluator:
     """Evaluate configurations with frozen W/M and sequential cluster bootstrap."""
 
-    def __init__(self, system, calibration_profile, *, workers=1):
+    def __init__(
+        self,
+        system,
+        calibration_profile,
+        *,
+        workers=1,
+        progress_callback=None,
+    ):
         if not isinstance(calibration_profile, CalibrationProfile):
             raise TypeError("calibration_profile must be a CalibrationProfile.")
         if isinstance(workers, bool) or not isinstance(workers, int) or workers <= 0:
             raise ValueError("workers must be a positive integer.")
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable or None.")
         self.system = system
         self.profile = calibration_profile
         self.workers = workers
+        self.progress_callback = progress_callback
+
+    def _progress(self, event, details):
+        if self.progress_callback is not None:
+            self.progress_callback(event, details)
 
     def _failure(self, configuration, classification, reason, *, analytical=False):
         return ConfigurationEvaluation(
@@ -207,6 +221,15 @@ class CalibratedConfigurationEvaluator:
 
     def evaluate(self, configuration):
         configuration = self._normalize_configuration(configuration)
+        self._progress(
+            "configuration_evaluation_started",
+            {
+                "configuration": configuration,
+                "maximum_replications": (
+                    self.profile.maximum_optimization_replications
+                ),
+            },
+        )
         try:
             validate_profile_for_experiment(
                 self.profile,
@@ -261,6 +284,18 @@ class CalibratedConfigurationEvaluator:
                 self._look_schedule(), start=1
             ):
                 batch_seeds = all_seeds[previous_count:replication_count]
+                self._progress(
+                    "replication_batch_started",
+                    {
+                        "configuration": configuration,
+                        "look_index": look_index,
+                        "batch_replications": len(batch_seeds),
+                        "replication_count": replication_count,
+                        "maximum_replications": (
+                            self.profile.maximum_optimization_replications
+                        ),
+                    },
+                )
                 try:
                     batches = {
                         scenario: scenario_system.simulate_measurement_replications(
@@ -304,6 +339,19 @@ class CalibratedConfigurationEvaluator:
                     )
                 for scenario, batch in batches.items():
                     replications[scenario].extend(batch)
+                self._progress(
+                    "replication_batch_completed",
+                    {
+                        "configuration": configuration,
+                        "look_index": look_index,
+                        "batch_replications": len(batch_seeds),
+                        "replication_count": replication_count,
+                        "maximum_replications": (
+                            self.profile.maximum_optimization_replications
+                        ),
+                        "scenario_count": len(scenario_systems),
+                    },
+                )
                 processed_events += sum(
                     int(getattr(item, "processed_event_count", 0))
                     for batch in batches.values()
@@ -376,7 +424,7 @@ class CalibratedConfigurationEvaluator:
                     "Minimum eligible-sample or nonempty-replication requirements "
                     "were not met at R_max."
                 )
-            return ConfigurationEvaluation(
+            result = ConfigurationEvaluation(
                 configuration=configuration,
                 classification=final_classification,
                 replications_used=previous_count,
@@ -401,5 +449,15 @@ class CalibratedConfigurationEvaluator:
                 ),
                 failure_reason=failure_reason,
             )
+            self._progress(
+                "configuration_evaluation_completed",
+                {
+                    "configuration": configuration,
+                    "replication_count": result.replications_used,
+                    "look_count": result.look_count,
+                    "classification": result.classification.value,
+                },
+            )
+            return result
         finally:
             self.system.configure_system_replicas(original_configuration)

@@ -123,7 +123,11 @@ def test_main_does_not_place_when_fresh_validation_fails(monkeypatch):
         lambda *_args, **_kwargs: optimization,
     )
     monkeypatch.setattr(main, "report_replica_result", lambda *_args: None)
-    monkeypatch.setattr(main, "validate_optimizer_result", lambda *_args: validation)
+    monkeypatch.setattr(
+        main,
+        "validate_optimizer_result",
+        lambda *_args, **_kwargs: validation,
+    )
     monkeypatch.setattr(
         main,
         "Cluster",

@@ -141,10 +141,13 @@ def validate_final_configuration(
     calibration_profile,
     *,
     workers=1,
+    progress_callback=None,
 ):
     """Run one fixed fresh-seed holdout using familywise cluster-bootstrap CIs."""
     configuration = tuple(configuration)
     profile = calibration_profile
+    if progress_callback is not None and not callable(progress_callback):
+        raise TypeError("progress_callback must be callable or None.")
     base = dict(
         replica_configuration=configuration,
         replication_count=0,
@@ -210,9 +213,22 @@ def validate_final_configuration(
             if hasattr(system, "get_scenario_systems")
             else {profile.required_scenarios[0]: system}
         )
+        total_replications = len(seeds) * len(scenario_systems)
+        if progress_callback is not None:
+            progress_callback(
+                "final_validation_started",
+                {
+                    "configuration": configuration,
+                    "completed_replications": 0,
+                    "total_replications": total_replications,
+                    "scenario_count": len(scenario_systems),
+                },
+            )
         try:
-            replications_by_scenario = {
-                scenario: tuple(
+            replications_by_scenario = {}
+            completed_replications = 0
+            for scenario, scenario_system in scenario_systems.items():
+                replications = tuple(
                     scenario_system.simulate_measurement_replications(
                         warmup_duration=profile.warmup_duration,
                         measurement_duration=profile.measurement_duration,
@@ -221,8 +237,18 @@ def validate_final_configuration(
                         maximum_drain_time=profile.maximum_drain_time,
                     )
                 )
-                for scenario, scenario_system in scenario_systems.items()
-            }
+                replications_by_scenario[scenario] = replications
+                completed_replications += len(replications)
+                if progress_callback is not None:
+                    progress_callback(
+                        "final_validation_replications_completed",
+                        {
+                            "configuration": configuration,
+                            "scenario": scenario,
+                            "completed_replications": completed_replications,
+                            "total_replications": total_replications,
+                        },
+                    )
         except Exception as error:
             return CalibratedFinalValidationResult(
                 classification=FinalValidationClassification.SIMULATION_FAILURE,

@@ -836,6 +836,7 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         evaluator=None,
         replica_costs=None,
         structural_feasibility=None,
+        progress_callback=None,
     ):
         self.__system = system
         self.__profile = calibration_profile
@@ -844,6 +845,9 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         self.__initial = tuple(calibration_profile.minimum_replica_configuration)
         self.__replica_costs = self.__normalize_replica_costs(replica_costs)
         self.__structural_feasibility = structural_feasibility
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable or None.")
+        self.__progress_callback = progress_callback
         if len(self.__maximum) != self.__service_count:
             raise ValueError("Calibration profile does not match service count.")
         # The calibrated anchor is already strictly stable, so stability adds
@@ -854,6 +858,7 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
             system,
             calibration_profile,
             workers=simulation_workers,
+            progress_callback=progress_callback,
         )
         self.__evaluation_history = {}
         self.__search_order_cache = {}
@@ -879,6 +884,20 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
     def configuration_evaluations(self):
         """Return run evidence; entries are never reused as simulation cache."""
         return dict(self.__evaluation_history)
+
+    def __report_evaluation(self, configuration, evaluation):
+        if self.__progress_callback is None:
+            return
+        classification = getattr(evaluation, "classification", None)
+        self.__progress_callback(
+            "replica_configuration_evaluated",
+            {
+                "configuration": tuple(configuration),
+                "completed_configurations": len(self.__evaluation_history),
+                "search_space_configurations": self.configuration_count(),
+                "classification": getattr(classification, "value", classification),
+            },
+        )
 
     def __normalize(self, configuration):
         configuration = tuple(configuration)
@@ -995,6 +1014,7 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
                 classification=(SimulationClassification.STRUCTURALLY_INFEASIBLE),
             )
             self.__evaluation_history[configuration] = evaluation
+            self.__report_evaluation(configuration, evaluation)
             return evaluation
         statistical = self.__evaluator.evaluate(configuration)
         self.__system.configure_system_replicas(configuration)
@@ -1035,6 +1055,7 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
             configuration_evaluation=statistical,
         )
         self.__evaluation_history[configuration] = evaluation
+        self.__report_evaluation(configuration, evaluation)
         if statistical.classification in (
             SimulationClassification.SIMULATION_FAILURE,
             SimulationClassification.CALIBRATION_FAILURE,

@@ -503,12 +503,16 @@ def evaluate_configuration(
     *,
     workers=1,
     report_directory=None,
+    progress_callback=None,
 ):
     """Evaluate one configuration under the frozen sequential-look policy."""
+    evaluator_options = {"workers": workers}
+    if progress_callback is not None:
+        evaluator_options["progress_callback"] = progress_callback
     result = CalibratedConfigurationEvaluator(
         system,
         calibration_profile,
-        workers=workers,
+        **evaluator_options,
     ).evaluate(configuration)
     if report_directory is not None:
         save_configuration_evaluation(result, report_directory)
@@ -528,6 +532,7 @@ def optimize_with_calibrated_simulation(
     runtime_limit_calibration=None,
     replica_costs=None,
     structural_feasibility=None,
+    progress_callback=None,
 ):
     """Run exact or bounded scalable statistically controlled replica sizing.
 
@@ -570,6 +575,7 @@ def optimize_with_calibrated_simulation(
         simulation_workers=workers,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
+        progress_callback=progress_callback,
     )
     if optimizer is None:
         selected_mode, selection_reason = optimization_mode_decision(
@@ -604,7 +610,41 @@ def optimize_with_calibrated_simulation(
                 collect_trace=options.collect_trace,
                 selection_reason=selection_reason,
             )
+        evaluation_limit = (
+            configuration_count
+            if selected_mode == OptimizationMode.EXACT
+            else min(configuration_count, options.maximum_configuration_evaluations)
+        )
+        if progress_callback is not None:
+            progress_callback(
+                "replica_optimization_started",
+                {
+                    "selected_mode": selected_mode.value,
+                    "completed_configurations": 0,
+                    "total_configurations": evaluation_limit,
+                    "search_space_configurations": configuration_count,
+                },
+            )
+    elif progress_callback is not None:
+        progress_callback(
+            "replica_optimization_started",
+            {
+                "selected_mode": type(optimizer).__name__,
+                "completed_configurations": 0,
+                "total_configurations": configuration_count,
+                "search_space_configurations": configuration_count,
+            },
+        )
     raw_result = optimizer.optimize(problem)
+    if progress_callback is not None:
+        progress_callback(
+            "replica_optimization_completed",
+            {
+                "selected_mode": getattr(raw_result, "solution_mode", "EXACT"),
+                "completed_configurations": len(problem.configuration_evaluations),
+                "search_space_configurations": configuration_count,
+            },
+        )
     return CalibratedOptimizationResult(
         optimization_result=raw_result,
         configuration_evaluations=tuple(
@@ -666,6 +706,7 @@ def optimize_replica_sizing(
     runtime_limit_calibration=None,
     replica_costs=None,
     structural_feasibility=None,
+    progress_callback=None,
 ):
     """Select evaluation evidence independently from the search algorithm.
 
@@ -731,6 +772,7 @@ def optimize_replica_sizing(
         runtime_limit_calibration=runtime_limit_calibration,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
+        progress_callback=progress_callback,
     )
 
 
@@ -741,6 +783,7 @@ def validate_final_configuration(
     *,
     workers=1,
     report_directory=None,
+    progress_callback=None,
 ):
     """Run the fixed fresh-seed holdout for the locked optimizer candidate."""
     result = _validate_final_configuration(
@@ -748,6 +791,7 @@ def validate_final_configuration(
         configuration,
         calibration_profile,
         workers=workers,
+        progress_callback=progress_callback,
     )
     if report_directory is not None:
         save_final_validation(result, report_directory)

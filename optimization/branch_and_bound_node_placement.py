@@ -61,9 +61,12 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
     _BOUND_RELATIVE_TOLERANCE = 1e-12
     _BOUND_ABSOLUTE_TOLERANCE = 1e-15
 
-    def __init__(self, *, selection_reason=None, clock=None):
+    def __init__(self, *, selection_reason=None, clock=None, progress_callback=None):
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable or None.")
         self.selection_reason = selection_reason
         self._clock = clock or time.perf_counter
+        self.progress_callback = progress_callback
 
     def optimize(self, problem):
         started = self._clock()
@@ -87,6 +90,32 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
         pruned_branches = 0
         pruned_complete_placements = 0
         assignments = {}
+        progress_interval = max(1, total_configurations // 100)
+        next_progress = progress_interval
+
+        def report_progress(*, force=False):
+            nonlocal next_progress
+            covered = complete_states + pruned_complete_placements
+            if self.progress_callback is None or (
+                not force and covered < next_progress
+            ):
+                return
+            self.progress_callback(
+                "placement_search_progress",
+                {
+                    "completed_configurations": min(
+                        covered,
+                        total_configurations,
+                    ),
+                    "total_configurations": total_configurations,
+                    "complete_placements_evaluated": complete_states,
+                    "complete_placements_pruned": pruned_complete_placements,
+                    "selected_mode": "EXACT",
+                },
+            )
+            next_progress = (
+                (covered // progress_interval) + 1
+            ) * progress_interval
 
         remaining_completion_counts = [1] * (len(service_order) + 1)
         for index in range(len(service_order) - 1, -1, -1):
@@ -107,6 +136,7 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
                 complete_states += 1
                 configuration = problem.build_configuration(assignments)
                 evaluation = problem.evaluate(configuration)
+                report_progress()
                 if not evaluation.valid:
                     return
 
@@ -129,6 +159,7 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
                 if not problem.partial_assignment_is_resource_feasible(assignments):
                     pruned_branches += 1
                     pruned_complete_placements += completions_below_candidate
+                    report_progress()
                     continue
                 lower_bound = problem.partial_cost_lower_bound(assignments)
                 candidates.append((lower_bound, distribution))
@@ -142,6 +173,7 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
                 ):
                     pruned_branches += 1
                     pruned_complete_placements += completions_below_candidate
+                    report_progress()
                     continue
 
                 assignments[service_name] = distribution
@@ -150,6 +182,7 @@ class BranchAndBoundNodePlacementOptimizer(Optimizer):
                 assignments.pop(service_name)
 
         search(0)
+        report_progress(force=True)
 
         if best_evaluation is None:
             raise NoFeasibleConfigurationError(

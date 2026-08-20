@@ -13,6 +13,7 @@ from optimization import (
 )
 from performance_models import Cluster, QueueingNetworkType, ScenarioSystem, System
 from runtime_estimation import (
+    LiveWorkflowRuntimeEstimator,
     calibrate_replica_configuration_limit,
     estimate_workflow_runtime,
     format_replica_configuration_limit_calibration,
@@ -50,7 +51,7 @@ EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS = 600.0
 RUNTIME_LIMIT_SAFETY_FACTOR = 3.0
 
 
-def calibrate_before_optimization(system, *, options=None):
+def calibrate_before_optimization(system, *, options=None, progress_callback=None):
     """Run Stage A and keep its profile and diagnostics in memory."""
     return calibrate(
         system,
@@ -58,7 +59,11 @@ def calibrate_before_optimization(system, *, options=None):
         maximum_replicas=MAX_REPLICAS_PER_SERVICE,
         options=options or CalibrationOptions(),
         workers=SIMULATION_WORKERS,
-        progress_callback=lambda stage, details: print(stage, details),
+        progress_callback=(
+            progress_callback
+            if progress_callback is not None
+            else lambda stage, details: print(stage, details)
+        ),
     )
 
 
@@ -67,6 +72,7 @@ def optimize_replicas(
     calibration_profile,
     *,
     runtime_limit_calibration=None,
+    progress_callback=None,
 ):
     """Run Stage B with runtime-adaptive exact/scalable selection."""
     return optimize_with_calibrated_simulation(
@@ -75,6 +81,7 @@ def optimize_replicas(
         workers=SIMULATION_WORKERS,
         mode=OPTIMIZATION_MODES.replica,
         runtime_limit_calibration=runtime_limit_calibration,
+        progress_callback=progress_callback,
     )
 
 
@@ -90,13 +97,20 @@ def optimize_replicas_analytically(system):
     )
 
 
-def validate_optimizer_result(system, optimization_result, calibration_profile):
+def validate_optimizer_result(
+    system,
+    optimization_result,
+    calibration_profile,
+    *,
+    progress_callback=None,
+):
     """Run Stage C on the locked candidate and fresh holdout seeds."""
     return validate_final_configuration(
         system,
         optimization_result.configuration,
         calibration_profile,
         workers=SIMULATION_WORKERS,
+        progress_callback=progress_callback,
     )
 
 
@@ -177,6 +191,7 @@ def main():
         QueueingNetworkType.OPEN,
         workload_base_path=".",
     )
+    live_runtime = None
     if REPLICA_EVALUATION_MODE == ReplicaEvaluationMode.ANALYTICAL:
         print(
             "Replica sizing: analytical mean-latency evaluation; calibration "
@@ -202,9 +217,34 @@ def main():
         else:
             print(format_runtime_estimate(runtime_estimate))
             runtime_rates = getattr(runtime_estimate, "benchmark", None)
+            try:
+                live_runtime = LiveWorkflowRuntimeEstimator(runtime_estimate)
+            except (TypeError, ValueError) as error:
+                print(f"Live runtime updates unavailable: {error}")
 
         print("Stage A: calibrating a fresh statistical profile")
-        profile = calibrate_before_optimization(system, options=options)
+        calibration_progress = (
+            live_runtime.callback("calibration") if live_runtime else None
+        )
+        if live_runtime:
+            live_runtime.start_stage("calibration")
+        try:
+            profile = calibrate_before_optimization(
+                system,
+                options=options,
+                progress_callback=calibration_progress,
+            )
+        except Exception as error:
+            if live_runtime:
+                live_runtime.fail_stage(detail=str(error))
+            raise
+        if live_runtime:
+            live_runtime.complete_stage(
+                detail=(
+                    f"W={profile.warmup_duration:g}, "
+                    f"M={profile.measurement_duration:g}"
+                )
+            )
         print(
             "Calibration profile:",
             {
@@ -243,19 +283,49 @@ def main():
                 )
 
         print("Stage B: optimizing replica counts with calibrated simulation")
-        replica_result = optimize_replicas(
-            system,
-            profile,
-            runtime_limit_calibration=runtime_limit_calibration,
+        replica_progress = (
+            live_runtime.callback("replica_optimization") if live_runtime else None
         )
+        if live_runtime:
+            live_runtime.start_stage("replica_optimization")
+        try:
+            replica_result = optimize_replicas(
+                system,
+                profile,
+                runtime_limit_calibration=runtime_limit_calibration,
+                progress_callback=replica_progress,
+            )
+        except Exception as error:
+            if live_runtime:
+                live_runtime.fail_stage(detail=str(error))
+            raise
+        if live_runtime:
+            live_runtime.complete_stage(
+                detail=f"selected={replica_result.solution_mode}"
+            )
         report_replica_result(system, replica_result)
 
         print("Stage C: validating the selected replicas with fresh seeds")
-        final_validation = validate_optimizer_result(
-            system,
-            replica_result,
-            profile,
+        validation_progress = (
+            live_runtime.callback("final_validation") if live_runtime else None
         )
+        if live_runtime:
+            live_runtime.start_stage("final_validation")
+        try:
+            final_validation = validate_optimizer_result(
+                system,
+                replica_result,
+                profile,
+                progress_callback=validation_progress,
+            )
+        except Exception as error:
+            if live_runtime:
+                live_runtime.fail_stage(detail=str(error))
+            raise
+        if live_runtime:
+            live_runtime.complete_stage(
+                detail=f"classification={final_validation.classification.value}"
+            )
         report_final_validation(final_validation)
         if not final_validation.passed:
             raise RuntimeError(
@@ -266,10 +336,27 @@ def main():
     print("Stage D: optimizing node placement")
     system.configure_system_replicas(replica_result.configuration)
     cluster = Cluster("okeanos", resources, system)
-    placement_result = optimize_node_placement(
-        NodePlacementProblem(cluster),
-        mode=OPTIMIZATION_MODES.placement,
+    placement_progress = (
+        live_runtime.callback("node_placement")
+        if live_runtime
+        else None
     )
+    if placement_progress is not None:
+        live_runtime.start_stage("node_placement")
+    try:
+        placement_result = optimize_node_placement(
+            NodePlacementProblem(cluster),
+            mode=OPTIMIZATION_MODES.placement,
+            progress_callback=placement_progress,
+        )
+    except Exception as error:
+        if placement_progress is not None:
+            live_runtime.fail_stage(detail=str(error))
+        raise
+    if placement_progress is not None:
+        live_runtime.complete_stage(
+            detail=f"selected={getattr(placement_result, 'solution_mode', 'EXACT')}"
+        )
     print("Node placement:", placement_result.configuration)
     print(
         "Node placement search:",

@@ -101,6 +101,372 @@ class WorkflowRuntimeEstimate:
         )
 
 
+@dataclass(frozen=True)
+class LiveRuntimeSnapshot:
+    stage: str
+    event: str
+    completed_units: int | None
+    total_units: int | None
+    unit_name: str | None
+    stage_elapsed_seconds: float
+    stage_remaining_low_seconds: float | None
+    stage_remaining_high_seconds: float | None
+    overall_remaining_low_seconds: float | None
+    overall_remaining_high_seconds: float | None
+    detail: str | None
+    completed: bool
+
+
+class LiveWorkflowRuntimeEstimator:
+    """Update preflight planning estimates with observed workflow progress.
+
+    Remaining-time ranges are operational planning estimates. They combine the
+    measured completion rate with the preflight ordinary/ceiling projections;
+    they are not statistical confidence intervals or wall-clock guarantees.
+    """
+
+    _STAGE_NAMES = {
+        "calibration": "Stage A — calibration",
+        "replica_optimization": "Stage B — replica optimization",
+        "final_validation": "Stage C — final validation",
+        "node_placement": "Stage D — node placement",
+    }
+
+    def __init__(
+        self,
+        estimate,
+        *,
+        output=print,
+        clock=None,
+        minimum_update_interval_seconds=1.0,
+    ):
+        if not callable(output):
+            raise TypeError("output must be callable.")
+        if clock is not None and not callable(clock):
+            raise TypeError("clock must be callable.")
+        if (
+            not math.isfinite(minimum_update_interval_seconds)
+            or minimum_update_interval_seconds < 0
+        ):
+            raise ValueError(
+                "minimum_update_interval_seconds must be finite and non-negative."
+            )
+        self.estimate = estimate
+        self.output = output
+        self.clock = clock or time.perf_counter
+        self.minimum_update_interval_seconds = float(
+            minimum_update_interval_seconds
+        )
+        try:
+            stages = tuple(estimate.stages)
+        except (AttributeError, TypeError) as error:
+            raise TypeError(
+                "estimate must expose workflow stage estimates."
+            ) from error
+        self._stage_estimates = {stage.stage: stage for stage in stages}
+        missing = set(self._STAGE_NAMES.values()).difference(self._stage_estimates)
+        if missing:
+            raise ValueError(
+                "Workflow estimate is missing stages: "
+                + ", ".join(sorted(missing))
+            )
+        self._stage_order = tuple(self._STAGE_NAMES.values())
+        self._active_stage = None
+        self._stage_started = None
+        self._completed_units = None
+        self._total_units = None
+        self._unit_name = None
+        self._last_output_time = -math.inf
+        self._completed_stages = set()
+        self._last_snapshot = None
+
+    @property
+    def last_snapshot(self):
+        return self._last_snapshot
+
+    def _stage_name(self, stage):
+        name = self._STAGE_NAMES.get(stage, stage)
+        if name not in self._stage_estimates:
+            raise ValueError(f"Unknown runtime stage: {stage!r}.")
+        return name
+
+    def start_stage(self, stage, *, total_units=None, unit_name=None):
+        stage = self._stage_name(stage)
+        if self._active_stage is not None:
+            raise RuntimeError(
+                f"Cannot start {stage!r} while {self._active_stage!r} is active."
+            )
+        self._validate_units(0 if total_units is not None else None, total_units)
+        self._active_stage = stage
+        self._stage_started = self.clock()
+        self._completed_units = 0 if total_units is not None else None
+        self._total_units = total_units
+        self._unit_name = unit_name
+        return self._emit("started", detail=None, force=True, completed=False)
+
+    def update_stage(
+        self,
+        *,
+        completed_units=None,
+        total_units=None,
+        unit_name=None,
+        event="progress",
+        detail=None,
+        force=False,
+    ):
+        if self._active_stage is None:
+            raise RuntimeError("No runtime stage is active.")
+        effective_total = self._total_units if total_units is None else total_units
+        effective_completed = (
+            self._completed_units
+            if completed_units is None
+            else completed_units
+        )
+        self._validate_units(effective_completed, effective_total)
+        if (
+            completed_units is not None
+            and self._completed_units is not None
+            and completed_units < self._completed_units
+        ):
+            raise ValueError("completed_units cannot decrease.")
+        self._completed_units = effective_completed
+        self._total_units = effective_total
+        if unit_name is not None:
+            self._unit_name = unit_name
+        return self._emit(event, detail=detail, force=force, completed=False)
+
+    def complete_stage(self, *, detail=None):
+        if self._active_stage is None:
+            raise RuntimeError("No runtime stage is active.")
+        snapshot = self._emit(
+            "completed",
+            detail=detail,
+            force=True,
+            completed=True,
+        )
+        self._completed_stages.add(self._active_stage)
+        self._active_stage = None
+        self._stage_started = None
+        self._completed_units = None
+        self._total_units = None
+        self._unit_name = None
+        return snapshot
+
+    def fail_stage(self, *, detail=None):
+        if self._active_stage is None:
+            raise RuntimeError("No runtime stage is active.")
+        snapshot = self._emit(
+            "failed",
+            detail=detail,
+            force=True,
+            completed=True,
+        )
+        self._completed_stages.add(self._active_stage)
+        self._active_stage = None
+        self._stage_started = None
+        self._completed_units = None
+        self._total_units = None
+        self._unit_name = None
+        return snapshot
+
+    def callback(self, stage):
+        stage_name = self._stage_name(stage)
+
+        def report(event, details):
+            if self._active_stage != stage_name:
+                return None
+            details = dict(details or {})
+            completed, total, unit = self._event_units(event, details)
+            return self.update_stage(
+                completed_units=completed,
+                total_units=total,
+                unit_name=unit,
+                event=event,
+                detail=self._event_detail(event, details),
+                force=(
+                    event.endswith("_started")
+                    or event.endswith("_completed")
+                    or event == "replica_configuration_evaluated"
+                ),
+            )
+
+        return report
+
+    @staticmethod
+    def _validate_units(completed, total):
+        for name, value in (("completed_units", completed), ("total_units", total)):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+            ):
+                raise ValueError(f"{name} must be a non-negative integer or None.")
+        if completed is not None and total is not None and completed > total:
+            raise ValueError("completed_units cannot exceed total_units.")
+
+    @staticmethod
+    def _event_units(event, details):
+        if event in {"placement_search_started", "placement_search_progress"} and (
+            "total_search_states" in details
+        ):
+            return (
+                details.get("completed_search_states"),
+                details.get("total_search_states"),
+                "search states",
+            )
+        mappings = {
+            "replica_optimization_started": (
+                "completed_configurations",
+                "total_configurations",
+                "configurations",
+            ),
+            "replica_configuration_evaluated": (
+                "completed_configurations",
+                "total_configurations",
+                "configurations",
+            ),
+            "final_validation_started": (
+                "completed_replications",
+                "total_replications",
+                "replications",
+            ),
+            "final_validation_replications_completed": (
+                "completed_replications",
+                "total_replications",
+                "replications",
+            ),
+            "placement_search_started": (
+                "completed_configurations",
+                "total_configurations",
+                "placements",
+            ),
+            "placement_search_progress": (
+                "completed_configurations",
+                "total_configurations",
+                "placements",
+            ),
+        }
+        mapping = mappings.get(event)
+        if mapping is None:
+            return None, None, None
+        completed_key, total_key, unit = mapping
+        return details.get(completed_key), details.get(total_key), unit
+
+    @staticmethod
+    def _event_detail(event, details):
+        labels = {
+            "pilot_batch_started": "warm-up pilot batch started",
+            "pilot_batch_completed": "warm-up pilot batch completed",
+            "pilot_horizon_analyzing": "warm-up horizon analysis",
+            "minimum_configuration_accepted": "minimum configuration accepted",
+            "validation_started": "global warm-up validation started",
+            "validation_completed": "global warm-up validation completed",
+            "measurement_trajectories_started": "measurement pilot started",
+            "measurement_trajectories_completed": "measurement pilot completed",
+            "measurement_candidate_analyzed": "measurement candidate analyzed",
+            "configuration_evaluation_started": "configuration simulation started",
+            "replication_batch_started": "replication batch started",
+            "replication_batch_completed": "replication batch completed",
+            "configuration_evaluation_completed": "configuration simulation completed",
+            "replica_configuration_evaluated": "replica configuration evaluated",
+            "final_validation_started": "final validation started",
+            "final_validation_replications_completed": "final replications completed",
+            "placement_search_started": "placement search started",
+            "placement_search_progress": "placement search progress",
+            "placement_search_completed": "placement search completed",
+        }
+        label = labels.get(event, event.replace("_", " "))
+        qualifiers = []
+        for key in (
+            "scenario",
+            "configuration",
+            "look_index",
+            "replication_count",
+            "simulation_horizon",
+            "simulation_duration",
+            "selected_mode",
+        ):
+            if key in details:
+                qualifiers.append(f"{key}={details[key]}")
+        return label + ("; " + ", ".join(qualifiers) if qualifiers else "")
+
+    def _remaining_range(self, elapsed):
+        stage = self._stage_estimates[self._active_stage]
+        ordinary = stage.ordinary_planning_seconds
+        ceiling = stage.configured_ceiling_seconds
+        if self._total_units and self._completed_units is not None:
+            fraction = min(1.0, self._completed_units / self._total_units)
+            ordinary_remaining = ordinary * (1.0 - fraction)
+            ceiling_remaining = ceiling * (1.0 - fraction)
+            if self._completed_units > 0:
+                empirical_remaining = (
+                    elapsed
+                    / self._completed_units
+                    * (self._total_units - self._completed_units)
+                )
+                return (
+                    min(ordinary_remaining, empirical_remaining),
+                    max(ceiling_remaining, empirical_remaining),
+                )
+            return ordinary_remaining, ceiling_remaining
+        low = max(0.0, ordinary - elapsed)
+        high = max(low, ceiling - elapsed)
+        if high == 0.0:
+            return None, None
+        return low, high
+
+    def _overall_remaining_range(self, stage_low, stage_high, *, completed):
+        current_index = self._stage_order.index(self._active_stage)
+        future = tuple(
+            name
+            for name in self._stage_order[current_index + 1 :]
+            if name not in self._completed_stages
+        )
+        future_low = sum(
+            self._stage_estimates[name].ordinary_planning_seconds for name in future
+        )
+        future_high = sum(
+            self._stage_estimates[name].configured_ceiling_seconds for name in future
+        )
+        if completed:
+            return future_low, future_high
+        return (
+            None if stage_low is None else stage_low + future_low,
+            None if stage_high is None else stage_high + future_high,
+        )
+
+    def _emit(self, event, *, detail, force, completed):
+        now = self.clock()
+        elapsed = max(0.0, now - self._stage_started)
+        stage_low, stage_high = (0.0, 0.0) if completed else self._remaining_range(
+            elapsed
+        )
+        overall_low, overall_high = self._overall_remaining_range(
+            stage_low,
+            stage_high,
+            completed=completed,
+        )
+        snapshot = LiveRuntimeSnapshot(
+            stage=self._active_stage,
+            event=event,
+            completed_units=self._completed_units,
+            total_units=self._total_units,
+            unit_name=self._unit_name,
+            stage_elapsed_seconds=elapsed,
+            stage_remaining_low_seconds=stage_low,
+            stage_remaining_high_seconds=stage_high,
+            overall_remaining_low_seconds=overall_low,
+            overall_remaining_high_seconds=overall_high,
+            detail=detail,
+            completed=completed,
+        )
+        self._last_snapshot = snapshot
+        if force or now - self._last_output_time >= self.minimum_update_interval_seconds:
+            self.output(format_live_runtime_snapshot(snapshot))
+            self._last_output_time = now
+        return snapshot
+
+
 def _bounded_configuration(maximum_replicas, service_count):
     if isinstance(maximum_replicas, int):
         maximum = (maximum_replicas,) * service_count
@@ -912,6 +1278,42 @@ def format_duration(seconds):
     if seconds < 86_400:
         return f"{seconds / 3_600:.1f} hours"
     return f"{seconds / 86_400:.1f} days"
+
+
+def _format_duration_range(low, high):
+    if low is None or high is None:
+        return "unavailable"
+    if math.isclose(low, high, rel_tol=0.01, abs_tol=0.05):
+        return format_duration(high)
+    return f"{format_duration(low)}–{format_duration(high)}"
+
+
+def format_live_runtime_snapshot(snapshot):
+    parts = [f"[{snapshot.stage}] {snapshot.event.replace('_', ' ')}"]
+    if snapshot.total_units is not None:
+        parts.append(
+            f"{snapshot.completed_units}/{snapshot.total_units} "
+            f"{snapshot.unit_name or 'units'}"
+        )
+    parts.append(f"elapsed {format_duration(snapshot.stage_elapsed_seconds)}")
+    if not snapshot.completed:
+        parts.append(
+            "stage remaining "
+            + _format_duration_range(
+                snapshot.stage_remaining_low_seconds,
+                snapshot.stage_remaining_high_seconds,
+            )
+        )
+    parts.append(
+        "overall remaining "
+        + _format_duration_range(
+            snapshot.overall_remaining_low_seconds,
+            snapshot.overall_remaining_high_seconds,
+        )
+    )
+    if snapshot.detail:
+        parts.append(snapshot.detail)
+    return " | ".join(parts)
 
 
 def format_runtime_estimate(estimate):

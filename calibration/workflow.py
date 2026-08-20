@@ -346,6 +346,18 @@ def calibrate_minimum_configuration(
             workers=workers,
             aggregate=True,
         )
+        if progress_callback is not None:
+            progress_callback(
+                "pilot_batch_completed",
+                {
+                    "simulation_horizon": simulation_parameters.pilot_horizon,
+                    "analysis_horizons": tuple(
+                        item.pilot_horizon for item in batch
+                    ),
+                    "replications": simulation_parameters.replication_count,
+                    "workers": workers,
+                },
+            )
 
         for current_parameters in batch:
             if progress_callback is not None:
@@ -594,6 +606,17 @@ def calibrate_global_warmup(
             if extension_index == max_validation_horizon_extensions:
                 break
             continue
+
+        if progress_callback is not None:
+            progress_callback(
+                "validation_completed",
+                {
+                    "validation_horizon": validation_parameters.pilot_horizon,
+                    "replications": validation_replication_count,
+                    "configurations": len(representatives),
+                    "global_warmup": validation.global_warmup,
+                },
+            )
 
         return WarmupCalibrationResult(
             initial_parameters=parameters,

@@ -123,36 +123,73 @@ def optimize_node_placement(
     mode=OptimizationMode.AUTO,
     exact_configuration_limit=DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT,
     scalable_options=None,
+    progress_callback=None,
 ):
     """Select exact branch-and-bound or bounded beam/VNS/LNS placement."""
+    if progress_callback is not None and not callable(progress_callback):
+        raise TypeError("progress_callback must be callable or None.")
+    configuration_count = problem.configuration_count()
     selected, reason = optimization_mode_decision(
         mode,
-        problem.configuration_count(),
+        configuration_count,
         exact_configuration_limit,
     )
-    if selected == OptimizationMode.EXACT:
-        optimizer = BranchAndBoundNodePlacementOptimizer()
-        optimizer.selection_reason = reason
-        return optimizer.optimize(problem)
     options = scalable_options or ScalablePlacementSearchOptions()
-    return ScalableNodePlacementOptimizer(
-        beam_width=options.beam_width,
-        diversity_per_signature=options.diversity_per_signature,
-        candidate_distributions_per_service=(
-            options.candidate_distributions_per_service
-        ),
-        maximum_partial_states=options.maximum_partial_states,
-        maximum_complete_evaluations=options.maximum_complete_evaluations,
-        maximum_total_evaluator_calls=options.maximum_total_evaluator_calls,
-        maximum_simulation_replications=options.maximum_simulation_replications,
-        maximum_local_iterations=options.maximum_local_iterations,
-        time_budget_seconds=options.time_budget_seconds,
-        maximum_restarts=options.maximum_restarts,
-        maximum_no_improvement=options.maximum_no_improvement,
-        random_seed=options.random_seed,
-        lns_neighborhood_sizes=options.lns_neighborhood_sizes,
-        lns_subset_attempts=options.lns_subset_attempts,
-        lns_subproblem_budget=options.lns_subproblem_budget,
-        collect_trace=options.collect_trace,
-        selection_reason=reason,
-    ).optimize(problem)
+    if progress_callback is not None:
+        details = {
+            "selected_mode": selected.value,
+            "completed_configurations": 0,
+            "total_configurations": configuration_count,
+        }
+        if selected == OptimizationMode.SCALABLE:
+            details = {
+                "selected_mode": selected.value,
+                "completed_search_states": 0,
+                "total_search_states": (
+                    options.maximum_partial_states
+                    + options.maximum_complete_evaluations
+                ),
+                "search_space_configurations": configuration_count,
+            }
+        progress_callback("placement_search_started", details)
+    if selected == OptimizationMode.EXACT:
+        optimizer = BranchAndBoundNodePlacementOptimizer(
+            progress_callback=progress_callback,
+        )
+        optimizer.selection_reason = reason
+        result = optimizer.optimize(problem)
+    else:
+        result = ScalableNodePlacementOptimizer(
+            beam_width=options.beam_width,
+            diversity_per_signature=options.diversity_per_signature,
+            candidate_distributions_per_service=(
+                options.candidate_distributions_per_service
+            ),
+            maximum_partial_states=options.maximum_partial_states,
+            maximum_complete_evaluations=options.maximum_complete_evaluations,
+            maximum_total_evaluator_calls=options.maximum_total_evaluator_calls,
+            maximum_simulation_replications=(
+                options.maximum_simulation_replications
+            ),
+            maximum_local_iterations=options.maximum_local_iterations,
+            time_budget_seconds=options.time_budget_seconds,
+            maximum_restarts=options.maximum_restarts,
+            maximum_no_improvement=options.maximum_no_improvement,
+            random_seed=options.random_seed,
+            lns_neighborhood_sizes=options.lns_neighborhood_sizes,
+            lns_subset_attempts=options.lns_subset_attempts,
+            lns_subproblem_budget=options.lns_subproblem_budget,
+            collect_trace=options.collect_trace,
+            selection_reason=reason,
+            progress_callback=progress_callback,
+        ).optimize(problem)
+    if progress_callback is not None:
+        progress_callback(
+            "placement_search_completed",
+            {
+                "selected_mode": selected.value,
+                "completed_configurations": getattr(result, "complete_states", 0),
+                "total_configurations": configuration_count,
+            },
+        )
+    return result

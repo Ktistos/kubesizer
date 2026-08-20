@@ -119,6 +119,31 @@ def test_all_upper_bounds_below_slo_is_feasible_at_rmin():
     assert len(system.calls) == 1
 
 
+def test_configuration_evaluation_reports_sequential_batch_progress():
+    system = make_system()
+    profile = make_profile(system)
+    wrapped = FakeSimulationSystem(system, lambda seed, configuration: (0.5, 0.5))
+    events = []
+    subject = CalibratedConfigurationEvaluator(
+        wrapped,
+        profile,
+        progress_callback=lambda event, details: events.append((event, details)),
+    )
+
+    subject.evaluate((1,))
+
+    names = tuple(event for event, _ in events)
+    assert names == (
+        "configuration_evaluation_started",
+        "replication_batch_started",
+        "replication_batch_completed",
+        "configuration_evaluation_completed",
+    )
+    completed = events[2][1]
+    assert completed["replication_count"] == 2
+    assert completed["maximum_replications"] == 4
+
+
 def test_one_lower_bound_above_slo_is_infeasible():
     _, _, subject = evaluator(lambda seed, configuration: (1.5, 1.5))
 

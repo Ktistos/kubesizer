@@ -762,6 +762,42 @@ def test_auto_placement_uses_scalable_mode_above_exact_space_limit():
     assert "AUTO selected SCALABLE" in result.selection_reason
 
 
+def test_placement_selection_reports_exact_and_scalable_progress():
+    problem = build_problem(CURRENT_SERVICE_SPECS, CURRENT_NODE_LATENCIES)
+    exact_events = []
+    scalable_events = []
+
+    optimize_node_placement(
+        problem,
+        mode=OptimizationMode.EXACT,
+        progress_callback=(
+            lambda event, details: exact_events.append((event, details))
+        ),
+    )
+    optimize_node_placement(
+        problem,
+        mode=OptimizationMode.SCALABLE,
+        scalable_options=ScalablePlacementSearchOptions(
+            beam_width=4,
+            candidate_distributions_per_service=8,
+            maximum_partial_states=5_000,
+            maximum_complete_evaluations=500,
+            maximum_local_iterations=10,
+            time_budget_seconds=10,
+        ),
+        progress_callback=(
+            lambda event, details: scalable_events.append((event, details))
+        ),
+    )
+
+    assert exact_events[0][0] == "placement_search_started"
+    assert exact_events[-1][0] == "placement_search_completed"
+    assert any(event == "placement_search_progress" for event, _ in exact_events)
+    assert scalable_events[0][0] == "placement_search_started"
+    assert scalable_events[-1][0] == "placement_search_completed"
+    assert any(event == "placement_search_progress" for event, _ in scalable_events)
+
+
 def _swap_fixture():
     services = {
         "A": {"gamma": 10.0, "replicas": 1, "routes": {"B": 1.0}},

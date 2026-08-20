@@ -89,6 +89,31 @@ def test_final_validation_uses_one_fixed_fresh_seed_experiment():
     assert result.intervals["checkout"].upper_tail_probability == pytest.approx(0.975)
 
 
+def test_final_validation_reports_fresh_replication_progress():
+    raw = make_system()
+    profile = make_profile(raw)
+    system = FakeFinalSystem(raw, (0.5, 0.5))
+    events = []
+
+    validate_final_configuration(
+        system,
+        (1,),
+        profile,
+        progress_callback=lambda event, details: events.append((event, details)),
+    )
+
+    assert tuple(event for event, _ in events) == (
+        "final_validation_started",
+        "final_validation_replications_completed",
+    )
+    assert events[-1][1]["completed_replications"] == len(
+        profile.final_validation_seeds
+    )
+    assert events[-1][1]["total_replications"] == len(
+        profile.final_validation_seeds
+    )
+
+
 def test_final_validation_failure_is_structured_and_not_reported_as_feasible():
     raw = make_system()
     profile = make_profile(raw)

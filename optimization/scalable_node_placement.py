@@ -95,6 +95,7 @@ class BeamVNSPlacementOptimizer(Optimizer):
         cancellation_check=None,
         clock=None,
         selection_reason=None,
+        progress_callback=None,
     ):
         integers = {
             "beam_width": beam_width,
@@ -130,6 +131,8 @@ class BeamVNSPlacementOptimizer(Optimizer):
             raise ValueError("lns_neighborhood_sizes must contain positive integers.")
         if isinstance(random_seed, bool) or not isinstance(random_seed, int):
             raise ValueError("random_seed must be an integer.")
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable or None.")
 
         self.beam_width = beam_width
         self.diversity_per_signature = diversity_per_signature
@@ -151,6 +154,38 @@ class BeamVNSPlacementOptimizer(Optimizer):
         self.cancellation_check = cancellation_check
         self._clock = clock
         self.selection_reason = selection_reason
+        self.progress_callback = progress_callback
+        self._next_progress = 0
+
+    def _report_progress(
+        self,
+        controller,
+        partial_counter,
+        *,
+        restart,
+        force=False,
+    ):
+        if self.progress_callback is None:
+            return
+        total = self.maximum_partial_states + self.maximum_complete_evaluations
+        completed = partial_counter[0] + controller.unique_evaluation_count
+        interval = max(1, total // 100)
+        if not force and completed < self._next_progress:
+            return
+        self.progress_callback(
+            "placement_search_progress",
+            {
+                "completed_search_states": min(completed, total),
+                "total_search_states": total,
+                "partial_states": partial_counter[0],
+                "complete_placements_evaluated": (
+                    controller.unique_evaluation_count
+                ),
+                "restart": restart,
+                "selected_mode": "SCALABLE",
+            },
+        )
+        self._next_progress = ((completed // interval) + 1) * interval
 
     @staticmethod
     def _key(problem, distributions):
@@ -247,6 +282,11 @@ class BeamVNSPlacementOptimizer(Optimizer):
             beam = self._diverse_beam(problem, expanded)
             heuristic_truncated = heuristic_truncated or len(beam) < before
             partial_counter[1] += before - len(beam)
+            self._report_progress(
+                controller,
+                partial_counter,
+                restart=restart,
+            )
         return (
             tuple(item[2] for item in beam),
             False,
@@ -505,6 +545,7 @@ class BeamVNSPlacementOptimizer(Optimizer):
         return distributions, evaluation, False
 
     def optimize(self, problem):
+        self._next_progress = 0
         rng = random.Random(self.random_seed)
         controller = HeuristicEvaluationController(
             maximum_unique_evaluations=self.maximum_complete_evaluations,
@@ -576,6 +617,12 @@ class BeamVNSPlacementOptimizer(Optimizer):
                 construction_budget,
                 beam_truncated,
             ) = self._construct_beam(problem, controller, rng, restart, partial_counter)
+            self._report_progress(
+                controller,
+                partial_counter,
+                restart=restart,
+                force=True,
+            )
             search_truncated = search_truncated or beam_truncated
             construction_budget_exhausted = (
                 construction_budget_exhausted or construction_budget
@@ -738,6 +785,12 @@ class BeamVNSPlacementOptimizer(Optimizer):
             reason = TerminationReason.RESTART_LIMIT_REACHED
 
         configuration = incumbent_evaluation.configuration
+        self._report_progress(
+            controller,
+            partial_counter,
+            restart=restart_count,
+            force=True,
+        )
         return ScalableNodePlacementOptimizationResult(
             configuration=configuration,
             cost=incumbent_evaluation.total_cost,
