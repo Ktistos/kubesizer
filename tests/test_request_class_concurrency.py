@@ -253,6 +253,12 @@ def test_repository_workload_declares_concurrency_weight_for_every_class():
             "compute_heavy": 3.3,
         }
     )
+    assert system.get_request_class_latency_slo_kind() == "percentile"
+    assert system.get_request_class_percentile_latency_limits() == {
+        "read_heavy": 1.0,
+        "write_heavy": 1.0,
+        "compute_heavy": 1.0,
+    }
     assert sum(class_rates.values()) == pytest.approx(33.0)
     assert system.get_request_class_concurrency_weights() == pytest.approx(
         {

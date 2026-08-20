@@ -4,6 +4,7 @@ from .system import System, QueueingNetworkType
 from .scenario_system import ScenarioAnalyticalResult, ScenarioSystem
 from .workload import (
     DistributionSpec,
+    EndToEndLatencySLOSpec,
     ParsedWorkload,
     ScenarioSpec,
     normalize_workload_spec,
@@ -20,6 +21,7 @@ __all__ = [
     "ScenarioAnalyticalResult",
     "QueueingNetworkType",
     "DistributionSpec",
+    "EndToEndLatencySLOSpec",
     "ScenarioSpec",
     "ParsedWorkload",
     "parse_workload_spec",

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from metrics import (
     ClusterBootstrapP95Interval,
     fixed_experiment_tail_alpha,
+    replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
 )
 from .profile import CalibrationOptions
@@ -124,10 +125,20 @@ class MeasurementCalibrationResult:
     seeds: tuple[int, ...]
     configurations: tuple[ConfigurationMeasurementCalibration, ...]
     global_measurement_duration: float
+    latency_slo_kind: str = "percentile"
 
 
-def request_class_external_arrival_rates(system):
+def request_class_external_arrival_rates(system, request_classes=None):
     services = tuple(system.get_services().values())
+    if request_classes is None:
+        request_classes = system.get_request_classes()
+    request_classes = tuple(request_classes)
+    unknown = set(request_classes) - set(system.get_request_classes())
+    if not request_classes or unknown:
+        raise ValueError(
+            "Required request classes must be a nonempty subset of the workload; "
+            f"unknown={sorted(unknown)}."
+        )
     rates = tuple(
         (
             request_class,
@@ -146,17 +157,17 @@ def request_class_external_arrival_rates(system):
     return rates
 
 
-def initial_measurement_duration(system, options=None):
+def initial_measurement_duration(system, options=None, request_classes=None):
     options = options or CalibrationOptions()
-    rates = request_class_external_arrival_rates(system)
+    rates = request_class_external_arrival_rates(system, request_classes)
     return options.measurement_duration_safety_factor * max(
         options.target_samples_per_class / rate for _, rate in rates
     )
 
 
-def measurement_duration_candidates(system, options=None):
+def measurement_duration_candidates(system, options=None, request_classes=None):
     options = options or CalibrationOptions()
-    initial = initial_measurement_duration(system, options)
+    initial = initial_measurement_duration(system, options, request_classes)
     return tuple(
         initial * (2**doubling)
         for doubling in range(options.measurement_max_doublings + 1)
@@ -177,6 +188,7 @@ def _interval_for(
     duration,
     configuration,
     tail_alpha,
+    latency_slo_kind,
 ):
     bootstrap_seed = options.seed_policy.deterministic_seed(
         "bootstrap",
@@ -185,7 +197,12 @@ def _interval_for(
         request_class,
         float(duration),
     )
-    return replication_cluster_bootstrap_p95(
+    bootstrap = (
+        replication_cluster_bootstrap_mean
+        if latency_slo_kind == "mean"
+        else replication_cluster_bootstrap_p95
+    )
+    return bootstrap(
         clusters,
         request_class=request_class,
         slo=slo,
@@ -206,6 +223,7 @@ def _analyze_measurement_durations(
     options,
     configuration,
     tail_alpha,
+    latency_slo_kind="percentile",
 ):
     intervals = {}
     cohort_counts = {}
@@ -229,6 +247,7 @@ def _analyze_measurement_durations(
                     duration=duration,
                     configuration=configuration,
                     tail_alpha=tail_alpha,
+                    latency_slo_kind=latency_slo_kind,
                 )
             except ValueError as error:
                 if "at least one latency" not in str(error):
@@ -258,7 +277,7 @@ def _measurement_candidate_diagnostic(
         ]
         intervals_available = interval is not None and doubled is not None
         p95_change = (
-            _relative_change(interval.p95_estimate, doubled.p95_estimate)
+            _relative_change(interval.estimate, doubled.estimate)
             if intervals_available
             else math.inf
         )
@@ -274,7 +293,7 @@ def _measurement_candidate_diagnostic(
             max(
                 options.absolute_ci_half_width_target,
                 options.relative_ci_half_width_target
-                * interval.p95_estimate,
+                * interval.estimate,
             )
             if interval is not None
             else -math.inf
@@ -283,7 +302,7 @@ def _measurement_candidate_diagnostic(
             max(
                 options.absolute_ci_half_width_target,
                 options.ci_width_stability_tolerance
-                * interval.p95_estimate,
+                * interval.estimate,
             )
             if interval is not None
             else -math.inf
@@ -340,19 +359,30 @@ def calibrate_measurement_duration(
     options=None,
     workers=1,
     progress_callback=None,
+    latency_slo_kind="percentile",
 ):
     """Select one global M using prefix-reused, drained arrival cohorts."""
     options = options or CalibrationOptions()
-    request_classes = tuple(system.get_request_classes())
-    if set(request_class_slos) != set(request_classes):
-        raise ValueError("SLO definitions must exactly match request classes.")
+    request_classes = tuple(request_class_slos)
+    unknown_classes = set(request_classes) - set(system.get_request_classes())
+    if not request_classes or unknown_classes:
+        raise ValueError(
+            "Percentile SLO definitions must be a nonempty subset of request "
+            f"classes; unknown={sorted(unknown_classes)}."
+        )
+    if latency_slo_kind not in {"mean", "percentile"}:
+        raise ValueError("latency_slo_kind must be mean or percentile.")
     if not math.isfinite(warmup_duration) or warmup_duration < 0:
         raise ValueError("warmup_duration must be finite and non-negative.")
     if isinstance(workers, bool) or not isinstance(workers, int) or workers <= 0:
         raise ValueError("workers must be a positive integer.")
 
-    rates = request_class_external_arrival_rates(system)
-    durations = measurement_duration_candidates(system, options)
+    rates = request_class_external_arrival_rates(system, request_classes)
+    durations = measurement_duration_candidates(
+        system,
+        options,
+        request_classes,
+    )
     configurations = tuple(
         dict.fromkeys(tuple(item) for item in representative_configurations)
     )
@@ -444,6 +474,7 @@ def calibrate_measurement_duration(
                     options=options,
                     configuration=configuration,
                     tail_alpha=tail_alpha,
+                    latency_slo_kind=latency_slo_kind,
                 )
                 for duration, doubled_duration in pairs:
                     candidate = _measurement_candidate_diagnostic(
@@ -497,6 +528,7 @@ def calibrate_measurement_duration(
             seeds=seeds,
             configurations=tuple(configuration_results),
             global_measurement_duration=math.nan,
+            latency_slo_kind=latency_slo_kind,
         )
         raise MeasurementCalibrationError(
             "No acceptable measurement duration was found for configurations: "
@@ -513,4 +545,5 @@ def calibrate_measurement_duration(
         seeds=seeds,
         configurations=tuple(configuration_results),
         global_measurement_duration=selected,
+        latency_slo_kind=latency_slo_kind,
     )

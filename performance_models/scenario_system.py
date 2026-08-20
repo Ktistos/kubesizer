@@ -102,6 +102,23 @@ class ScenarioSystem:
     def get_request_classes(self):
         return self.__representative.get_request_classes()
 
+    def get_request_class_mean_latency_limits(self):
+        return self.__representative.get_request_class_mean_latency_limits()
+
+    def get_request_class_latency_slo_kind(self):
+        return self.__representative.get_request_class_latency_slo_kind()
+
+    def get_request_class_latency_slos(self):
+        return self.__representative.get_request_class_latency_slos()
+
+    def get_request_class_percentile_latency_slos(self):
+        return self.__representative.get_request_class_percentile_latency_slos()
+
+    def get_request_class_percentile_latency_limits(self, *, quantile=0.95):
+        return self.__representative.get_request_class_percentile_latency_limits(
+            quantile=quantile
+        )
+
     def get_system_replicas(self):
         return self.__representative.get_system_replicas()
 

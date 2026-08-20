@@ -14,6 +14,7 @@ from .cluster_bootstrap import (
     draw_cluster_bootstrap_indices,
     fixed_experiment_tail_alpha,
     percentile,
+    replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
     sequential_tail_alpha,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "draw_cluster_bootstrap_indices",
     "fixed_experiment_tail_alpha",
     "percentile",
+    "replication_cluster_bootstrap_mean",
     "replication_cluster_bootstrap_p95",
     "sequential_tail_alpha",
 ]

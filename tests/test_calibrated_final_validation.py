@@ -15,7 +15,7 @@ def make_system(gamma=1.0):
     )
 
 
-def make_profile(system):
+def make_profile(system, *, latency_slo_kind="percentile"):
     options = CalibrationOptions(
         warmup_replications=2,
         warmup_validation_replications=2,
@@ -43,6 +43,7 @@ def make_profile(system):
         calibration_diagnostics={},
         options=options,
         creation_timestamp="2026-08-11T00:00:00+00:00",
+        latency_slo_kind=latency_slo_kind,
     )
 
 
@@ -87,6 +88,18 @@ def test_final_validation_uses_one_fixed_fresh_seed_experiment():
     assert system.calls[0][2]["measurement_duration"] == profile.measurement_duration
     assert result.intervals["checkout"].upper_bound == pytest.approx(0.5)
     assert result.intervals["checkout"].upper_tail_probability == pytest.approx(0.975)
+
+
+def test_final_validation_uses_mean_interval_for_mean_slo_profile():
+    raw = make_system()
+    profile = make_profile(raw, latency_slo_kind="mean")
+    system = FakeFinalSystem(raw, (0.2, 0.4))
+
+    result = validate_final_configuration(system, (1,), profile)
+
+    assert result.passed
+    assert result.intervals["checkout"].latency_statistic == "mean"
+    assert result.intervals["checkout"].estimate == pytest.approx(0.3)
 
 
 def test_final_validation_reports_fresh_replication_progress():

@@ -92,6 +92,7 @@ class System:
         self.__workload_spec = selected_workload
         self.__workload_base_path = workload_base_path
         self.__scenario_distribution_spec = None
+        self.__request_class_latency_slos = {}
         if names:
             parsed = parse_workload_spec(
                 selected_workload,
@@ -99,6 +100,9 @@ class System:
             )
             self.__scenario_distribution_spec = parsed.scenario(
                 self.__scenario_name
+            )
+            self.__request_class_latency_slos = dict(
+                parsed.request_class_latency_slos
             )
         workload = normalize_workload_spec(
             selected_workload,
@@ -822,6 +826,84 @@ class System:
     def get_request_class_concurrency_weights(self):
         """Return normalized external-traffic shares by request class."""
         return dict(self.__request_class_concurrency_weights)
+
+    def get_request_class_mean_latency_limits(self):
+        """Return analytical end-to-end mean-latency limits in seconds."""
+        kind = self.get_request_class_latency_slo_kind()
+        if kind == "percentile":
+            raise ValueError(
+                "The workload selects percentile latency SLOs, which require "
+                "simulation rather than strict analytical optimization."
+            )
+        return {
+            request_class: slo.mean_seconds
+            for request_class, slo in self.__request_class_latency_slos.items()
+            if slo.kind == "mean"
+        }
+
+    def get_request_class_latency_slo_kind(self):
+        """Return ``mean``, ``percentile``, or ``None`` for this workload."""
+        kinds = {slo.kind for slo in self.__request_class_latency_slos.values()}
+        if not kinds:
+            return None
+        if len(kinds) != 1:
+            raise ValueError("The workload mixes incompatible latency SLO kinds.")
+        return next(iter(kinds))
+
+    def get_request_class_latency_slos(self):
+        """Return isolated declarations for request classes that define an SLO."""
+        return {
+            request_class: slo.to_dict()
+            for request_class, slo in self.__request_class_latency_slos.items()
+        }
+
+    def get_request_class_percentile_latency_slos(self):
+        """Return declared simulation percentile SLOs by request class."""
+        kind = self.get_request_class_latency_slo_kind()
+        if kind == "mean":
+            raise ValueError(
+                "The workload selects mean latency SLOs for analytical "
+                "optimization, not percentile SLOs."
+            )
+        return {
+            request_class: {
+                "quantile": slo.percentile_quantile,
+                "maximum_seconds": slo.percentile_maximum_seconds,
+            }
+            for request_class, slo in self.__request_class_latency_slos.items()
+            if slo.kind == "percentile"
+        }
+
+    def get_request_class_percentile_latency_limits(self, *, quantile=0.95):
+        """Return limits for the simulation quantile currently being evaluated."""
+        if (
+            isinstance(quantile, bool)
+            or not isinstance(quantile, (int, float))
+            or not math.isfinite(float(quantile))
+            or not 0.0 < float(quantile) < 1.0
+        ):
+            raise ValueError("quantile must be a finite number between 0 and 1.")
+        requested_quantile = float(quantile)
+        slos = self.get_request_class_percentile_latency_slos()
+        mismatched = {
+            request_class: slo["quantile"]
+            for request_class, slo in slos.items()
+            if not math.isclose(
+                slo["quantile"],
+                requested_quantile,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        }
+        if mismatched:
+            raise ValueError(
+                f"The workload does not define p{requested_quantile * 100:g} "
+                f"limits for request classes: {sorted(mismatched)}."
+            )
+        return {
+            request_class: slo["maximum_seconds"]
+            for request_class, slo in slos.items()
+        }
 
     def get_configured_external_arrival_rates(self):
         """Return pre-weight gamma values by class and service-ID order."""

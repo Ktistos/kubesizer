@@ -8,11 +8,19 @@
 request_classes:
   interactive:
     concurrency_weight: 0.8
+    end_to_end_latency_slos:
+      percentile:
+        quantile: 0.95
+        maximum_seconds: 1.0
     routing:
       gateway:
         worker: 0.25
   batch:
     concurrency_weight: 0.2
+    end_to_end_latency_slos:
+      percentile:
+        quantile: 0.95
+        maximum_seconds: 5.0
     routing: {}
 
 traffic_model:

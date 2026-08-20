@@ -3,7 +3,11 @@ from dataclasses import dataclass
 from enum import Enum
 
 from calibration import CalibrationProfile, validate_profile_for_experiment
-from metrics import ClusterBootstrapP95Interval, replication_cluster_bootstrap_p95
+from metrics import (
+    ClusterBootstrapP95Interval,
+    replication_cluster_bootstrap_mean,
+    replication_cluster_bootstrap_p95,
+)
 
 
 class SimulationClassification(str, Enum):
@@ -178,7 +182,12 @@ class CalibratedConfigurationEvaluator:
                     continue
                 if nonempty < self.profile.minimum_nonempty_replications_per_request_class:
                     continue
-                interval = replication_cluster_bootstrap_p95(
+                bootstrap = (
+                    replication_cluster_bootstrap_mean
+                    if self.profile.latency_slo_kind == "mean"
+                    else replication_cluster_bootstrap_p95
+                )
+                interval = bootstrap(
                     clusters,
                     request_class=request_class,
                     slo=slo,

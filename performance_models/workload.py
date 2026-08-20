@@ -38,11 +38,35 @@ class ScenarioSpec:
 
 
 @dataclass(frozen=True)
+class EndToEndLatencySLOSpec:
+    """Validated request-class end-to-end latency constraints."""
+
+    mean_seconds: float | None = None
+    percentile_quantile: float | None = None
+    percentile_maximum_seconds: float | None = None
+
+    @property
+    def kind(self):
+        return "mean" if self.mean_seconds is not None else "percentile"
+
+    def to_dict(self):
+        if self.kind == "mean":
+            return {"mean_seconds": self.mean_seconds}
+        return {
+            "percentile": {
+                "quantile": self.percentile_quantile,
+                "maximum_seconds": self.percentile_maximum_seconds,
+            }
+        }
+
+
+@dataclass(frozen=True)
 class ParsedWorkload:
     schema_version: int
     time_unit: str
     request_classes: Mapping
     concurrency_weights: Mapping
+    request_class_latency_slos: Mapping
     scenarios: Mapping
     service_names: tuple[str, ...]
 
@@ -421,17 +445,26 @@ def _parse_request_classes(
 ):
     parsed = {}
     concurrency_weights = {}
+    latency_slos = {}
     weighted_classes = []
     for request_class_name, request_class in request_classes.items():
         if not isinstance(request_class_name, str) or not request_class_name:
             raise ValueError("Request-class names must be nonempty strings.")
-        if not isinstance(request_class, Mapping) or set(request_class) not in (
-            {"routing"},
-            {"concurrency_weight", "routing"},
-        ):
+        if not isinstance(request_class, Mapping):
+            raise ValueError(
+                f"Request class {request_class_name!r} must be a mapping."
+            )
+        allowed_fields = {
+            "concurrency_weight",
+            "end_to_end_latency_slos",
+            "routing",
+        }
+        unknown_fields = set(request_class) - allowed_fields
+        if "routing" not in request_class or unknown_fields:
             raise ValueError(
                 f"Request class {request_class_name!r} must contain routing and "
-                "may contain concurrency_weight."
+                "may contain concurrency_weight and end_to_end_latency_slos; "
+                f"unknown fields={sorted(unknown_fields)}."
             )
         weighted = "concurrency_weight" in request_class
         weighted_classes.append(weighted)
@@ -443,6 +476,57 @@ def _parse_request_classes(
                     "concurrency_weight"
                 ),
             )
+        has_slos = "end_to_end_latency_slos" in request_class
+        if has_slos:
+            label = f"request_classes.{request_class_name}.end_to_end_latency_slos"
+            raw_slos = request_class["end_to_end_latency_slos"]
+            if not isinstance(raw_slos, Mapping) or set(raw_slos) not in (
+                {"mean_seconds"},
+                {"percentile"},
+            ):
+                raise ValueError(
+                    f"{label} must choose exactly one of mean_seconds or percentile."
+                )
+            if "mean_seconds" in raw_slos:
+                latency_slos[request_class_name] = EndToEndLatencySLOSpec(
+                    mean_seconds=_finite_positive(
+                        raw_slos["mean_seconds"],
+                        f"{label}.mean_seconds",
+                    )
+                )
+            else:
+                raw_percentile = raw_slos["percentile"]
+                if (
+                    not isinstance(raw_percentile, Mapping)
+                    or set(raw_percentile) != {"quantile", "maximum_seconds"}
+                ):
+                    raise ValueError(
+                        f"{label}.percentile must contain exactly quantile and "
+                        "maximum_seconds."
+                    )
+                quantile = raw_percentile["quantile"]
+                if (
+                    isinstance(quantile, bool)
+                    or not isinstance(quantile, (int, float))
+                    or not math.isfinite(float(quantile))
+                    or not 0.0 < float(quantile) < 1.0
+                ):
+                    raise ValueError(
+                        f"{label}.percentile.quantile must be between 0 and 1."
+                    )
+                quantile = float(quantile)
+                if not math.isclose(quantile, 0.95, rel_tol=0.0, abs_tol=1e-12):
+                    raise ValueError(
+                        f"{label}.percentile.quantile must be 0.95 because the "
+                        "simulation evaluator currently estimates p95."
+                    )
+                latency_slos[request_class_name] = EndToEndLatencySLOSpec(
+                    percentile_quantile=quantile,
+                    percentile_maximum_seconds=_finite_positive(
+                        raw_percentile["maximum_seconds"],
+                        f"{label}.percentile.maximum_seconds",
+                    ),
+                )
         routing = request_class["routing"]
         if not isinstance(routing, Mapping):
             raise ValueError(
@@ -491,6 +575,12 @@ def _parse_request_classes(
             "Every request class in a single-model workload must define "
             "concurrency_weight."
         )
+    slo_kinds = {slo.kind for slo in latency_slos.values()}
+    if len(slo_kinds) > 1:
+        raise ValueError(
+            "All declared request-class end_to_end_latency_slos must use the "
+            "same mean or percentile kind."
+        )
     if weighted_classes and all(weighted_classes) and not math.isclose(
         sum(concurrency_weights.values()),
         1.0,
@@ -498,7 +588,11 @@ def _parse_request_classes(
         abs_tol=1e-12,
     ):
         raise ValueError("Request-class concurrency weights must sum to one.")
-    return _freeze_mapping(parsed), _freeze_mapping(concurrency_weights)
+    return (
+        _freeze_mapping(parsed),
+        _freeze_mapping(concurrency_weights),
+        _freeze_mapping(latency_slos),
+    )
 
 
 def parse_workload_spec(workload, *, base_path=None):
@@ -560,7 +654,7 @@ def parse_workload_spec(workload, *, base_path=None):
     service_name_set = set(service_names)
     if any(not isinstance(name, str) or not name for name in service_names):
         raise ValueError("Service names must be nonempty strings.")
-    routing, concurrency_weights = _parse_request_classes(
+    routing, concurrency_weights, request_class_latency_slos = _parse_request_classes(
         request_classes,
         service_name_set,
         require_concurrency_weights=(schema_version == WORKLOAD_SCHEMA_VERSION),
@@ -659,6 +753,7 @@ def parse_workload_spec(workload, *, base_path=None):
         time_unit=time_unit,
         request_classes=routing,
         concurrency_weights=concurrency_weights,
+        request_class_latency_slos=request_class_latency_slos,
         scenarios=_freeze_mapping(models),
         service_names=service_names,
     )

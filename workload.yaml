@@ -1,6 +1,10 @@
 request_classes:
   read_heavy:
     concurrency_weight: 0.7
+    end_to_end_latency_slos:
+      percentile:
+        quantile: 0.95
+        maximum_seconds: 1.0
     routing:
       api:
         auth: 0.2
@@ -20,6 +24,10 @@ request_classes:
 
   write_heavy:
     concurrency_weight: 0.2
+    end_to_end_latency_slos:
+      percentile:
+        quantile: 0.95
+        maximum_seconds: 1.0
     routing:
       api:
         auth: 0.15
@@ -35,6 +43,10 @@ request_classes:
 
   compute_heavy:
     concurrency_weight: 0.1
+    end_to_end_latency_slos:
+      percentile:
+        quantile: 0.95
+        maximum_seconds: 1.0
     routing:
       api:
         auth: 0.1

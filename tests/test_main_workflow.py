@@ -27,9 +27,59 @@ def test_calibrate_before_optimization_always_runs_complete_calibration(monkeypa
     result = main.calibrate_before_optimization(system)
 
     assert result is expected
-    assert captured["request_class_slos"] == main.REQUEST_CLASS_SLOS
+    assert "request_class_slos" not in captured
     assert captured["maximum_replicas"] == main.MAX_REPLICAS_PER_SERVICE
     assert "report_directory" not in captured
+
+
+def test_analytical_optimization_uses_only_workload_mean_limits(monkeypatch):
+    expected = object()
+    captured = {}
+    mean_limits = {"request": 1.0}
+    system = SimpleNamespace(
+        get_request_class_mean_latency_limits=lambda: mean_limits,
+    )
+
+    def fake_optimize(selected, **kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(main, "optimize_with_analytical_model", fake_optimize)
+
+    result = main.optimize_replicas_analytically(system)
+
+    assert result is expected
+    assert captured["request_class_mean_latency_limits"] == mean_limits
+    assert "request_class_slos" not in captured
+
+
+@pytest.mark.parametrize(
+    ("kind", "mode", "message"),
+    (
+        ("percentile", ReplicaEvaluationMode.ANALYTICAL, "must use SIMULATION"),
+        (None, ReplicaEvaluationMode.SIMULATION, "no percentile threshold"),
+    ),
+)
+def test_workload_slo_kind_enforces_evaluation_mode(kind, mode, message):
+    system = SimpleNamespace(get_request_class_latency_slo_kind=lambda: kind)
+
+    with pytest.raises(ValueError, match=message):
+        main.enforce_workload_evaluation_mode(system, mode)
+
+
+@pytest.mark.parametrize(
+    ("kind", "mode"),
+    (
+        ("percentile", ReplicaEvaluationMode.SIMULATION),
+        ("mean", ReplicaEvaluationMode.ANALYTICAL),
+        ("mean", ReplicaEvaluationMode.SIMULATION),
+        (None, ReplicaEvaluationMode.ANALYTICAL),
+    ),
+)
+def test_workload_slo_kind_accepts_compatible_evaluation_mode(kind, mode):
+    system = SimpleNamespace(get_request_class_latency_slo_kind=lambda: kind)
+
+    assert main.enforce_workload_evaluation_mode(system, mode) == mode
 
 
 def test_optimization_and_final_validation_use_public_profile_interface(monkeypatch):

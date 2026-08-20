@@ -142,6 +142,46 @@ def test_explicit_hybrid_modes_override_each_search_threshold():
     assert result.workflow_search_mode == "HYBRID"
 
 
+def test_independent_cli_modes_are_estimated_without_hybrid_wrapper():
+    system, resources = _system_and_resources()
+
+    result = calculate_workflow_runtime_estimate(
+        system,
+        resources,
+        _rates(),
+        options=CalibrationOptions(),
+        maximum_replicas=10,
+        workers=8,
+        replica_optimization_mode=OptimizationMode.EXACT,
+        placement_optimization_mode=OptimizationMode.SCALABLE,
+    )
+
+    assert result.replica_search_mode == "EXACT"
+    assert result.placement_search_mode_at_maximum_bounds == "SCALABLE"
+    assert result.workflow_search_mode == "HYBRID"
+
+
+def test_runtime_estimate_supports_skipped_node_placement():
+    system, _ = _system_and_resources()
+
+    result = calculate_workflow_runtime_estimate(
+        system,
+        None,
+        _rates(),
+        options=CalibrationOptions(),
+        maximum_replicas=10,
+        workers=8,
+    )
+
+    placement = next(
+        stage for stage in result.stages if "node placement" in stage.stage
+    )
+    assert result.maximum_placement_count == 0
+    assert placement.ordinary_planning_seconds == 0.0
+    assert placement.configured_ceiling_seconds == 0.0
+    assert placement.ordinary_work == "placement skipped"
+
+
 def test_scalable_replica_mode_caps_projected_configuration_work():
     system, resources = _system_and_resources()
     exact = calculate_workflow_runtime_estimate(
@@ -205,8 +245,7 @@ def _runtime_profile(system, *, minimum=(1, 1), maximum=(100, 100)):
         replication_batch_size=10,
         maximum_sequential_looks=4,
         request_class_slos=tuple(
-            (request_class, 1.0)
-            for request_class in system.get_request_classes()
+            (request_class, 1.0) for request_class in system.get_request_classes()
         ),
     )
 
@@ -241,9 +280,7 @@ def test_runtime_adaptive_limit_uses_frozen_profile_and_machine_rates():
     assert result.runtime_configuration_limit == int(
         600.0 // expected_per_configuration
     )
-    assert result.effective_configuration_limit == (
-        result.runtime_configuration_limit
-    )
+    assert result.effective_configuration_limit == (result.runtime_configuration_limit)
     assert result.selected_mode == "SCALABLE"
     assert result.projected_exact_search_seconds == pytest.approx(
         10_000 * expected_per_configuration

@@ -205,6 +205,36 @@ class CalibratedOptimizationResult:
         return getattr(self.optimization_result, "selection_reason", None)
 
 
+def _declared_latency_slo_kind(system):
+    method = getattr(system, "get_request_class_latency_slo_kind", None)
+    return method() if method is not None else None
+
+
+def _workload_simulation_limits(system):
+    kind = _declared_latency_slo_kind(system)
+    limits = (
+        system.get_request_class_mean_latency_limits()
+        if kind == "mean"
+        else system.get_request_class_percentile_latency_limits(quantile=0.95)
+    )
+    if not limits:
+        raise ValueError(
+            "Simulation calibration requires at least one mean or percentile SLO."
+        )
+    return limits
+
+
+def _workload_mean_limits(system):
+    kind = _declared_latency_slo_kind(system)
+    if kind == "percentile":
+        raise ValueError(
+            "This workload selects percentile latency SLOs, which require "
+            "simulation and cannot be certified by strict analytical evaluation."
+        )
+    limits = system.get_request_class_mean_latency_limits()
+    return limits
+
+
 def _maximum_configuration(system, maximum_replicas):
     service_count = len(system.get_services())
     if isinstance(maximum_replicas, int):
@@ -242,6 +272,7 @@ def _calibrate_one(
     report_directory=None,
     progress_callback=None,
     minimum_configuration=None,
+    latency_slo_kind="percentile",
 ):
     """Calibrate and freeze W, M, replication policy, CIs, and seed policy."""
     options = options or CalibrationOptions()
@@ -300,6 +331,7 @@ def _calibrate_one(
             options=options,
             workers=workers,
             progress_callback=progress_callback,
+            latency_slo_kind=latency_slo_kind,
         )
     except MeasurementCalibrationError as error:
         if report_directory is not None:
@@ -333,6 +365,7 @@ def _calibrate_one(
         calibration_diagnostics=diagnostics,
         options=options,
         calibration_seeds=_calibration_seeds(warmup, measurement),
+        latency_slo_kind=latency_slo_kind,
     )
     if report_directory is not None:
         save_statistical_calibration(
@@ -371,7 +404,7 @@ def _scenario_calibration_options(options, scenario_index, scenario_count):
 def calibrate(
     system,
     *,
-    request_class_slos,
+    request_class_slos=None,
     maximum_replicas,
     options=None,
     workers=1,
@@ -381,6 +414,18 @@ def calibrate(
 ):
     """Calibrate one scenario or a conservative profile for every scenario."""
     options = options or CalibrationOptions()
+    declared_kind = _declared_latency_slo_kind(system)
+    latency_slo_kind = declared_kind or "percentile"
+    if request_class_slos is None:
+        request_class_slos = _workload_simulation_limits(system)
+    elif declared_kind in {"mean", "percentile"}:
+        declared_limits = _workload_simulation_limits(system)
+        if dict(request_class_slos) != declared_limits:
+            raise ValueError(
+                "Explicit simulation SLOs must match those declared by the workload."
+            )
+    if not request_class_slos:
+        raise ValueError("Simulation calibration requires at least one percentile SLO.")
     if not hasattr(system, "get_scenario_systems"):
         return _calibrate_one(
             system,
@@ -388,11 +433,10 @@ def calibrate(
             maximum_replicas=maximum_replicas,
             options=options,
             workers=workers,
-            extra_representative_configurations=(
-                extra_representative_configurations
-            ),
+            extra_representative_configurations=(extra_representative_configurations),
             report_directory=report_directory,
             progress_callback=progress_callback,
+            latency_slo_kind=latency_slo_kind,
         )
 
     scenario_systems = system.get_scenario_systems()
@@ -428,13 +472,12 @@ def calibrate(
                     report_directory=None,
                     progress_callback=scenario_progress,
                     minimum_configuration=robust_minimum,
+                    latency_slo_kind=latency_slo_kind,
                 ),
             )
         )
 
-    global_warmup = max(
-        profile.warmup_duration for _, profile in scenario_profiles
-    )
+    global_warmup = max(profile.warmup_duration for _, profile in scenario_profiles)
     global_measurement = max(
         profile.measurement_duration for _, profile in scenario_profiles
     )
@@ -493,6 +536,7 @@ def calibrate(
         calibration_diagnostics=diagnostics,
         options=options,
         calibration_seeds=calibration_seeds,
+        latency_slo_kind=latency_slo_kind,
     )
 
 
@@ -658,7 +702,7 @@ def optimize_with_calibrated_simulation(
 def optimize_with_analytical_model(
     system,
     *,
-    request_class_mean_latency_limits,
+    request_class_mean_latency_limits=None,
     maximum_replicas,
     optimizer=None,
     mode=OptimizationMode.AUTO,
@@ -666,19 +710,37 @@ def optimize_with_analytical_model(
     scalable_options=None,
     replica_costs=None,
     structural_feasibility=None,
+    progress_callback=None,
 ):
-    """Optimize analytical end-to-end mean latency without simulation.
+    """Optimize analytical stability and optional mean latency without simulation.
 
     EXACT proves minimum weighted replica cost only for the bounded analytical
     model. SCALABLE (also accepted as APPROXIMATE) is a budgeted heuristic.
-    Neither mode estimates p95 latency or provides statistical SLO evidence.
+    With no declared mean SLO, the stable vector is the capacity target. Neither
+    mode estimates p95 latency or provides statistical SLO evidence.
     """
+    declared_kind = _declared_latency_slo_kind(system)
+    if declared_kind == "percentile":
+        raise ValueError(
+            "This workload selects percentile latency SLOs, which require "
+            "simulation and cannot be certified by strict analytical evaluation."
+        )
+    if request_class_mean_latency_limits is None:
+        request_class_mean_latency_limits = _workload_mean_limits(system)
+    elif declared_kind == "mean":
+        declared_limits = _workload_mean_limits(system)
+        if dict(request_class_mean_latency_limits) != declared_limits:
+            raise ValueError(
+                "Explicit mean-latency limits must match those declared by "
+                "the workload."
+            )
     problem = AnalyticalReplicaSizingProblem(
         system,
         request_class_mean_latency_limits,
         maximum_replicas,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
+        progress_callback=progress_callback,
     )
     if optimizer is not None:
         return optimizer.optimize(problem)
@@ -687,6 +749,7 @@ def optimize_with_analytical_model(
         mode=mode,
         exact_configuration_limit=exact_configuration_limit,
         scalable_options=scalable_options,
+        progress_callback=progress_callback,
     )
 
 
@@ -712,7 +775,8 @@ def optimize_replica_sizing(
 
     ``evaluation_mode=ANALYTICAL`` uses analytical request-class mean-latency
     constraints and performs no simulation. ``SIMULATION`` requires a frozen
-    calibration profile and uses its p95 confidence-bound classification.
+    calibration profile and uses its confidence-bound classification for the
+    declared mean or percentile statistic.
     Both modes support AUTO, EXACT, and SCALABLE/APPROXIMATE search.
     """
     evaluation_mode = normalize_replica_evaluation_mode(evaluation_mode)
@@ -722,19 +786,12 @@ def optimize_replica_sizing(
                 "Analytical optimization does not consume a calibration profile."
             )
         if request_class_mean_latency_limits is None:
-            raise ValueError(
-                "Analytical optimization requires request-class mean-latency "
-                "limits."
-            )
+            request_class_mean_latency_limits = _workload_mean_limits(system)
         if maximum_replicas is None:
-            raise ValueError(
-                "Analytical optimization requires maximum replica bounds."
-            )
+            raise ValueError("Analytical optimization requires maximum replica bounds.")
         return optimize_with_analytical_model(
             system,
-            request_class_mean_latency_limits=(
-                request_class_mean_latency_limits
-            ),
+            request_class_mean_latency_limits=(request_class_mean_latency_limits),
             maximum_replicas=maximum_replicas,
             optimizer=optimizer,
             mode=mode,
@@ -742,6 +799,7 @@ def optimize_replica_sizing(
             scalable_options=scalable_options,
             replica_costs=replica_costs,
             structural_feasibility=structural_feasibility,
+            progress_callback=progress_callback,
         )
 
     if calibration_profile is None:
@@ -750,8 +808,8 @@ def optimize_replica_sizing(
         )
     if request_class_mean_latency_limits is not None:
         raise ValueError(
-            "Simulation optimization uses p95 SLOs from the calibration profile, "
-            "not analytical mean-latency limits."
+            "Simulation optimization uses the latency SLOs frozen in the "
+            "calibration profile, not separate analytical limits."
         )
     if maximum_replicas is not None:
         expected = tuple(calibration_profile.maximum_replica_configuration)

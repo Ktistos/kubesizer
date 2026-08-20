@@ -145,6 +145,24 @@ def test_calibration_stops_after_first_accepted_duration_pair():
     assert all(item.accepted_duration is not None for item in result.configurations)
 
 
+def test_measurement_duration_calibration_can_target_simulated_mean():
+    system = FakeMeasurementSystem(make_system(), {"read": 20, "rare": 20})
+    minimum = tuple(system.get_minimum_stable_replicas())
+
+    result = calibrate_measurement_duration(
+        system,
+        warmup_duration=3.0,
+        representative_configurations=(minimum,),
+        request_class_slos={"read": 10.0},
+        options=options(),
+        latency_slo_kind="mean",
+    )
+
+    interval = result.configurations[0].candidates[0].request_classes[0].interval
+    assert result.latency_slo_kind == "mean"
+    assert interval.latency_statistic == "mean"
+
+
 def test_rare_class_with_insufficient_observations_fails_explicitly():
     system = FakeMeasurementSystem(make_system(), {"read": 20, "rare": 1})
     minimum = tuple(system.get_minimum_stable_replicas())

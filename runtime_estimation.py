@@ -154,21 +154,16 @@ class LiveWorkflowRuntimeEstimator:
         self.estimate = estimate
         self.output = output
         self.clock = clock or time.perf_counter
-        self.minimum_update_interval_seconds = float(
-            minimum_update_interval_seconds
-        )
+        self.minimum_update_interval_seconds = float(minimum_update_interval_seconds)
         try:
             stages = tuple(estimate.stages)
         except (AttributeError, TypeError) as error:
-            raise TypeError(
-                "estimate must expose workflow stage estimates."
-            ) from error
+            raise TypeError("estimate must expose workflow stage estimates.") from error
         self._stage_estimates = {stage.stage: stage for stage in stages}
         missing = set(self._STAGE_NAMES.values()).difference(self._stage_estimates)
         if missing:
             raise ValueError(
-                "Workflow estimate is missing stages: "
-                + ", ".join(sorted(missing))
+                "Workflow estimate is missing stages: " + ", ".join(sorted(missing))
             )
         self._stage_order = tuple(self._STAGE_NAMES.values())
         self._active_stage = None
@@ -218,9 +213,7 @@ class LiveWorkflowRuntimeEstimator:
             raise RuntimeError("No runtime stage is active.")
         effective_total = self._total_units if total_units is None else total_units
         effective_completed = (
-            self._completed_units
-            if completed_units is None
-            else completed_units
+            self._completed_units if completed_units is None else completed_units
         )
         self._validate_units(effective_completed, effective_total)
         if (
@@ -296,9 +289,7 @@ class LiveWorkflowRuntimeEstimator:
     def _validate_units(completed, total):
         for name, value in (("completed_units", completed), ("total_units", total)):
             if value is not None and (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value < 0
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
             ):
                 raise ValueError(f"{name} must be a non-negative integer or None.")
         if completed is not None and total is not None and completed > total:
@@ -438,8 +429,8 @@ class LiveWorkflowRuntimeEstimator:
     def _emit(self, event, *, detail, force, completed):
         now = self.clock()
         elapsed = max(0.0, now - self._stage_started)
-        stage_low, stage_high = (0.0, 0.0) if completed else self._remaining_range(
-            elapsed
+        stage_low, stage_high = (
+            (0.0, 0.0) if completed else self._remaining_range(elapsed)
         )
         overall_low, overall_high = self._overall_remaining_range(
             stage_low,
@@ -461,7 +452,10 @@ class LiveWorkflowRuntimeEstimator:
             completed=completed,
         )
         self._last_snapshot = snapshot
-        if force or now - self._last_output_time >= self.minimum_update_interval_seconds:
+        if (
+            force
+            or now - self._last_output_time >= self.minimum_update_interval_seconds
+        ):
             self.output(format_live_runtime_snapshot(snapshot))
             self._last_output_time = now
         return snapshot
@@ -472,12 +466,9 @@ def _bounded_configuration(maximum_replicas, service_count):
         maximum = (maximum_replicas,) * service_count
     else:
         maximum = tuple(maximum_replicas)
-    if (
-        len(maximum) != service_count
-        or any(
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            for value in maximum
-        )
+    if len(maximum) != service_count or any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in maximum
     ):
         raise ValueError("maximum_replicas must define a positive bound per service.")
     return maximum
@@ -513,9 +504,7 @@ def _profile_look_schedule(profile):
             )
         )
     if len(values) != profile.maximum_sequential_looks:
-        raise ValueError(
-            "Calibration profile contains an inconsistent look schedule."
-        )
+        raise ValueError("Calibration profile contains an inconsistent look schedule.")
     return tuple(values)
 
 
@@ -525,9 +514,7 @@ def calibrate_replica_configuration_limit(
     rates,
     *,
     workers=1,
-    exact_search_time_budget_seconds=(
-        DEFAULT_EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS
-    ),
+    exact_search_time_budget_seconds=(DEFAULT_EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS),
     hard_configuration_cap=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     safety_factor=DEFAULT_RUNTIME_SAFETY_FACTOR,
     mode=OptimizationMode.AUTO,
@@ -581,8 +568,7 @@ def calibrate_replica_configuration_limit(
     replication_count = calibration_profile.maximum_optimization_replications
     effective_workers = min(workers, replication_count)
     replication_horizon = (
-        calibration_profile.warmup_duration
-        + calibration_profile.measurement_duration
+        calibration_profile.warmup_duration + calibration_profile.measurement_duration
     )
     simulation_seconds = _parallel_runtime(
         rates.measurement_seconds_per_replication_time_unit,
@@ -593,13 +579,10 @@ def calibrate_replica_configuration_limit(
         name for name, _ in calibration_profile.request_class_slos
     )
     system_request_classes = tuple(system.get_request_classes())
-    if (
-        not profile_request_classes
-        or set(profile_request_classes) != set(system_request_classes)
+    if not profile_request_classes or set(profile_request_classes) != set(
+        system_request_classes
     ):
-        raise ValueError(
-            "Calibration profile request classes do not match the system."
-        )
+        raise ValueError("Calibration profile request classes do not match the system.")
     request_class_count = len(profile_request_classes)
     bootstrap_seconds = (
         rates.bootstrap_seconds_per_replication_time_unit_per_class
@@ -638,14 +621,10 @@ def calibrate_replica_configuration_limit(
         reason = f"Explicit {selected_mode.value} mode overrides AUTO selection."
 
     return RuntimeAdaptiveReplicaLimit(
-        calibration_profile_fingerprint=(
-            calibration_profile.profile_fingerprint
-        ),
+        calibration_profile_fingerprint=(calibration_profile.profile_fingerprint),
         configuration_count=configuration_count,
         hard_configuration_cap=hard_configuration_cap,
-        exact_search_time_budget_seconds=float(
-            exact_search_time_budget_seconds
-        ),
+        exact_search_time_budget_seconds=float(exact_search_time_budget_seconds),
         safety_factor=float(safety_factor),
         worker_count=workers,
         estimated_simulation_seconds_per_configuration=(
@@ -731,8 +710,7 @@ def benchmark_runtime_rates(
         max(1_000.0, 500.0 * parameters.initial_bucket_width),
     )
     warmup_seeds = tuple(
-        RUNTIME_ESTIMATION_SEED_START + index
-        for index in range(benchmark_replications)
+        RUNTIME_ESTIMATION_SEED_START + index for index in range(benchmark_replications)
     )
     measurement_seeds = tuple(
         RUNTIME_ESTIMATION_SEED_START + 10_000 + index
@@ -802,25 +780,25 @@ def benchmark_runtime_rates(
         bootstrap_elapsed = _positive_elapsed(started)
         if measured_classes:
             bootstrap_rate = bootstrap_elapsed / (
-                measured_classes
-                * benchmark_replications
-                * measurement_duration
+                measured_classes * benchmark_replications * measurement_duration
             )
         else:
             bootstrap_rate = 0.0
 
-        cluster = Cluster("runtime-estimation", resources, system)
-        placement_problem = NodePlacementProblem(cluster)
-        started = time.perf_counter()
         placement_count = 0
-        for configuration in islice(
-            placement_problem.iter_configurations(),
-            placement_sample_size,
-        ):
-            placement_problem.evaluate(configuration)
-            placement_count += 1
-        placement_elapsed = _positive_elapsed(started)
-        placement_rate = placement_elapsed / max(1, placement_count)
+        placement_rate = 0.0
+        if resources is not None:
+            cluster = Cluster("runtime-estimation", resources, system)
+            placement_problem = NodePlacementProblem(cluster)
+            started = time.perf_counter()
+            for configuration in islice(
+                placement_problem.iter_configurations(),
+                placement_sample_size,
+            ):
+                placement_problem.evaluate(configuration)
+                placement_count += 1
+            placement_elapsed = _positive_elapsed(started)
+            placement_rate = placement_elapsed / max(1, placement_count)
     finally:
         system.configure_system_replicas(original_configuration)
 
@@ -848,12 +826,10 @@ def calculate_workflow_runtime_estimate(
     safety_factor=DEFAULT_RUNTIME_SAFETY_FACTOR,
     optimization_mode=OptimizationMode.AUTO,
     optimization_modes=None,
-    exact_replica_configuration_limit=(
-        DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT
-    ),
-    exact_placement_configuration_limit=(
-        DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT
-    ),
+    replica_optimization_mode=None,
+    placement_optimization_mode=None,
+    exact_replica_configuration_limit=(DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT),
+    exact_placement_configuration_limit=(DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT),
     scalable_replica_options=None,
     scalable_placement_options=None,
 ):
@@ -882,9 +858,7 @@ def calculate_workflow_runtime_estimate(
     last_accepted_horizon = starting_horizon
     for _ in range(options.warmup_max_validation_horizon_extensions + 1):
         warmup_work += (
-            options.warmup_replications
-            * batch_horizon_factor
-            * starting_horizon
+            options.warmup_replications * batch_horizon_factor * starting_horizon
         )
         last_accepted_horizon = starting_horizon * (2**doubling_count)
         warmup_work += (
@@ -907,9 +881,7 @@ def calculate_workflow_runtime_estimate(
         options.measurement_calibration_replications
         * len(representatives)
         * sum(
-            warmup_duration_ceiling
-            + duration
-            + options.maximum_drain_time
+            warmup_duration_ceiling + duration + options.maximum_drain_time
             for duration in measurement_study_durations
         )
     )
@@ -938,9 +910,7 @@ def calculate_workflow_runtime_estimate(
         parameters.pilot_horizon * (2**doubling_count) / 3.0,
     )
     ordinary_warmup_work = (
-        options.warmup_replications
-        * batch_horizon_factor
-        * parameters.pilot_horizon
+        options.warmup_replications * batch_horizon_factor * parameters.pilot_horizon
         + options.warmup_validation_replications
         * len(representatives)
         * options.warmup_max_validation_rounds
@@ -973,15 +943,31 @@ def calculate_workflow_runtime_estimate(
     replica_configuration_count = math.prod(
         high - low + 1 for low, high in zip(minimum, maximum)
     )
-    mode_policy = (
-        OptimizationModes.uniform(optimization_mode)
-        if optimization_modes is None
-        else optimization_modes
-    )
-    if not isinstance(mode_policy, OptimizationModes):
-        raise TypeError("optimization_modes must be an OptimizationModes value.")
+    if optimization_modes is not None and (
+        replica_optimization_mode is not None or placement_optimization_mode is not None
+    ):
+        raise ValueError(
+            "optimization_modes cannot be combined with per-optimizer modes."
+        )
+    if optimization_modes is None:
+        uniform_mode = normalize_optimization_mode(optimization_mode)
+        replica_mode_policy = normalize_optimization_mode(
+            uniform_mode
+            if replica_optimization_mode is None
+            else replica_optimization_mode
+        )
+        placement_mode_policy = normalize_optimization_mode(
+            uniform_mode
+            if placement_optimization_mode is None
+            else placement_optimization_mode
+        )
+    else:
+        if not isinstance(optimization_modes, OptimizationModes):
+            raise TypeError("optimization_modes must be an OptimizationModes value.")
+        replica_mode_policy = optimization_modes.replica
+        placement_mode_policy = optimization_modes.placement
     selected_replica_mode = resolve_optimization_mode(
-        mode_policy.replica,
+        replica_mode_policy,
         replica_configuration_count,
         exact_replica_configuration_limit,
     )
@@ -1021,10 +1007,13 @@ def calculate_workflow_runtime_estimate(
         capped_projected_seconds = one_configuration_seconds * (
             scalable_replica_options.maximum_configuration_evaluations
         )
-        optimization_seconds = min(
-            capped_projected_seconds,
-            scalable_replica_options.time_budget_seconds,
-        ) + one_configuration_seconds
+        optimization_seconds = (
+            min(
+                capped_projected_seconds,
+                scalable_replica_options.time_budget_seconds,
+            )
+            + one_configuration_seconds
+        )
     ordinary_replica_configuration_count = min(
         replica_configuration_count,
         1 + sum(high > low for low, high in zip(minimum, maximum)),
@@ -1071,8 +1060,7 @@ def calculate_workflow_runtime_estimate(
         * final_bootstrap_work
     )
     ordinary_final_simulation_work = (
-        options.final_validation_replications
-        * ordinary_per_replication_horizon
+        options.final_validation_replications * ordinary_per_replication_horizon
     )
     ordinary_final_seconds = (
         _parallel_runtime(
@@ -1084,59 +1072,66 @@ def calculate_workflow_runtime_estimate(
         * final_bootstrap_work
     )
 
-    node_count = len(resources["nodes"])
-    maximum_placement_count = math.prod(
-        math.comb(replica_count + node_count - 1, node_count - 1)
-        for replica_count in maximum
-    )
-    selected_placement_mode = resolve_optimization_mode(
-        mode_policy.placement,
-        maximum_placement_count,
-        exact_placement_configuration_limit,
-    )
     scalable_placement_options = (
         scalable_placement_options or ScalablePlacementSearchOptions()
     )
-    placement_seconds = (
-        rates.placement_seconds_per_candidate * maximum_placement_count
-    )
-    if selected_placement_mode == OptimizationMode.SCALABLE:
-        scalable_placement_operations = (
-            scalable_placement_options.maximum_partial_states
-            + scalable_placement_options.maximum_complete_evaluations
-        )
-        capped_projected_seconds = (
-            rates.placement_seconds_per_candidate
-            * scalable_placement_operations
-        )
-        placement_seconds = min(
-            capped_projected_seconds,
-            scalable_placement_options.time_budget_seconds,
-        ) + rates.placement_seconds_per_candidate
-    shell_configurations = [minimum]
-    for service_index, (low, high) in enumerate(zip(minimum, maximum)):
-        if low >= high:
-            continue
-        neighbor = list(minimum)
-        neighbor[service_index] += 1
-        shell_configurations.append(tuple(neighbor))
-    ordinary_placement_count = max(
-        math.prod(
+    if resources is None:
+        maximum_placement_count = 0
+        ordinary_placement_count = 0
+        selected_placement_mode = normalize_optimization_mode(placement_mode_policy)
+        placement_seconds = 0.0
+        ordinary_placement_seconds = 0.0
+    else:
+        node_count = len(resources["nodes"])
+        maximum_placement_count = math.prod(
             math.comb(replica_count + node_count - 1, node_count - 1)
-            for replica_count in configuration
+            for replica_count in maximum
         )
-        for configuration in shell_configurations
-    )
-    ordinary_placement_seconds = (
-        rates.placement_seconds_per_candidate * ordinary_placement_count
-    )
+        selected_placement_mode = resolve_optimization_mode(
+            placement_mode_policy,
+            maximum_placement_count,
+            exact_placement_configuration_limit,
+        )
+        placement_seconds = (
+            rates.placement_seconds_per_candidate * maximum_placement_count
+        )
+        if selected_placement_mode == OptimizationMode.SCALABLE:
+            scalable_placement_operations = (
+                scalable_placement_options.maximum_partial_states
+                + scalable_placement_options.maximum_complete_evaluations
+            )
+            capped_projected_seconds = (
+                rates.placement_seconds_per_candidate * scalable_placement_operations
+            )
+            placement_seconds = (
+                min(
+                    capped_projected_seconds,
+                    scalable_placement_options.time_budget_seconds,
+                )
+                + rates.placement_seconds_per_candidate
+            )
+        shell_configurations = [minimum]
+        for service_index, (low, high) in enumerate(zip(minimum, maximum)):
+            if low >= high:
+                continue
+            neighbor = list(minimum)
+            neighbor[service_index] += 1
+            shell_configurations.append(tuple(neighbor))
+        ordinary_placement_count = max(
+            math.prod(
+                math.comb(replica_count + node_count - 1, node_count - 1)
+                for replica_count in configuration
+            )
+            for configuration in shell_configurations
+        )
+        ordinary_placement_seconds = (
+            rates.placement_seconds_per_candidate * ordinary_placement_count
+        )
 
     stages = (
         StageRuntimeEstimate(
             stage="Stage A — calibration",
-            ordinary_planning_seconds=(
-                ordinary_calibration_seconds * safety_factor
-            ),
+            ordinary_planning_seconds=(ordinary_calibration_seconds * safety_factor),
             configured_ceiling_seconds=calibration_seconds * safety_factor,
             ordinary_work="one warm-up campaign and all measurement candidates",
             ceiling_work=(
@@ -1146,9 +1141,7 @@ def calculate_workflow_runtime_estimate(
         ),
         StageRuntimeEstimate(
             stage="Stage B — replica optimization",
-            ordinary_planning_seconds=(
-                ordinary_optimization_seconds * safety_factor
-            ),
+            ordinary_planning_seconds=(ordinary_optimization_seconds * safety_factor),
             configured_ceiling_seconds=optimization_seconds * safety_factor,
             ordinary_work=(
                 f"stable anchor plus {ordinary_replica_configuration_count - 1} "
@@ -1183,25 +1176,32 @@ def calculate_workflow_runtime_estimate(
         ),
         StageRuntimeEstimate(
             stage="Stage D — node placement",
-            ordinary_planning_seconds=(
-                ordinary_placement_seconds * safety_factor
-            ),
+            ordinary_planning_seconds=(ordinary_placement_seconds * safety_factor),
             configured_ceiling_seconds=placement_seconds * safety_factor,
             ordinary_work=(
-                f"up to {ordinary_placement_count:,} placements near the stable anchor"
+                "placement skipped"
+                if resources is None
+                else (
+                    f"up to {ordinary_placement_count:,} placements near the "
+                    "stable anchor"
+                )
             ),
             ceiling_work=(
-                (
-                    f"all {maximum_placement_count:,} maximum-bound placements "
-                    "before proof-based pruning"
-                )
-                if selected_placement_mode == OptimizationMode.EXACT
+                "placement skipped"
+                if resources is None
                 else (
-                    f"SCALABLE mode: beam {scalable_placement_options.beam_width}, "
-                    f"at most {scalable_placement_options.maximum_partial_states:,} "
-                    "partial states and "
-                    f"{scalable_placement_options.maximum_complete_evaluations:,} "
-                    "complete evaluations"
+                    (
+                        f"all {maximum_placement_count:,} maximum-bound placements "
+                        "before proof-based pruning"
+                    )
+                    if selected_placement_mode == OptimizationMode.EXACT
+                    else (
+                        f"SCALABLE mode: beam {scalable_placement_options.beam_width}, "
+                        f"at most {scalable_placement_options.maximum_partial_states:,} "
+                        "partial states and "
+                        f"{scalable_placement_options.maximum_complete_evaluations:,} "
+                        "complete evaluations"
+                    )
                 )
             ),
         ),
@@ -1218,9 +1218,9 @@ def calculate_workflow_runtime_estimate(
         placement_search_mode_at_maximum_bounds=selected_placement_mode.value,
         stochastic_warning=(
             "This is a conservative planning estimate, not a guaranteed bound: "
-            "Poisson arrivals and exponential service times have unbounded tails, "
-            "and host load can change. Configured retry, replica, replication, "
-            "drain-time, and placement limits define the projected work ceiling."
+            "stochastic workloads may have unbounded or long tails, and host load "
+            "can change. Configured retry, replica, replication, drain-time, and "
+            "placement limits define the projected work ceiling."
         ),
     )
 
@@ -1235,12 +1235,10 @@ def estimate_workflow_runtime(
     safety_factor=DEFAULT_RUNTIME_SAFETY_FACTOR,
     optimization_mode=OptimizationMode.AUTO,
     optimization_modes=None,
-    exact_replica_configuration_limit=(
-        DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT
-    ),
-    exact_placement_configuration_limit=(
-        DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT
-    ),
+    replica_optimization_mode=None,
+    placement_optimization_mode=None,
+    exact_replica_configuration_limit=(DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT),
+    exact_placement_configuration_limit=(DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT),
     scalable_replica_options=None,
     scalable_placement_options=None,
 ):
@@ -1261,6 +1259,8 @@ def estimate_workflow_runtime(
         safety_factor=safety_factor,
         optimization_mode=optimization_mode,
         optimization_modes=optimization_modes,
+        replica_optimization_mode=replica_optimization_mode,
+        placement_optimization_mode=placement_optimization_mode,
         exact_replica_configuration_limit=exact_replica_configuration_limit,
         exact_placement_configuration_limit=exact_placement_configuration_limit,
         scalable_replica_options=scalable_replica_options,

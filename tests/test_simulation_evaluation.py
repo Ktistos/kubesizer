@@ -41,7 +41,7 @@ def make_options():
     )
 
 
-def make_profile(system, maximum=None):
+def make_profile(system, maximum=None, *, latency_slo_kind="percentile"):
     minimum = tuple(system.get_minimum_stable_replicas())
     maximum = maximum or tuple(value + 1 for value in minimum)
     return build_calibration_profile(
@@ -56,6 +56,7 @@ def make_profile(system, maximum=None):
         calibration_diagnostics={"test": True},
         options=make_options(),
         creation_timestamp="2026-08-11T00:00:00+00:00",
+        latency_slo_kind=latency_slo_kind,
     )
 
 
@@ -117,6 +118,19 @@ def test_all_upper_bounds_below_slo_is_feasible_at_rmin():
     assert result.sequential_tail_alpha == pytest.approx(0.05 / (2 * 2 * 1))
     assert result.seeds_used == profile.optimization_seeds(2)
     assert len(system.calls) == 1
+
+
+def test_mean_slo_simulation_uses_cluster_bootstrap_mean():
+    system = make_system()
+    profile = make_profile(system, latency_slo_kind="mean")
+    wrapped = FakeSimulationSystem(system, lambda seed, configuration: (0.2, 0.4))
+
+    result = CalibratedConfigurationEvaluator(wrapped, profile).evaluate((1,))
+
+    interval = result.intervals["checkout"]
+    assert result.classification == SimulationClassification.STATISTICALLY_FEASIBLE
+    assert interval.latency_statistic == "mean"
+    assert interval.estimate == pytest.approx(0.3)
 
 
 def test_configuration_evaluation_reports_sequential_batch_progress():

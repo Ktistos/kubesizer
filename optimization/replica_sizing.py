@@ -177,7 +177,7 @@ class ReplicaSizingEvaluation:
 
 
 class AnalyticalReplicaSizingProblem(GraphSearchProblem):
-    """Bounded replica sizing using analytical mean-latency constraints only.
+    """Bounded replica sizing using stability and optional mean constraints.
 
     Exact/scalable describes search coverage. It does not change the queueing
     formulas selected by the system, and neither search mode turns analytical
@@ -192,21 +192,21 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         *,
         replica_costs=None,
         structural_feasibility=None,
+        progress_callback=None,
     ):
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable or None.")
         self.__system = system
         self.__service_count = len(system.get_services())
         self.__request_classes = tuple(system.get_request_classes())
-        self.__limits = self.__normalize_limits(
-            request_class_mean_latency_limits
-        )
+        self.__limits = self.__normalize_limits(request_class_mean_latency_limits)
         self.__stable = self.__normalize_configuration(
             tuple(system.get_minimum_stable_replicas()),
             maximum=None,
         )
         self.__maximum = self.__normalize_maximum(max_replicas)
         if any(
-            maximum < minimum
-            for minimum, maximum in zip(self.__stable, self.__maximum)
+            maximum < minimum for minimum, maximum in zip(self.__stable, self.__maximum)
         ):
             raise ValueError(
                 "Maximum replica bounds cannot be below the analytically "
@@ -214,6 +214,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             )
         self.__replica_costs = self.__normalize_replica_costs(replica_costs)
         self.__structural_feasibility = structural_feasibility
+        self.__progress_callback = progress_callback
         self.__evidence_cache = {}
         self.__evaluation_cache = {}
 
@@ -221,18 +222,18 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         limits = dict(values)
         expected = set(self.__request_classes)
         actual = set(limits)
-        if actual != expected:
-            missing = ", ".join(sorted(expected - actual)) or "none"
+        if not actual <= expected:
             unexpected = ", ".join(sorted(actual - expected)) or "none"
             raise ValueError(
-                "Analytical mean-latency limits must exactly match request "
-                f"classes (missing: {missing}; unexpected: {unexpected})."
+                "Analytical mean-latency limits must be a subset of "
+                f"request classes (unexpected: {unexpected})."
             )
-        normalized = {name: float(limits[name]) for name in self.__request_classes}
-        if any(
-            not math.isfinite(value) or value <= 0
-            for value in normalized.values()
-        ):
+        normalized = {
+            name: float(limits[name])
+            for name in self.__request_classes
+            if name in limits
+        }
+        if any(not math.isfinite(value) or value <= 0 for value in normalized.values()):
             raise ValueError(
                 "Analytical request-class mean-latency limits must be finite "
                 "and positive."
@@ -308,8 +309,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
     def configuration_cost(self, configuration):
         configuration = self.__normalize_configuration(configuration)
         return sum(
-            count * cost
-            for count, cost in zip(configuration, self.__replica_costs)
+            count * cost for count, cost in zip(configuration, self.__replica_costs)
         )
 
     def candidate_is_structurally_feasible(self, configuration):
@@ -334,9 +334,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
     def step_cost(self, current, neighbor):
         current = self.__normalize_configuration(current)
         neighbor = self.__normalize_configuration(neighbor)
-        differences = tuple(
-            right - left for left, right in zip(current, neighbor)
-        )
+        differences = tuple(right - left for left, right in zip(current, neighbor))
         if differences.count(1) != 1 or any(
             difference not in (0, 1) for difference in differences
         ):
@@ -359,9 +357,8 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             scenario_method = getattr(self.__system, "get_scenario_name", None)
             scenario = scenario_method() if scenario_method is not None else None
             values = {
-                scenario or "default": (
-                    self.__system.get_request_class_mean_latencies()
-                )
+                scenario
+                or "default": (self.__system.get_request_class_mean_latencies())
             }
         return tuple(
             (
@@ -387,10 +384,13 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         return evidence
 
     def _worst_normalized_latency(self, scenario_means):
+        if not self.__limits:
+            return 0.0
         return max(
             mean / self.__limits[request_class]
             for _, class_values in scenario_means
             for request_class, mean in class_values
+            if request_class in self.__limits
         )
 
     def search_tie_breaker(self, configuration):
@@ -409,8 +409,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             current
         )
         return (
-            self.search_tie_breaker(current)
-            - self.search_tie_breaker(candidate)
+            self.search_tie_breaker(current) - self.search_tie_breaker(candidate)
         ) / added_cost
 
     def evaluate(self, configuration):
@@ -440,16 +439,27 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         evaluation = AnalyticalReplicaSizingEvaluation(
             configuration=configuration,
             feasible=feasible,
-            cost=(
-                self.configuration_cost(configuration) if feasible else math.inf
-            ),
+            cost=(self.configuration_cost(configuration) if feasible else math.inf),
             tie_breaker=tie_breaker,
             analytical_metrics=analytical,
             classification=classification,
             scenario_request_class_mean_latencies=scenario_means,
             request_class_mean_latency_limits=tuple(self.__limits.items()),
+            evaluation_basis=(
+                "ANALYTICAL_MEAN_LATENCY" if self.__limits else "ANALYTICAL_STABILITY"
+            ),
         )
         self.__evaluation_cache[configuration] = evaluation
+        if self.__progress_callback is not None:
+            self.__progress_callback(
+                "replica_configuration_evaluated",
+                {
+                    "configuration": configuration,
+                    "completed_configurations": len(self.__evaluation_cache),
+                    "search_space_configurations": self.configuration_count(),
+                    "classification": classification.value,
+                },
+            )
         return evaluation
 
     def evaluate_and_check(self, configuration):

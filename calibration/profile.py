@@ -12,8 +12,9 @@ from native_backend import SIMULATOR_SEMANTICS_VERSION
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
 
-CALIBRATION_PROFILE_VERSION = 4
+CALIBRATION_PROFILE_VERSION = 5
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
+MEAN_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-mean-bootstrap-v1"
 
 
 class CalibrationProfileMismatchError(RuntimeError):
@@ -189,10 +190,16 @@ class CalibrationProfile:
     creation_timestamp: str
     calibration_diagnostics: str
     profile_fingerprint: str
+    latency_slo_kind: str = "percentile"
 
     @property
     def confidence_level(self):
         return 1.0 - self.overall_alpha
+
+    @property
+    def confidence_interval_method(self):
+        """Generic name; the stored field name is retained for compatibility."""
+        return self.p95_confidence_interval_method
 
     @property
     def slos(self):
@@ -217,8 +224,17 @@ class CalibrationProfile:
             raise CalibrationProfileMismatchError(
                 "Calibration profile fingerprint does not match its contents."
             )
-        if self.p95_confidence_interval_method != P95_CONFIDENCE_INTERVAL_METHOD:
-            raise CalibrationProfileMismatchError("Unsupported p95 interval method.")
+        if self.latency_slo_kind not in {"mean", "percentile"}:
+            raise CalibrationProfileMismatchError("Unsupported latency SLO kind.")
+        expected_interval_method = (
+            MEAN_CONFIDENCE_INTERVAL_METHOD
+            if self.latency_slo_kind == "mean"
+            else P95_CONFIDENCE_INTERVAL_METHOD
+        )
+        if self.p95_confidence_interval_method != expected_interval_method:
+            raise CalibrationProfileMismatchError(
+                "Unsupported latency confidence-interval method."
+            )
         if self.optimization_seed_policy.version != SEED_POLICY_VERSION:
             raise CalibrationProfileMismatchError("Unsupported seed-policy version.")
         if (
@@ -430,6 +446,7 @@ class CalibrationProfile:
             "overall_alpha": self.overall_alpha,
             "confidence_level": self.confidence_level,
             "request_class_slos": self.slos,
+            "latency_slo_kind": self.latency_slo_kind,
             "p95_confidence_interval_method": (
                 self.p95_confidence_interval_method
             ),
@@ -549,6 +566,7 @@ class CalibrationProfile:
                 value.get("calibration_diagnostics", {})
             ),
             profile_fingerprint=str(value["profile_fingerprint"]),
+            latency_slo_kind=str(value.get("latency_slo_kind", "percentile")),
         )
         return profile.validate_integrity()
 
@@ -633,7 +651,21 @@ def experiment_fingerprints(system):
             for request_class in request_classes
         ],
     }
-    workload = {"scenarios": []}
+    try:
+        latency_slos = representative.get_request_class_latency_slos()
+    except AttributeError:
+        latency_slos = {}
+    workload = {
+        "request_class_latency_slos": [
+            {
+                "request_class": request_class,
+                "constraint": latency_slos[request_class],
+            }
+            for request_class in request_classes
+            if request_class in latency_slos
+        ],
+        "scenarios": [],
+    }
     for scenario_name, scenario_system in scenario_systems.items():
         scenario_services = tuple(
             sorted(
@@ -706,6 +738,7 @@ def build_calibration_profile(
     options=None,
     calibration_seeds=None,
     creation_timestamp=None,
+    latency_slo_kind="percentile",
 ):
     options = options or CalibrationOptions()
     service_count = len(system.get_services())
@@ -718,10 +751,16 @@ def build_calibration_profile(
     if any(high < low for low, high in zip(minimum, maximum)):
         raise ValueError("Maximum configuration cannot be below the stable minimum.")
     slos = tuple(sorted((str(name), float(slo)) for name, slo in request_class_slos.items()))
-    if {name for name, _ in slos} != set(system.get_request_classes()):
-        raise ValueError("SLO definitions must exactly match the request classes.")
+    request_classes = set(system.get_request_classes())
+    slo_classes = {name for name, _ in slos}
+    if not slo_classes or not slo_classes <= request_classes:
+        raise ValueError(
+            "SLO definitions must be a nonempty subset of the request classes."
+        )
     if any(not math.isfinite(slo) or slo <= 0 for _, slo in slos):
         raise ValueError("Request-class SLOs must be finite and positive.")
+    if latency_slo_kind not in {"mean", "percentile"}:
+        raise ValueError("latency_slo_kind must be mean or percentile.")
     if not math.isfinite(warmup_duration) or warmup_duration < 0:
         raise ValueError("warmup_duration must be finite and non-negative.")
     if not math.isfinite(measurement_duration) or measurement_duration <= 0:
@@ -780,7 +819,11 @@ def build_calibration_profile(
         maximum_sequential_looks=options.maximum_sequential_looks,
         overall_alpha=options.overall_alpha,
         request_class_slos=slos,
-        p95_confidence_interval_method=P95_CONFIDENCE_INTERVAL_METHOD,
+        p95_confidence_interval_method=(
+            MEAN_CONFIDENCE_INTERVAL_METHOD
+            if latency_slo_kind == "mean"
+            else P95_CONFIDENCE_INTERVAL_METHOD
+        ),
         bootstrap_resample_count=options.bootstrap_resample_count,
         minimum_bootstrap_tail_draws=options.minimum_bootstrap_tail_draws,
         target_samples_per_class=options.target_samples_per_class,
@@ -806,6 +849,7 @@ def build_calibration_profile(
         ),
         calibration_diagnostics=_canonical_json(calibration_diagnostics),
         profile_fingerprint="",
+        latency_slo_kind=latency_slo_kind,
     )
     profile = replace(profile, profile_fingerprint=_profile_fingerprint(profile))
     return profile.validate_integrity()

@@ -85,8 +85,11 @@ def optimize_replica_configuration(
     mode=OptimizationMode.AUTO,
     exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     scalable_options=None,
+    progress_callback=None,
 ):
     """Select exact uniform-cost or bounded multi-start/VNS replica search."""
+    if progress_callback is not None and not callable(progress_callback):
+        raise TypeError("progress_callback must be callable or None.")
     count_method = getattr(problem, "configuration_count", None)
     if count_method is not None:
         search_space_size = count_method()
@@ -107,14 +110,43 @@ def optimize_replica_configuration(
     selected, reason = optimization_mode_decision(
         mode, search_space_size, exact_configuration_limit
     )
+    options = scalable_options or ScalableReplicaSearchOptions()
+    evaluation_limit = (
+        search_space_size
+        if selected == OptimizationMode.EXACT
+        else min(search_space_size, options.maximum_configuration_evaluations)
+    )
+    if progress_callback is not None:
+        progress_callback(
+            "replica_optimization_started",
+            {
+                "selected_mode": selected.value,
+                "completed_configurations": 0,
+                "total_configurations": evaluation_limit,
+                "search_space_configurations": search_space_size,
+            },
+        )
     if selected == OptimizationMode.EXACT:
         optimizer = UniformCostReplicaOptimizer()
         optimizer.selection_reason = reason
-        return optimizer.optimize(problem)
-    return _scalable_replica_optimizer(
-        scalable_options or ScalableReplicaSearchOptions(),
-        reason,
-    ).optimize(problem)
+        result = optimizer.optimize(problem)
+    else:
+        result = _scalable_replica_optimizer(options, reason).optimize(problem)
+    if progress_callback is not None:
+        progress_callback(
+            "replica_optimization_completed",
+            {
+                "selected_mode": selected.value,
+                "completed_configurations": getattr(
+                    result,
+                    "unique_evaluation_count",
+                    getattr(result, "explored_states", 0),
+                ),
+                "total_configurations": evaluation_limit,
+                "search_space_configurations": search_space_size,
+            },
+        )
+    return result
 
 
 def optimize_node_placement(
@@ -168,9 +200,7 @@ def optimize_node_placement(
             maximum_partial_states=options.maximum_partial_states,
             maximum_complete_evaluations=options.maximum_complete_evaluations,
             maximum_total_evaluator_calls=options.maximum_total_evaluator_calls,
-            maximum_simulation_replications=(
-                options.maximum_simulation_replications
-            ),
+            maximum_simulation_replications=(options.maximum_simulation_replications),
             maximum_local_iterations=options.maximum_local_iterations,
             time_budget_seconds=options.time_budget_seconds,
             maximum_restarts=options.maximum_restarts,

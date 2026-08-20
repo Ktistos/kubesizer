@@ -44,10 +44,11 @@ def interval_summary(interval):
         return None
     return {
         "request_class": interval.request_class,
+        "latency_statistic": interval.latency_statistic,
         "replication_count": interval.replication_count,
         "nonempty_replication_count": interval.nonempty_replication_count,
         "eligible_request_count": interval.eligible_request_count,
-        "p95_estimate": interval.p95_estimate,
+        "estimate": interval.estimate,
         "lower_bound": interval.lower_bound,
         "upper_bound": interval.upper_bound,
         "half_width": interval.half_width,
@@ -152,7 +153,7 @@ def calibration_diagnostics_summary(warmup, measurement, options):
                                     "doubled_interval": interval_summary(
                                         diagnostic.doubled_interval
                                     ),
-                                    "p95_relative_change": (
+                                    "estimate_relative_change": (
                                         diagnostic.p95_relative_change
                                     ),
                                     "ci_width_relative_change": (
@@ -170,7 +171,7 @@ def calibration_diagnostics_summary(warmup, measurement, options):
                                     "precision_requirement_passed": (
                                         diagnostic.precision_requirement_passed
                                     ),
-                                    "p95_stability_passed": (
+                                    "estimate_stability_passed": (
                                         diagnostic.p95_stability_passed
                                     ),
                                     "ci_width_stability_passed": (
@@ -193,7 +194,7 @@ def calibration_diagnostics_summary(warmup, measurement, options):
             "maximum_looks": options.maximum_sequential_looks,
             "overall_alpha": options.overall_alpha,
             "error_control": "Bonferroni across two tails, looks, and classes",
-            "p95_interval": "replication-cluster percentile bootstrap",
+            "latency_interval": "replication-cluster bootstrap",
             "bootstrap_resample_count": options.bootstrap_resample_count,
         },
     }
@@ -215,11 +216,14 @@ def _measurement_rows(measurement):
                     "nonempty_replications": (
                         interval.nonempty_replication_count if interval else 0
                     ),
-                    "p95": interval.p95_estimate if interval else "",
+                    "latency_statistic": (
+                        interval.latency_statistic if interval else ""
+                    ),
+                    "estimate": interval.estimate if interval else "",
                     "lower_bound": interval.lower_bound if interval else "",
                     "upper_bound": interval.upper_bound if interval else "",
                     "ci_half_width": interval.half_width if interval else "",
-                    "p95_relative_change": item.p95_relative_change,
+                    "estimate_relative_change": item.p95_relative_change,
                     "ci_width_relative_change": item.ci_width_relative_change,
                     "ci_half_width_absolute_change": (
                         item.ci_half_width_absolute_change
@@ -339,28 +343,37 @@ def save_statistical_calibration(
             writer.writeheader()
             writer.writerows(rows)
     plot_paths = ()
-    p95_series = _measurement_plot_series(measurement, "p95_estimate")
+    latency_slo_kind = getattr(measurement, "latency_slo_kind", "percentile")
+    estimate_series = _measurement_plot_series(measurement, "estimate")
     width_series = _measurement_plot_series(measurement, "half_width")
-    if p95_series and width_series:
+    if estimate_series and width_series:
+        statistic_label = "Mean" if latency_slo_kind == "mean" else "P95"
+        filename_prefix = "mean" if latency_slo_kind == "mean" else "p95"
         plot_paths = (
             str(
                 _save_series_svg(
-                    p95_series,
-                    output_directory / "p95_vs_measurement_duration.svg",
-                    title="P95 stability versus measurement duration",
-                    y_label="pooled p95",
+                    estimate_series,
+                    output_directory
+                    / f"{filename_prefix}_vs_measurement_duration.svg",
+                    title=f"{statistic_label} stability versus measurement duration",
+                    y_label=f"pooled {statistic_label.lower()}",
                 )
             ),
             str(
                 _save_series_svg(
                     width_series,
                     output_directory / "ci_width_vs_measurement_duration.svg",
-                    title="P95 CI precision versus measurement duration",
+                    title=f"{statistic_label} CI precision versus measurement duration",
                     y_label="CI half-width",
                 )
             ),
         )
     markdown_path = output_directory / "calibration_report.md"
+    interval_method = getattr(
+        profile,
+        "confidence_interval_method",
+        profile.p95_confidence_interval_method,
+    )
     markdown_path.write_text(
         "# Statistical simulation calibration\n\n"
         f"- Profile fingerprint: `{profile.profile_fingerprint}`\n"
@@ -369,7 +382,8 @@ def save_statistical_calibration(
         f"- Optimization replications: {profile.minimum_optimization_replications} to {profile.maximum_optimization_replications}, batch {profile.replication_batch_size}\n"
         f"- Maximum sequential looks: {profile.maximum_sequential_looks}\n"
         f"- Overall alpha: {profile.overall_alpha:g}\n"
-        f"- P95 interval: {profile.p95_confidence_interval_method}\n"
+        f"- Latency statistic: {getattr(profile, 'latency_slo_kind', 'percentile')}\n"
+        f"- Interval: {interval_method}\n"
         f"- Warm-up determining metrics: {', '.join(diagnostics['warmup']['determining_metrics'])}\n"
         f"- Measurement configurations: {len(measurement.configurations)}\n\n"
         "Optimization and final validation must use this frozen profile. "
@@ -410,10 +424,13 @@ def save_configuration_evaluation(evaluation, output_directory):
         if points:
             series.append((request_class, points))
     if series:
+        first_interval = dict(evaluation.request_class_intervals)[class_names[0]]
+        statistic = first_interval.latency_statistic
         _save_series_svg(
             tuple(series),
-            output_directory / "replications_vs_p95_ci_half_width.svg",
-            title="Sequential p95 confidence interval precision",
+            output_directory
+            / f"replications_vs_{statistic}_ci_half_width.svg",
+            title=f"Sequential {statistic} confidence interval precision",
             y_label="CI half-width",
         )
     return path

@@ -23,6 +23,47 @@ def _single_service_system():
     )
 
 
+def _structured_single_service_system():
+    return System(
+        "structured-analytical",
+        {
+            "request_classes": {
+                "request": {
+                    "concurrency_weight": 1.0,
+                    "end_to_end_latency_slos": {
+                        "mean_seconds": 0.12,
+                    },
+                    "routing": {},
+                }
+            },
+            "traffic_model": {
+                "entry_services": {
+                    "request": {
+                        "api": {
+                            "distribution": "exponential",
+                            "rate": 4.0,
+                        }
+                    }
+                },
+                "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
+            },
+        },
+        QueueingNetworkType.OPEN,
+    )
+
+
+def _structured_percentile_system():
+    workload = _structured_single_service_system().get_workload_spec()
+    workload["request_classes"]["request"]["end_to_end_latency_slos"] = {
+        "percentile": {"quantile": 0.95, "maximum_seconds": 0.5}
+    }
+    return System(
+        "structured-percentile",
+        workload,
+        QueueingNetworkType.OPEN,
+    )
+
+
 def _scenario_workload():
     return {
         "schema_version": 2,
@@ -31,23 +72,15 @@ def _scenario_workload():
         "scenarios": {
             "light": {
                 "entry_services": {
-                    "request": {
-                        "api": {"distribution": "exponential", "rate": 2.0}
-                    }
+                    "request": {"api": {"distribution": "exponential", "rate": 2.0}}
                 },
-                "service_times": {
-                    "api": {"distribution": "exponential", "rate": 10.0}
-                },
+                "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
             },
             "heavy": {
                 "entry_services": {
-                    "request": {
-                        "api": {"distribution": "exponential", "rate": 8.0}
-                    }
+                    "request": {"api": {"distribution": "exponential", "rate": 8.0}}
                 },
-                "service_times": {
-                    "api": {"distribution": "exponential", "rate": 10.0}
-                },
+                "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
             },
         },
     }
@@ -107,10 +140,38 @@ def test_exact_analytical_search_finds_minimum_model_feasible_cost(monkeypatch):
     assert result.global_optimal
     assert result.simulation_replications == 0
     assert (
-        result.metrics.classification
-        == AnalyticalClassification.ANALYTICALLY_FEASIBLE
+        result.metrics.classification == AnalyticalClassification.ANALYTICALLY_FEASIBLE
     )
     assert result.metrics.evaluation_basis == "ANALYTICAL_MEAN_LATENCY"
+
+
+def test_analytical_search_reports_bounded_progress_without_simulation():
+    events = []
+
+    optimize_with_analytical_model(
+        _single_service_system(),
+        request_class_mean_latency_limits={"request": 0.12},
+        maximum_replicas=3,
+        mode=OptimizationMode.EXACT,
+        progress_callback=lambda event, details: events.append((event, details)),
+    )
+
+    assert events[0] == (
+        "replica_optimization_started",
+        {
+            "selected_mode": "EXACT",
+            "completed_configurations": 0,
+            "total_configurations": 3,
+            "search_space_configurations": 3,
+        },
+    )
+    evaluated = [
+        details
+        for event, details in events
+        if event == "replica_configuration_evaluated"
+    ]
+    assert [item["completed_configurations"] for item in evaluated] == [1, 2]
+    assert events[-1][0] == "replica_optimization_completed"
 
 
 def test_scalable_analytical_search_is_reproducible_and_not_globally_certified():
@@ -144,6 +205,46 @@ def test_scalable_analytical_search_is_reproducible_and_not_globally_certified()
     assert normalize_optimization_mode("approximate") == OptimizationMode.SCALABLE
 
 
+def test_analytical_search_defaults_to_workload_mean_slo_not_percentile_slo():
+    result = optimize_with_analytical_model(
+        _structured_single_service_system(),
+        maximum_replicas=3,
+        mode=OptimizationMode.EXACT,
+    )
+
+    # One replica has mean latency 1 / (10 - 4) = 0.1667, so it fails the
+    # declared analytical mean threshold of 0.12.
+    assert result.configuration == (2,)
+    assert result.metrics.limits == {"request": 0.12}
+
+
+def test_percentile_workload_cannot_use_strict_analytical_optimization():
+    with pytest.raises(ValueError, match="require simulation"):
+        optimize_with_analytical_model(
+            _structured_percentile_system(),
+            request_class_mean_latency_limits={"request": 0.12},
+            maximum_replicas=3,
+            mode=OptimizationMode.EXACT,
+        )
+
+
+def test_workload_without_slos_optimizes_to_the_stable_vector():
+    system = _structured_single_service_system()
+    workload = system.get_workload_spec()
+    del workload["request_classes"]["request"]["end_to_end_latency_slos"]
+    system = System("no-slo", workload, QueueingNetworkType.OPEN)
+
+    result = optimize_with_analytical_model(
+        system,
+        maximum_replicas=3,
+        mode=OptimizationMode.EXACT,
+    )
+
+    assert result.configuration == tuple(system.get_minimum_stable_replicas())
+    assert result.metrics.limits == {}
+    assert result.metrics.evaluation_basis == "ANALYTICAL_STABILITY"
+
+
 def test_analytical_evaluation_requires_every_scenario_to_pass():
     system = ScenarioSystem(
         "scenarios",
@@ -165,10 +266,7 @@ def test_analytical_evaluation_requires_every_scenario_to_pass():
     evaluation = problem.evaluate(configuration)
 
     assert not evaluation.feasible
-    assert (
-        evaluation.classification
-        == AnalyticalClassification.ANALYTICALLY_INFEASIBLE
-    )
+    assert evaluation.classification == AnalyticalClassification.ANALYTICALLY_INFEASIBLE
     assert set(evaluation.scenario_means) == {"light", "heavy"}
 
 

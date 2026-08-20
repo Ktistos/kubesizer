@@ -27,18 +27,6 @@ from statistical_workflow import (
 )
 
 
-REQUEST_CLASS_SLOS = {
-    "read_heavy": 1.0,
-    "write_heavy": 1.0,
-    "compute_heavy": 1.0,
-}
-# These are analytical end-to-end mean-latency limits, not p95 SLOs. Keep
-# them separate even when an experiment intentionally uses the same numbers.
-ANALYTICAL_REQUEST_CLASS_MEAN_LATENCY_LIMITS = {
-    "read_heavy": 1.0,
-    "write_heavy": 1.0,
-    "compute_heavy": 1.0,
-}
 MAX_REPLICAS_PER_SERVICE = 10
 SIMULATION_WORKERS = min(8, os.cpu_count() or 1)
 REPLICA_EVALUATION_MODE = ReplicaEvaluationMode.SIMULATION
@@ -51,11 +39,29 @@ EXACT_REPLICA_SEARCH_TIME_BUDGET_SECONDS = 600.0
 RUNTIME_LIMIT_SAFETY_FACTOR = 3.0
 
 
+def enforce_workload_evaluation_mode(system, evaluation_mode):
+    """Reject an evaluator that cannot certify the workload's SLO kind."""
+    kind_method = getattr(system, "get_request_class_latency_slo_kind", None)
+    if kind_method is None:
+        return evaluation_mode
+    kind = kind_method()
+    if kind == "percentile" and evaluation_mode != ReplicaEvaluationMode.SIMULATION:
+        raise ValueError(
+            "The workload selects percentile latency SLOs, so replica evaluation "
+            "must use SIMULATION."
+        )
+    if kind is None and evaluation_mode != ReplicaEvaluationMode.ANALYTICAL:
+        raise ValueError(
+            "A workload without latency SLOs can use ANALYTICAL stability-based "
+            "replica sizing, but simulation has no percentile threshold to test."
+        )
+    return evaluation_mode
+
+
 def calibrate_before_optimization(system, *, options=None, progress_callback=None):
     """Run Stage A and keep its profile and diagnostics in memory."""
     return calibrate(
         system,
-        request_class_slos=REQUEST_CLASS_SLOS,
         maximum_replicas=MAX_REPLICAS_PER_SERVICE,
         options=options or CalibrationOptions(),
         workers=SIMULATION_WORKERS,
@@ -90,7 +96,7 @@ def optimize_replicas_analytically(system):
     return optimize_with_analytical_model(
         system,
         request_class_mean_latency_limits=(
-            ANALYTICAL_REQUEST_CLASS_MEAN_LATENCY_LIMITS
+            system.get_request_class_mean_latency_limits()
         ),
         maximum_replicas=MAX_REPLICAS_PER_SERVICE,
         mode=OPTIMIZATION_MODES.replica,
@@ -117,7 +123,8 @@ def validate_optimizer_result(
 def _interval_summary(intervals):
     return {
         request_class: {
-            "pooled_p95": interval.p95_estimate,
+            "latency_statistic": interval.latency_statistic,
+            "estimate": interval.estimate,
             "lower_bound": interval.lower_bound,
             "upper_bound": interval.upper_bound,
             "slo": interval.slo,
@@ -137,17 +144,30 @@ def report_replica_result(system, result):
     )
     print("Replicas added from stable anchor:", result.cost)
     print("Classification:", evaluation.classification.value)
-    if getattr(evaluation, "evaluation_basis", None) == "ANALYTICAL_MEAN_LATENCY":
+    evaluation_basis = getattr(evaluation, "evaluation_basis", None)
+    if evaluation_basis in {
+        "ANALYTICAL_MEAN_LATENCY",
+        "ANALYTICAL_STABILITY",
+    }:
         print("Analytical scenario/class mean latencies:", evaluation.scenario_means)
-        print("Analytical mean-latency limits:", evaluation.limits)
+        if evaluation.limits:
+            print("Analytical mean-latency limits:", evaluation.limits)
+        else:
+            print("No latency SLO declared; analytical stability is the constraint.")
         print(
             "Evidence warning: analytical means are not p95 estimates; no "
             "simulation or confidence interval was run."
         )
     else:
+        intervals = evaluation.configuration_evaluation.intervals
+        statistic = (
+            next(iter(intervals.values())).latency_statistic
+            if intervals
+            else "latency"
+        )
         print(
-            "Sequential p95 confidence intervals:",
-            _interval_summary(evaluation.configuration_evaluation.intervals),
+            f"Sequential {statistic} confidence intervals:",
+            _interval_summary(intervals),
         )
         print(
             "Replications used:",
@@ -169,7 +189,16 @@ def report_replica_result(system, result):
 
 def report_final_validation(validation):
     print("Independent final validation:", validation.classification.value)
-    print("Final p95 confidence intervals:", _interval_summary(validation.intervals))
+    intervals = validation.intervals
+    statistic = (
+        next(iter(intervals.values())).latency_statistic
+        if intervals
+        else "latency"
+    )
+    print(
+        f"Final {statistic} confidence intervals:",
+        _interval_summary(intervals),
+    )
     print("Final validation seeds:", validation.seeds)
 
 
@@ -191,6 +220,7 @@ def main():
         QueueingNetworkType.OPEN,
         workload_base_path=".",
     )
+    enforce_workload_evaluation_mode(system, REPLICA_EVALUATION_MODE)
     live_runtime = None
     if REPLICA_EVALUATION_MODE == ReplicaEvaluationMode.ANALYTICAL:
         print(

@@ -27,6 +27,8 @@ def test_minimum_workload_is_valid_and_analytically_stable():
     assert tuple(system.get_services()) == ("service",)
     assert system.get_configured_external_arrival_rates() == {"request": (1.0,)}
     assert system.get_request_class_concurrency_weights() == {"request": 1.0}
+    assert system.get_request_class_latency_slo_kind() == "mean"
+    assert system.get_request_class_mean_latency_limits() == {"request": 1.0}
     assert system.get_minimum_stable_replicas() == [1]
     assert system.solve().get_stability()
 
@@ -57,6 +59,11 @@ def test_maximum_workload_exercises_all_single_model_parser_features():
     assert system.get_scenario_name() == "traffic_model"
     assert tuple(parsed.scenarios) == ("traffic_model",)
     assert parsed.traffic_model.name == "traffic_model"
+    assert system.get_request_class_latency_slo_kind() == "percentile"
+    assert system.get_request_class_percentile_latency_limits() == {
+        "interactive": 1.0,
+        "batch": 5.0,
+    }
     distributions = {
         distribution.distribution
         for scenario in parsed.scenarios.values()

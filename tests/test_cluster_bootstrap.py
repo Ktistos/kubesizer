@@ -4,6 +4,7 @@ import pytest
 from metrics import (
     draw_cluster_bootstrap_indices,
     percentile,
+    replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
     sequential_tail_alpha,
 )
@@ -38,6 +39,35 @@ def test_point_estimate_is_pooled_p95_not_mean_replication_p95():
     assert interval.p95_estimate != pytest.approx(mean_replication_p95)
     assert interval.eligible_request_count == 110
     assert interval.eligible_request_counts_by_replication == (100, 10)
+
+
+def test_cluster_bootstrap_mean_uses_pooled_mean_and_complete_replications():
+    clusters = ((1.0, 2.0), (10.0, 20.0, 30.0))
+    interval = replication_cluster_bootstrap_mean(
+        clusters,
+        request_class="checkout",
+        slo=20.0,
+        resample_count=1_000,
+        seed=41,
+        lower_tail_probability=0.01,
+        upper_tail_probability=0.99,
+        minimum_tail_draws=5,
+    )
+    draws = draw_cluster_bootstrap_indices(2, 1_000, seed=41)
+    expected = tuple(
+        np.mean(
+            tuple(
+                value
+                for cluster_index in draw
+                for value in clusters[cluster_index]
+            )
+        )
+        for draw in draws
+    )
+
+    assert interval.latency_statistic == "mean"
+    assert interval.estimate == pytest.approx(np.mean(clusters[0] + clusters[1]))
+    assert interval.bootstrap_values == pytest.approx(expected)
 
 
 def test_bootstrap_draws_replication_indices_as_complete_clusters():

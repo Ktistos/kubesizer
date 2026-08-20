@@ -112,6 +112,48 @@ def test_public_calibrate_runs_warmup_then_measurement_and_freezes_profile(monke
     )
 
 
+def test_public_calibrate_defaults_to_workload_p95_slos(monkeypatch):
+    system = make_system()
+    expected = object()
+    captured = {}
+    monkeypatch.setattr(
+        system,
+        "get_request_class_percentile_latency_limits",
+        lambda *, quantile: {"checkout": 1.75},
+    )
+
+    def fake_calibrate_one(selected, **kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(statistical_workflow, "_calibrate_one", fake_calibrate_one)
+
+    result = statistical_workflow.calibrate(system, maximum_replicas=2)
+
+    assert result is expected
+    assert captured["request_class_slos"] == {"checkout": 1.75}
+
+
+def test_simulation_calibration_accepts_workload_mean_slos(monkeypatch):
+    system = make_system()
+    expected = object()
+    captured = {}
+    system.get_request_class_latency_slo_kind = lambda: "mean"
+    system.get_request_class_mean_latency_limits = lambda: {"checkout": 1.0}
+
+    def fake_calibrate_one(selected, **kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(statistical_workflow, "_calibrate_one", fake_calibrate_one)
+
+    result = statistical_workflow.calibrate(system, maximum_replicas=2)
+
+    assert result is expected
+    assert captured["request_class_slos"] == {"checkout": 1.0}
+    assert captured["latency_slo_kind"] == "mean"
+
+
 def test_public_evaluate_delegates_to_calibrated_evaluator_and_reporting(monkeypatch):
     expected = object()
     saved = []

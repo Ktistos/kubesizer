@@ -2,6 +2,8 @@
 request_classes:
   request:
     concurrency_weight: 1.0
+    end_to_end_latency_slos:
+      mean_seconds: 1.0
     routing: {}
 
 traffic_model:

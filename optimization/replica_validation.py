@@ -6,6 +6,7 @@ from calibration import validate_profile_for_experiment
 from metrics import (
     ClusterBootstrapP95Interval,
     fixed_experiment_tail_alpha,
+    replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
     ReliabilityStatus,
     RequestClassP95Reliability,
@@ -329,7 +330,12 @@ def validate_final_configuration(
                         ),
                     )
                 try:
-                    interval = replication_cluster_bootstrap_p95(
+                    bootstrap = (
+                        replication_cluster_bootstrap_mean
+                        if profile.latency_slo_kind == "mean"
+                        else replication_cluster_bootstrap_p95
+                    )
+                    interval = bootstrap(
                         clusters,
                         request_class=request_class,
                         slo=slo,
@@ -405,11 +411,14 @@ def validate_final_configuration(
             measurement_duration=profile.measurement_duration,
             calibration_profile_fingerprint=profile.profile_fingerprint,
             simulation_diagnostics=diagnostics,
-            failure_reason=(
-                None
-                if passed
-                else "At least one fresh-seed p95 upper bound exceeds its SLO."
-            ),
+        failure_reason=(
+            None
+            if passed
+            else (
+                "At least one fresh-seed latency upper bound exceeds its SLO "
+                f"for statistic {profile.latency_slo_kind!r}."
+            )
+        ),
         )
     finally:
         system.configure_system_replicas(original)

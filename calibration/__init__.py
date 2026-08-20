@@ -1,6 +1,7 @@
 from .profile import (
     CALIBRATION_PROFILE_VERSION,
     P95_CONFIDENCE_INTERVAL_METHOD,
+    MEAN_CONFIDENCE_INTERVAL_METHOD,
     CalibrationOptions,
     CalibrationProfile,
     CalibrationProfileMismatchError,
@@ -103,6 +104,7 @@ from .reporting import (
 __all__ = [
     "CALIBRATION_PROFILE_VERSION",
     "P95_CONFIDENCE_INTERVAL_METHOD",
+    "MEAN_CONFIDENCE_INTERVAL_METHOD",
     "SEED_POLICY_VERSION",
     "CalibrationOptions",
     "CalibrationProfile",
