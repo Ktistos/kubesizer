@@ -33,6 +33,7 @@ class TrafficModelSpec:
     name: str
     entry_services: Mapping
     service_times: Mapping
+    service_times_by_request_class: Mapping
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,8 @@ class EndToEndLatencySLOSpec:
 @dataclass(frozen=True)
 class ParsedWorkload:
     request_classes: Mapping
+    request_class_visit_ratios: Mapping
+    request_class_fixed_latency_overheads: Mapping
     concurrency_weights: Mapping
     request_class_latency_slos: Mapping
     traffic_model: TrafficModelSpec
@@ -207,9 +210,7 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             raise ValueError(
                 f"{label} must contain exactly distribution and {scale_field}."
             )
-        scale = _finite_positive(
-            specification[scale_field], f"{label}.{scale_field}"
-        )
+        scale = _finite_positive(specification[scale_field], f"{label}.{scale_field}")
         mean = 1.0 / scale if scale_field == "rate" else scale
         return DistributionSpec(
             distribution, mean, 0.0, _parameter_items(specification)
@@ -225,9 +226,7 @@ def _parse_distribution(specification, label, *, quantity, base_path):
         scv = _shape_or_scv(specification, label)
         if scv <= 0.0:
             raise ValueError(f"{label}.scv must be greater than zero for gamma.")
-        scale = _finite_positive(
-            specification[scale_field], f"{label}.{scale_field}"
-        )
+        scale = _finite_positive(specification[scale_field], f"{label}.{scale_field}")
         mean = 1.0 / scale if scale_field == "rate" else scale
         return DistributionSpec(
             distribution, mean, scv, _parameter_items(specification)
@@ -240,9 +239,7 @@ def _parse_distribution(specification, label, *, quantity, base_path):
                 f"{label} must contain exactly distribution, {scale_field}, and scv."
             )
         scv = _finite_nonnegative(specification["scv"], f"{label}.scv")
-        scale = _finite_positive(
-            specification[scale_field], f"{label}.{scale_field}"
-        )
+        scale = _finite_positive(specification[scale_field], f"{label}.{scale_field}")
         mean = 1.0 / scale if scale_field == "rate" else scale
         return DistributionSpec(
             distribution, mean, scv, _parameter_items(specification)
@@ -255,9 +252,7 @@ def _parse_distribution(specification, label, *, quantity, base_path):
                 f"{label} must contain exactly distribution, {scale_field}, and shape."
             )
         shape = _finite_positive(specification["shape"], f"{label}.shape")
-        scale = _finite_positive(
-            specification[scale_field], f"{label}.{scale_field}"
-        )
+        scale = _finite_positive(specification[scale_field], f"{label}.{scale_field}")
         mean = 1.0 / scale if scale_field == "rate" else scale
         return DistributionSpec(
             distribution,
@@ -304,9 +299,7 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             )
         if specification["sampling"] != "block_bootstrap":
             raise ValueError(f"{label}.sampling must be 'block_bootstrap'.")
-        _finite_positive(
-            specification["block_duration"], f"{label}.block_duration"
-        )
+        _finite_positive(specification["block_duration"], f"{label}.block_duration")
         timestamps = _csv_values(
             specification["source"],
             specification["timestamp_column"],
@@ -349,14 +342,11 @@ def _parse_distribution(specification, label, *, quantity, base_path):
                 f"{label} must contain exactly distribution, {scale_field}, scv, "
                 "library, symbol, abi_version, and parameters."
             )
-        scale = _finite_positive(
-            specification[scale_field], f"{label}.{scale_field}"
-        )
+        scale = _finite_positive(specification[scale_field], f"{label}.{scale_field}")
         scv = _finite_nonnegative(specification["scv"], f"{label}.scv")
         if specification["abi_version"] != CUSTOM_DISTRIBUTION_ABI_VERSION:
             raise ValueError(
-                f"{label}.abi_version must be "
-                f"{CUSTOM_DISTRIBUTION_ABI_VERSION}."
+                f"{label}.abi_version must be " f"{CUSTOM_DISTRIBUTION_ABI_VERSION}."
             )
         symbol = specification["symbol"]
         if not isinstance(symbol, str) or not symbol:
@@ -423,6 +413,8 @@ def _parse_request_classes(
     require_concurrency_weights=False,
 ):
     parsed = {}
+    visit_ratios = {}
+    fixed_latency_overheads = {}
     concurrency_weights = {}
     latency_slos = {}
     weighted_classes = []
@@ -430,19 +422,21 @@ def _parse_request_classes(
         if not isinstance(request_class_name, str) or not request_class_name:
             raise ValueError("Request-class names must be nonempty strings.")
         if not isinstance(request_class, Mapping):
-            raise ValueError(
-                f"Request class {request_class_name!r} must be a mapping."
-            )
+            raise ValueError(f"Request class {request_class_name!r} must be a mapping.")
         allowed_fields = {
             "concurrency_weight",
             "end_to_end_latency_slos",
+            "fixed_latency_overhead_seconds",
             "routing",
+            "visits",
         }
         unknown_fields = set(request_class) - allowed_fields
-        if "routing" not in request_class or unknown_fields:
+        flow_fields = {"routing", "visits"} & set(request_class)
+        if len(flow_fields) != 1 or unknown_fields:
             raise ValueError(
-                f"Request class {request_class_name!r} must contain routing and "
-                "may contain concurrency_weight and end_to_end_latency_slos; "
+                f"Request class {request_class_name!r} must contain exactly one "
+                "of routing or visits and may contain concurrency_weight, "
+                "end_to_end_latency_slos, and fixed_latency_overhead_seconds; "
                 f"unknown fields={sorted(unknown_fields)}."
             )
         weighted = "concurrency_weight" in request_class
@@ -450,10 +444,7 @@ def _parse_request_classes(
         if weighted:
             concurrency_weights[request_class_name] = _finite_positive(
                 request_class["concurrency_weight"],
-                (
-                    f"request_classes.{request_class_name}."
-                    "concurrency_weight"
-                ),
+                (f"request_classes.{request_class_name}." "concurrency_weight"),
             )
         has_slos = "end_to_end_latency_slos" in request_class
         if has_slos:
@@ -475,10 +466,10 @@ def _parse_request_classes(
                 )
             else:
                 raw_percentile = raw_slos["percentile"]
-                if (
-                    not isinstance(raw_percentile, Mapping)
-                    or set(raw_percentile) != {"quantile", "maximum_seconds"}
-                ):
+                if not isinstance(raw_percentile, Mapping) or set(raw_percentile) != {
+                    "quantile",
+                    "maximum_seconds",
+                }:
                     raise ValueError(
                         f"{label}.percentile must contain exactly quantile and "
                         "maximum_seconds."
@@ -506,6 +497,47 @@ def _parse_request_classes(
                         f"{label}.percentile.maximum_seconds",
                     ),
                 )
+        fixed_latency_overheads[request_class_name] = _finite_nonnegative(
+            request_class.get("fixed_latency_overhead_seconds", 0.0),
+            (f"request_classes.{request_class_name}." "fixed_latency_overhead_seconds"),
+        )
+        if (
+            "fixed_latency_overhead_seconds" in request_class
+            and "visits" not in request_class
+        ):
+            raise ValueError(
+                f"Request class {request_class_name!r} may define "
+                "fixed_latency_overhead_seconds only with analytical visits."
+            )
+
+        if "visits" in request_class:
+            raw_visits = request_class["visits"]
+            if not isinstance(raw_visits, Mapping) or not raw_visits:
+                raise ValueError(
+                    f"request_classes.{request_class_name}.visits must be a "
+                    "nonempty mapping."
+                )
+            unknown_services = set(raw_visits) - service_names
+            if unknown_services:
+                raise ValueError(
+                    f"Request class {request_class_name!r} visits unknown "
+                    f"services: {sorted(unknown_services)}."
+                )
+            visit_ratios[request_class_name] = _freeze_mapping(
+                {
+                    service_name: _finite_positive(
+                        visits,
+                        (
+                            f"request_classes.{request_class_name}.visits."
+                            f"{service_name}"
+                        ),
+                    )
+                    for service_name, visits in raw_visits.items()
+                }
+            )
+            parsed[request_class_name] = _freeze_mapping({})
+            continue
+
         routing = request_class["routing"]
         if not isinstance(routing, Mapping):
             raise ValueError(
@@ -560,15 +592,21 @@ def _parse_request_classes(
             "All declared request-class end_to_end_latency_slos must use the "
             "same mean or percentile kind."
         )
-    if weighted_classes and all(weighted_classes) and not math.isclose(
-        sum(concurrency_weights.values()),
-        1.0,
-        rel_tol=0.0,
-        abs_tol=1e-12,
+    if (
+        weighted_classes
+        and all(weighted_classes)
+        and not math.isclose(
+            sum(concurrency_weights.values()),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
     ):
         raise ValueError("Request-class concurrency weights must sum to one.")
     return (
         _freeze_mapping(parsed),
+        _freeze_mapping(visit_ratios),
+        _freeze_mapping(fixed_latency_overheads),
         _freeze_mapping(concurrency_weights),
         _freeze_mapping(latency_slos),
     )
@@ -602,7 +640,13 @@ def parse_workload_spec(workload, *, base_path=None):
     service_name_set = set(service_names)
     if any(not isinstance(name, str) or not name for name in service_names):
         raise ValueError("Service names must be nonempty strings.")
-    routing, concurrency_weights, request_class_latency_slos = _parse_request_classes(
+    (
+        routing,
+        visit_ratios,
+        fixed_latency_overheads,
+        concurrency_weights,
+        request_class_latency_slos,
+    ) = _parse_request_classes(
         request_classes,
         service_name_set,
         require_concurrency_weights=True,
@@ -630,15 +674,50 @@ def parse_workload_spec(workload, *, base_path=None):
                 f"services as every other traffic model: {list(service_names)}."
             )
         model_path = "traffic_model"
-        service_times = {
-            service_name: _parse_distribution(
-                raw_service_times[service_name],
-                f"{model_path}.service_times.{service_name}",
-                quantity="service_time",
-                base_path=base_path,
-            )
-            for service_name in service_names
+        service_times = {}
+        service_times_by_request_class = {
+            request_class_name: {} for request_class_name in request_classes
         }
+        for service_name in service_names:
+            raw_service_time = raw_service_times[service_name]
+            service_path = f"{model_path}.service_times.{service_name}"
+            if not isinstance(raw_service_time, Mapping):
+                raise ValueError(f"{service_path} must be a mapping.")
+            if "distribution" in raw_service_time:
+                parsed_service_time = _parse_distribution(
+                    raw_service_time,
+                    service_path,
+                    quantity="service_time",
+                    base_path=base_path,
+                )
+                service_times[service_name] = parsed_service_time
+                for request_class_name in request_classes:
+                    service_times_by_request_class[request_class_name][
+                        service_name
+                    ] = parsed_service_time
+                continue
+
+            unknown_classes = set(raw_service_time) - set(request_classes)
+            if not raw_service_time or unknown_classes:
+                raise ValueError(
+                    f"{service_path} must be one distribution or a nonempty "
+                    "request-class mapping; unknown request classes="
+                    f"{sorted(unknown_classes)}."
+                )
+            parsed_by_class = {
+                request_class_name: _parse_distribution(
+                    specification,
+                    f"{service_path}.{request_class_name}",
+                    quantity="service_time",
+                    base_path=base_path,
+                )
+                for request_class_name, specification in raw_service_time.items()
+            }
+            service_times[service_name] = next(iter(parsed_by_class.values()))
+            for request_class_name, specification in parsed_by_class.items():
+                service_times_by_request_class[request_class_name][
+                    service_name
+                ] = specification
 
         raw_entries = model["entry_services"]
         if not isinstance(raw_entries, Mapping) or set(raw_entries) != set(
@@ -672,6 +751,16 @@ def parse_workload_spec(workload, *, base_path=None):
                     f"Entry services for {request_class_name!r} reference unknown "
                     f"services: {sorted(unknown_services)}."
                 )
+            if request_class_name in visit_ratios:
+                missing_entry_visits = set(raw_streams) - set(
+                    visit_ratios[request_class_name]
+                )
+                if missing_entry_visits:
+                    raise ValueError(
+                        f"Request class {request_class_name!r} must include every "
+                        "external entry service in visits; missing="
+                        f"{sorted(missing_entry_visits)}."
+                    )
             entry_services[request_class_name] = _freeze_mapping(
                 {
                     service_name: _parse_distribution(
@@ -686,14 +775,41 @@ def parse_workload_spec(workload, *, base_path=None):
                     for service_name, arrival_process in raw_streams.items()
                 }
             )
+        for request_class_name in request_classes:
+            if request_class_name in visit_ratios:
+                reachable = set(visit_ratios[request_class_name])
+            else:
+                reachable = _reachable_services(
+                    entry_services[request_class_name],
+                    routing[request_class_name],
+                )
+            missing_service_times = reachable - set(
+                service_times_by_request_class[request_class_name]
+            )
+            if missing_service_times:
+                raise ValueError(
+                    f"Traffic model {model_name!r} has no service-time "
+                    f"distribution for request class {request_class_name!r} at "
+                    f"services {sorted(missing_service_times)}."
+                )
         models[model_name] = TrafficModelSpec(
             name=model_name,
             entry_services=_freeze_mapping(entry_services),
             service_times=_freeze_mapping(service_times),
+            service_times_by_request_class=_freeze_mapping(
+                {
+                    request_class_name: _freeze_mapping(specifications)
+                    for request_class_name, specifications in (
+                        service_times_by_request_class.items()
+                    )
+                }
+            ),
         )
 
     return ParsedWorkload(
         request_classes=routing,
+        request_class_visit_ratios=visit_ratios,
+        request_class_fixed_latency_overheads=fixed_latency_overheads,
         concurrency_weights=concurrency_weights,
         request_class_latency_slos=request_class_latency_slos,
         traffic_model=models[SINGLE_TRAFFIC_MODEL_NAME],
@@ -704,9 +820,7 @@ def parse_workload_spec(workload, *, base_path=None):
 def normalize_workload_spec(workload, *, base_path=None):
     """Return the mean-rate request-class mapping consumed by ``System``."""
 
-    if not isinstance(workload, Mapping) or not (
-        "traffic_model" in workload
-    ):
+    if not isinstance(workload, Mapping) or not ("traffic_model" in workload):
         return copy.deepcopy(workload)
 
     parsed = parse_workload_spec(workload, base_path=base_path)
@@ -714,8 +828,7 @@ def normalize_workload_spec(workload, *, base_path=None):
 
     entry_rates = {
         request_class_name: {
-            service_name: process.rate
-            for service_name, process in streams.items()
+            service_name: process.rate for service_name, process in streams.items()
         }
         for request_class_name, streams in traffic_model.entry_services.items()
     }
@@ -736,9 +849,14 @@ def normalize_workload_spec(workload, *, base_path=None):
     normalized = {}
     for request_class_name in parsed.request_classes:
         class_routing = parsed.request_classes[request_class_name]
-        reachable = _reachable_services(
-            entry_rates[request_class_name],
-            class_routing,
+        class_visits = parsed.request_class_visit_ratios.get(request_class_name)
+        reachable = (
+            set(entry_rates[request_class_name]) | set(class_visits)
+            if class_visits is not None
+            else _reachable_services(
+                entry_rates[request_class_name],
+                class_routing,
+            )
         )
         normalized_services = {}
         for service_name in parsed.service_names:
@@ -746,7 +864,9 @@ def normalize_workload_spec(workload, *, base_path=None):
                 continue
             normalized_services[service_name] = {
                 "gamma": entry_rates[request_class_name].get(service_name, 0.0),
-                "mu": traffic_model.service_times[service_name].rate,
+                "mu": traffic_model.service_times_by_request_class[
+                    request_class_name
+                ][service_name].rate,
                 "routes": dict(class_routing.get(service_name, {})),
             }
         normalized[request_class_name] = {

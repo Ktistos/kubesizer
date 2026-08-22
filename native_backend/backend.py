@@ -64,7 +64,6 @@ def _finite_positive(value, label):
     return value
 
 
-
 def _normalize_seeds(values, label):
     seeds = tuple(values)
     if (
@@ -79,6 +78,7 @@ def _normalize_seeds(values, label):
     ):
         raise ValueError(f"{label} must be unique signed-64-bit non-negative integers.")
     return seeds
+
 
 def _numeric_tuple(values, label, *, length=None, non_negative=True):
     if not isinstance(values, (list, tuple)):
@@ -148,11 +148,15 @@ class CppSimulationBackend:
 
     def __init__(self, binary_path=None):
         configured_path = binary_path or os.environ.get("KUBESIZER_CPP_BACKEND")
-        self.binary_path = Path(configured_path) if configured_path else (
-            Path(__file__).resolve().parent
-            / "cpp"
-            / "build-release"
-            / "kubesizer-simulator"
+        self.binary_path = (
+            Path(configured_path)
+            if configured_path
+            else (
+                Path(__file__).resolve().parent
+                / "cpp"
+                / "build-release"
+                / "kubesizer-simulator"
+            )
         )
 
     def ensure_available(self):
@@ -166,6 +170,13 @@ class CppSimulationBackend:
 
     @staticmethod
     def serialize_system(system):
+        compatibility_check = getattr(
+            system,
+            "require_simulation_compatible_workload",
+            None,
+        )
+        if compatibility_check is not None:
+            compatibility_check()
         services = tuple(
             sorted(system.get_services().values(), key=lambda item: item.get_id())
         )
@@ -308,7 +319,9 @@ class CppSimulationBackend:
             if not isinstance(metrics["request_class_p95_latencies"], dict):
                 raise ValueError("request-class p95 values must be an object.")
             expected_classes = set(system.get_request_classes())
-            if not set(metrics["request_class_p95_latencies"]).issubset(expected_classes):
+            if not set(metrics["request_class_p95_latencies"]).issubset(
+                expected_classes
+            ):
                 raise ValueError("response contains an unknown request class.")
             if int(result["seed"]) != int(seed):
                 raise ValueError("response seed does not match request.")
@@ -381,7 +394,9 @@ class CppSimulationBackend:
                 columns=bucket_count,
             )
             native_seeds = tuple(int(value) for value in result["seeds"])
-            configuration = tuple(int(value) for value in result["replica_configuration"])
+            configuration = tuple(
+                int(value) for value in result["replica_configuration"]
+            )
             expected_configuration = tuple(system.get_system_replicas())
             if native_seeds != seeds or configuration != expected_configuration:
                 raise ValueError("native batch identity does not match request.")
@@ -405,7 +420,9 @@ class CppSimulationBackend:
             if not math.isclose(native_result.horizon, horizon) or not math.isclose(
                 native_result.bucket_width, bucket_width
             ):
-                raise ValueError("native horizon or bucket width does not match request.")
+                raise ValueError(
+                    "native horizon or bucket width does not match request."
+                )
         except (KeyError, TypeError, ValueError) as error:
             raise NativeBackendError(
                 f"Native warmup_ensemble response violates protocol schema: {error}"
@@ -429,9 +446,7 @@ class CppSimulationBackend:
         measurement_duration = _finite_positive(
             measurement_duration, "measurement_duration"
         )
-        maximum_drain_time = _finite_positive(
-            maximum_drain_time, "maximum_drain_time"
-        )
+        maximum_drain_time = _finite_positive(maximum_drain_time, "maximum_drain_time")
         if isinstance(workers, bool) or not isinstance(workers, int) or workers <= 0:
             raise ValueError("workers must be a positive integer.")
         serialized_workload = self.serialize_system(system)
@@ -463,9 +478,7 @@ class CppSimulationBackend:
                     int(value) for value in result["replica_configuration"]
                 )
                 if configuration != expected_configuration:
-                    raise ValueError(
-                        "native configuration does not match request."
-                    )
+                    raise ValueError("native configuration does not match request.")
                 batch = result["replications"]
                 if len(batch) != 1 or int(batch[0]["seed"]) != expected_seed:
                     raise ValueError(
@@ -488,15 +501,11 @@ class CppSimulationBackend:
                     for key, value in item["request_class_p95_latencies"].items()
                 }
                 latencies = {
-                    key: _numeric_tuple(
-                        value, f"request_class_latencies[{key}]"
-                    )
+                    key: _numeric_tuple(value, f"request_class_latencies[{key}]")
                     for key, value in item["request_class_latencies"].items()
                 }
                 arrival_times = {
-                    key: _numeric_tuple(
-                        value, f"request_class_arrival_times[{key}]"
-                    )
+                    key: _numeric_tuple(value, f"request_class_arrival_times[{key}]")
                     for key, value in item["request_class_arrival_times"].items()
                 }
                 if (
@@ -505,7 +514,9 @@ class CppSimulationBackend:
                     or set(arrival_times) != expected_classes
                     or measured != completed_measured
                 ):
-                    raise ValueError("tagged request cohort was not drained completely.")
+                    raise ValueError(
+                        "tagged request cohort was not drained completely."
+                    )
                 if any(value < 0 for value in measured.values()):
                     raise ValueError("measured request count is negative.")
                 for request_class in expected_classes:
@@ -514,7 +525,9 @@ class CppSimulationBackend:
                         == len(latencies[request_class])
                         == len(arrival_times[request_class])
                     ):
-                        raise ValueError("raw latency-cluster size does not match count.")
+                        raise ValueError(
+                            "raw latency-cluster size does not match count."
+                        )
                     if any(
                         arrival < warmup_duration
                         or arrival >= warmup_duration + measurement_duration
@@ -522,7 +535,9 @@ class CppSimulationBackend:
                     ):
                         raise ValueError("measurement arrival lies outside [W, W + M).")
                 if set(p95) != {key for key, value in measured.items() if value > 0}:
-                    raise ValueError("request-class p95 coverage does not match counts.")
+                    raise ValueError(
+                        "request-class p95 coverage does not match counts."
+                    )
                 if any(not math.isfinite(value) or value < 0 for value in p95.values()):
                     raise ValueError("request-class p95 contains an invalid value.")
                 for request_class, value in p95.items():
@@ -532,17 +547,25 @@ class CppSimulationBackend:
                         rel_tol=1e-12,
                         abs_tol=1e-12,
                     ):
-                        raise ValueError("native p95 does not match raw latency cluster.")
+                        raise ValueError(
+                            "native p95 does not match raw latency cluster."
+                        )
                 seed_value = int(item["seed"])
                 stop_time = float(item["stop_time"])
                 if seed_value != expected_seed or not math.isfinite(stop_time):
                     raise ValueError("native replication identity is invalid.")
                 if stop_time < warmup_duration + measurement_duration:
-                    raise ValueError("native replication stopped before measurement end.")
-                queue_lengths = tuple(int(value) for value in item["queue_lengths_at_end"])
-                busy_replicas = tuple(int(value) for value in item["busy_replicas_at_end"])
+                    raise ValueError(
+                        "native replication stopped before measurement end."
+                    )
+                queue_lengths = tuple(
+                    int(value) for value in item["queue_lengths_at_end"]
+                )
+                busy_replicas = tuple(
+                    int(value) for value in item["busy_replicas_at_end"]
+                )
                 active_requests = int(item["active_requests_at_end"])
-                tagged_in_flight = int(item["tagged_requests_in_flight_at_end"] )
+                tagged_in_flight = int(item["tagged_requests_in_flight_at_end"])
                 if (
                     active_requests < 0
                     or len(queue_lengths) != len(configuration)
@@ -554,7 +577,9 @@ class CppSimulationBackend:
                     )
                     or tagged_in_flight != 0
                 ):
-                    raise ValueError("native final-state diagnostics violate invariants.")
+                    raise ValueError(
+                        "native final-state diagnostics violate invariants."
+                    )
                 replications.append(
                     NativeMeasurementReplication(
                         seed=seed_value,
@@ -619,9 +644,7 @@ def slice_measurement_replication(replication, measurement_duration):
         latencies[request_class] = tuple(item[1] for item in selected)
     counts = {name: len(values) for name, values in latencies.items()}
     p95 = {
-        name: _percentile(values, 0.95)
-        for name, values in latencies.items()
-        if values
+        name: _percentile(values, 0.95) for name, values in latencies.items() if values
     }
     return NativeMeasurementReplication(
         seed=replication.seed,

@@ -94,7 +94,10 @@ class CalibrationOptions:
             raise ValueError(
                 "warmup_max_validation_horizon_extensions must be non-negative."
             )
-        if self.minimum_optimization_replications > self.maximum_optimization_replications:
+        if (
+            self.minimum_optimization_replications
+            > self.maximum_optimization_replications
+        ):
             raise ValueError("R_min cannot exceed R_max.")
         if (
             self.minimum_nonempty_replications_per_class
@@ -289,8 +292,10 @@ class CalibrationProfile:
             raise CalibrationProfileMismatchError("Replica bounds are invalid.")
         if (
             not self.representative_configurations
-            or self.minimum_replica_configuration not in self.representative_configurations
-            or self.maximum_replica_configuration not in self.representative_configurations
+            or self.minimum_replica_configuration
+            not in self.representative_configurations
+            or self.maximum_replica_configuration
+            not in self.representative_configurations
             or any(
                 len(configuration) != service_count
                 or any(
@@ -355,9 +360,13 @@ class CalibrationProfile:
                 "Final-validation seed count does not match the profile."
             )
         if len(set(self.final_validation_seeds)) != len(self.final_validation_seeds):
-            raise CalibrationProfileMismatchError("Final-validation seeds are not unique.")
+            raise CalibrationProfileMismatchError(
+                "Final-validation seeds are not unique."
+            )
         final_namespace = self.optimization_seed_policy.namespace("final_validation")
-        if any(not final_namespace.contains(seed) for seed in self.final_validation_seeds):
+        if any(
+            not final_namespace.contains(seed) for seed in self.final_validation_seeds
+        ):
             raise CalibrationProfileMismatchError(
                 "Final-validation seeds are outside their namespace."
             )
@@ -393,11 +402,12 @@ class CalibrationProfile:
         if not 0 < self.overall_alpha < 1:
             raise CalibrationProfileMismatchError("Profile overall alpha is invalid.")
         tail_alpha = self.overall_alpha / (
-            2
-            * self.maximum_sequential_looks
-            * class_count
+            2 * self.maximum_sequential_looks * class_count
         )
-        if self.bootstrap_resample_count * tail_alpha < self.minimum_bootstrap_tail_draws:
+        if (
+            self.bootstrap_resample_count * tail_alpha
+            < self.minimum_bootstrap_tail_draws
+        ):
             raise CalibrationProfileMismatchError(
                 "Bootstrap resample count has insufficient sequential tail resolution."
             )
@@ -436,9 +446,7 @@ class CalibrationProfile:
             "confidence_level": self.confidence_level,
             "request_class_slos": self.slos,
             "latency_slo_kind": self.latency_slo_kind,
-            "p95_confidence_interval_method": (
-                self.p95_confidence_interval_method
-            ),
+            "p95_confidence_interval_method": (self.p95_confidence_interval_method),
             "bootstrap_resample_count": self.bootstrap_resample_count,
             "minimum_bootstrap_tail_draws": self.minimum_bootstrap_tail_draws,
             "target_samples_per_class": self.target_samples_per_class,
@@ -488,9 +496,7 @@ class CalibrationProfile:
             warmup_reference_tail_fraction=float(
                 value["warmup_reference_tail_fraction"]
             ),
-            warmup_required_stable_windows=int(
-                value["warmup_required_stable_windows"]
-            ),
+            warmup_required_stable_windows=int(value["warmup_required_stable_windows"]),
             warmup_relative_tolerance=float(value["warmup_relative_tolerance"]),
             warmup_replication_count=int(value["warmup_replication_count"]),
             minimum_optimization_replications=int(
@@ -508,13 +514,9 @@ class CalibrationProfile:
                     for name, slo in value["request_class_slos"].items()
                 )
             ),
-            p95_confidence_interval_method=str(
-                value["p95_confidence_interval_method"]
-            ),
+            p95_confidence_interval_method=str(value["p95_confidence_interval_method"]),
             bootstrap_resample_count=int(value["bootstrap_resample_count"]),
-            minimum_bootstrap_tail_draws=int(
-                value["minimum_bootstrap_tail_draws"]
-            ),
+            minimum_bootstrap_tail_draws=int(value["minimum_bootstrap_tail_draws"]),
             target_samples_per_class=int(value["target_samples_per_class"]),
             minimum_eligible_samples_per_request_class=int(
                 value["minimum_eligible_samples_per_request_class"]
@@ -522,18 +524,12 @@ class CalibrationProfile:
             minimum_nonempty_replications_per_request_class=int(
                 value["minimum_nonempty_replications_per_request_class"]
             ),
-            relative_ci_half_width_target=float(
-                value["relative_ci_half_width_target"]
-            ),
-            absolute_ci_half_width_target=float(
-                value["absolute_ci_half_width_target"]
-            ),
+            relative_ci_half_width_target=float(value["relative_ci_half_width_target"]),
+            absolute_ci_half_width_target=float(value["absolute_ci_half_width_target"]),
             measurement_stability_tolerance=float(
                 value["measurement_stability_tolerance"]
             ),
-            ci_width_stability_tolerance=float(
-                value["ci_width_stability_tolerance"]
-            ),
+            ci_width_stability_tolerance=float(value["ci_width_stability_tolerance"]),
             calibration_seeds=tuple(int(v) for v in value["calibration_seeds"]),
             optimization_seed_policy=SeedPolicy.from_dict(
                 value["optimization_seed_policy"]
@@ -596,11 +592,16 @@ def experiment_fingerprints(system):
         )
     )
     request_classes = tuple(system.get_request_classes())
+    visit_ratios = getattr(system, "get_request_class_visit_ratios", lambda: {})()
+    fixed_latency_overheads = getattr(
+        system,
+        "get_request_class_fixed_latency_overheads",
+        lambda: {},
+    )()
     topology = {
         "network_type": system.get_type().value,
         "services": [
-            {"id": service.get_id(), "name": service.get_name()}
-            for service in services
+            {"id": service.get_id(), "name": service.get_name()} for service in services
         ],
         "request_classes": [
             {
@@ -622,6 +623,15 @@ def experiment_fingerprints(system):
                     }
                     for service in services
                 ],
+                "visits": [
+                    {
+                        "service": service_name,
+                        "expected_visits_per_external_request": float(value),
+                    }
+                    for service_name, value in sorted(
+                        visit_ratios.get(request_class, {}).items()
+                    )
+                ],
             }
             for request_class in request_classes
         ],
@@ -631,6 +641,13 @@ def experiment_fingerprints(system):
     except AttributeError:
         latency_slos = {}
     workload = {
+        "request_class_fixed_latency_overheads": [
+            {
+                "request_class": request_class,
+                "seconds": float(fixed_latency_overheads.get(request_class, 0.0)),
+            }
+            for request_class in request_classes
+        ],
         "request_class_latency_slos": [
             {
                 "request_class": request_class,
@@ -642,6 +659,13 @@ def experiment_fingerprints(system):
         "traffic_model": {},
     }
     service_specs = system.get_service_time_distribution_specs()
+    class_service_specs = getattr(
+        system,
+        "get_request_class_service_time_distribution_specs",
+        lambda: {
+            request_class: service_specs for request_class in request_classes
+        },
+    )()
     arrival_specs = system.get_external_arrival_distribution_specs()
     workload["traffic_model"] = {
         "service_times": [
@@ -652,6 +676,21 @@ def experiment_fingerprints(system):
                 ),
             }
             for service in services
+        ],
+        "request_class_service_times": [
+            {
+                "request_class": request_class,
+                "services": [
+                    {
+                        "service": service_name,
+                        "specification": _distribution_fingerprint(specification),
+                    }
+                    for service_name, specification in sorted(
+                        class_service_specs[request_class].items()
+                    )
+                ],
+            }
+            for request_class in request_classes
         ],
         "external_arrivals": [
             {
@@ -684,7 +723,9 @@ def _normalize_configuration(configuration, service_count, label):
     configuration = tuple(configuration)
     if len(configuration) != service_count:
         raise ValueError(f"{label} must define every service.")
-    if any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in configuration):
+    if any(
+        isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in configuration
+    ):
         raise ValueError(f"{label} values must be positive integers.")
     return configuration
 
@@ -715,7 +756,9 @@ def build_calibration_profile(
     )
     if any(high < low for low, high in zip(minimum, maximum)):
         raise ValueError("Maximum configuration cannot be below the stable minimum.")
-    slos = tuple(sorted((str(name), float(slo)) for name, slo in request_class_slos.items()))
+    slos = tuple(
+        sorted((str(name), float(slo)) for name, slo in request_class_slos.items())
+    )
     request_classes = set(system.get_request_classes())
     slo_classes = {name for name, _ in slos}
     if not slo_classes or not slo_classes <= request_classes:
@@ -850,7 +893,9 @@ def validate_profile_for_experiment(
             mismatches.append("replica bounds")
     if mismatches:
         raise CalibrationProfileMismatchError(
-            "Calibration profile is invalid for the current " + ", ".join(mismatches) + "."
+            "Calibration profile is invalid for the current "
+            + ", ".join(mismatches)
+            + "."
         )
     return profile
 

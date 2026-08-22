@@ -51,9 +51,7 @@ def _rescale_interarrival_spec(specification, target_rate):
     if "rate" in parameters:
         parameters["rate"] = target_rate
     if specification.distribution == "arrival_trace":
-        parameters["block_duration"] = (
-            float(parameters["block_duration"]) * time_scale
-        )
+        parameters["block_duration"] = float(parameters["block_duration"]) * time_scale
     samples = specification.samples
     if specification.distribution in {
         "empirical_interarrival",
@@ -86,14 +84,35 @@ class System:
         self.__workload_base_path = workload_base_path
         self.__traffic_distribution_spec = None
         self.__request_class_latency_slos = {}
+        self.__request_class_visit_ratios = {}
+        self.__request_class_fixed_latency_overheads = {}
+        self.__class_specific_service_times = False
         if structured:
             parsed = parse_workload_spec(
                 workload,
                 base_path=workload_base_path,
             )
             self.__traffic_distribution_spec = parsed.traffic_model
-            self.__request_class_latency_slos = dict(
-                parsed.request_class_latency_slos
+            self.__request_class_latency_slos = dict(parsed.request_class_latency_slos)
+            self.__request_class_visit_ratios = {
+                request_class: dict(visits)
+                for request_class, visits in (parsed.request_class_visit_ratios.items())
+            }
+            self.__request_class_fixed_latency_overheads = dict(
+                parsed.request_class_fixed_latency_overheads
+            )
+            self.__class_specific_service_times = any(
+                len(
+                    {
+                        specifications[service_name]
+                        for specifications in (
+                            parsed.traffic_model.service_times_by_request_class.values()
+                        )
+                        if service_name in specifications
+                    }
+                )
+                > 1
+                for service_name in parsed.service_names
             )
         workload = normalize_workload_spec(
             workload,
@@ -247,7 +266,10 @@ class System:
                         service_id=len(self.__services),
                     )
                     self.add_service(service_name, service)
-                elif service.get_mu() != service_mu:
+                elif (
+                    service.get_mu() != service_mu
+                    and not self.__class_specific_service_times
+                ):
                     raise ValueError(
                         f"Service '{service_name}' must use the same mu in "
                         "every request class."
@@ -282,9 +304,7 @@ class System:
                 service.get_name(): DistributionSpec(
                     distribution="exponential",
                     mean=(
-                        1.0 / service.get_mu()
-                        if service.get_mu() > 0.0
-                        else math.inf
+                        1.0 / service.get_mu() if service.get_mu() > 0.0 else math.inf
                     ),
                     scv=1.0,
                     parameters=(
@@ -310,9 +330,19 @@ class System:
                 }
                 for request_class in self.get_request_classes()
             }
+            self.__request_class_service_time_specs = {
+                request_class: dict(self.__service_time_specs)
+                for request_class in self.get_request_classes()
+            }
         else:
             traffic_model = self.__traffic_distribution_spec
             self.__service_time_specs = dict(traffic_model.service_times)
+            self.__request_class_service_time_specs = {
+                request_class: dict(specifications)
+                for request_class, specifications in (
+                    traffic_model.service_times_by_request_class.items()
+                )
+            }
             self.__entry_arrival_specs = {
                 request_class: {
                     service_name: _rescale_interarrival_spec(
@@ -327,7 +357,18 @@ class System:
             }
 
         self.__service_time_distributions = {
-            service_name: process.distribution
+            service_name: (
+                "class_mixture"
+                if len(
+                    {
+                        specifications[service_name]
+                        for specifications in self.__request_class_service_time_specs.values()
+                        if service_name in specifications
+                    }
+                )
+                > 1
+                else process.distribution
+            )
             for service_name, process in self.__service_time_specs.items()
         }
         self.__service_time_scvs = {
@@ -358,6 +399,19 @@ class System:
         flags = [True] * service_count
         reachable_by_class = {}
         for request_class in self.get_request_classes():
+            explicit_visits = self.__request_class_visit_ratios.get(request_class)
+            if explicit_visits is not None:
+                reachable = {
+                    self.get_service(service_name).get_id()
+                    for service_name in explicit_visits
+                }
+                reachable_by_class[request_class] = reachable
+                # Visit ratios specify mean flow only. They do not specify the
+                # timing or dependence of fan-out/repeated calls, so an exact
+                # Poisson arrival claim would be unjustified.
+                for service_id in reachable:
+                    flags[service_id] = False
+                continue
             reachable = {
                 service.get_id()
                 for service in self.get_services().values()
@@ -431,17 +485,38 @@ class System:
         request_class_rates,
         utilizations,
         replicas,
+        service_scvs=None,
     ):
         service_count = len(self.get_services())
-        service_scvs = [0.0] * service_count
-        for service in self.get_services().values():
-            service_scvs[service.get_id()] = self.__service_time_scvs[
-                service.get_name()
-            ]
+        if service_scvs is None:
+            service_scvs = self.get_service_time_scvs()
 
         external_components = [[] for _ in range(service_count)]
         routed_components = []
         for request_class, class_rates in request_class_rates.items():
+            explicit_visits = self.__request_class_visit_ratios.get(request_class)
+            if explicit_visits is not None:
+                external_streams = []
+                for service in self.get_services().values():
+                    external_rate = service.get_gamma(request_class)
+                    if external_rate > 0.0:
+                        external_streams.append(
+                            (
+                                external_rate,
+                                self.__entry_arrival_scvs[request_class].get(
+                                    service.get_name(), 1.0
+                                ),
+                            )
+                        )
+                class_arrival_scv = combine_independent_stream_scvs(external_streams)
+                for service_name in explicit_visits:
+                    service_id = self.get_service(service_name).get_id()
+                    flow_rate = float(class_rates[service_id])
+                    if flow_rate > 0.0:
+                        external_components[service_id].append(
+                            (flow_rate, class_arrival_scv)
+                        )
+                continue
             for service in self.get_services().values():
                 service_id = service.get_id()
                 external_rate = service.get_gamma(request_class)
@@ -487,18 +562,14 @@ class System:
                 components[target_id].append(
                     (
                         flow_rate,
-                        thinned_stream_scv(
-                            departure_scvs[source_id], probability
-                        ),
+                        thinned_stream_scv(departure_scvs[source_id], probability),
                     )
                 )
             raw = [
                 (
                     1.0
                     if self.__poisson_arrival_flags[service_id]
-                    else combine_independent_stream_scvs(
-                        components[service_id]
-                    )
+                    else combine_independent_stream_scvs(components[service_id])
                 )
                 for service_id in range(service_count)
             ]
@@ -506,15 +577,16 @@ class System:
                 0.5 * previous + 0.5 * candidate
                 for previous, candidate in zip(arrival_scvs, raw)
             ]
-            if max(
-                abs(candidate - previous)
-                for candidate, previous in zip(updated, arrival_scvs)
-            ) <= 1e-10:
+            if (
+                max(
+                    abs(candidate - previous)
+                    for candidate, previous in zip(updated, arrival_scvs)
+                )
+                <= 1e-10
+            ):
                 return updated
             arrival_scvs = updated
-        raise ValueError(
-            "Analytical arrival-variability propagation did not converge."
-        )
+        raise ValueError("Analytical arrival-variability propagation did not converge.")
 
     def __initialize_system_input(self, request_class_name):
         num_of_services = len(self.get_services())
@@ -576,12 +648,29 @@ class System:
         )
 
     def __calculate_request_class_arrival_rates(self):
-        return {
-            request_class: self.__calculate_effective_arrival_rates(
-                self.__initialize_system_input(request_class)
+        rates = {}
+        for request_class in self.get_request_classes():
+            explicit_visits = self.__request_class_visit_ratios.get(request_class)
+            if explicit_visits is None:
+                rates[request_class] = self.__calculate_effective_arrival_rates(
+                    self.__initialize_system_input(request_class)
+                )
+                continue
+            external_rate = sum(
+                service.get_gamma(request_class)
+                for service in self.get_services().values()
             )
-            for request_class in self.get_request_classes()
-        }
+            rates[request_class] = np.array(
+                [
+                    external_rate * explicit_visits.get(service.get_name(), 0.0)
+                    for service in sorted(
+                        self.get_services().values(),
+                        key=lambda item: item.get_id(),
+                    )
+                ],
+                dtype=float,
+            )
+        return rates
 
     def __calculate_aggregate_arrival_rates(self, request_class_rates):
         aggregate = np.zeros(len(self.get_services()), dtype=float)
@@ -589,14 +678,60 @@ class System:
             aggregate += arrival_rates
         return aggregate
 
+    def __calculate_service_time_moments(self, request_class_rates):
+        """Return arrival-weighted service means and SCVs at every service.
+
+        When operations have distinct demands at one service, FCFS sees their
+        arrival-weighted mixture. The second moment includes both the declared
+        within-class variability and between-class mean differences.
+        """
+        means = [0.0] * len(self.get_services())
+        scvs = [0.0] * len(self.get_services())
+        for service in self.get_services().values():
+            service_id = service.get_id()
+            observations = []
+            for request_class, arrival_rates in request_class_rates.items():
+                rate = float(arrival_rates[service_id])
+                specification = self.__request_class_service_time_specs.get(
+                    request_class, {}
+                ).get(service.get_name())
+                if rate > 0.0:
+                    if specification is None:
+                        raise ValueError(
+                            f"No service-time distribution exists for request "
+                            f"class {request_class!r} at {service.get_name()!r}."
+                        )
+                    observations.append((rate, specification))
+            total_rate = sum(rate for rate, _ in observations)
+            if total_rate <= 0.0:
+                specification = self.__service_time_specs[service.get_name()]
+                means[service_id] = specification.mean
+                scvs[service_id] = specification.scv
+                continue
+            mean = sum(
+                rate * specification.mean for rate, specification in observations
+            ) / total_rate
+            second_moment = sum(
+                rate
+                * (1.0 + specification.scv)
+                * specification.mean
+                * specification.mean
+                for rate, specification in observations
+            ) / total_rate
+            means[service_id] = mean
+            scvs[service_id] = max(0.0, second_moment / (mean * mean) - 1.0)
+        return means, scvs
+
     def solve(self):
         """Solve load and automatically selected per-service queueing models."""
         request_class_rates = self.__calculate_request_class_arrival_rates()
         lambdas = self.__calculate_aggregate_arrival_rates(request_class_rates)
 
-        num_of_services = len(self.get_services())
         system_input = self.__initialize_system_input(self.__request_classes[0])
-        mus = np.array(system_input["mus"], dtype=float)
+        service_means, service_scvs = self.__calculate_service_time_moments(
+            request_class_rates
+        )
+        mus = 1.0 / np.array(service_means, dtype=float)
         replicas = np.array(system_input["replicas"], dtype=int)
 
         capacities = replicas * mus
@@ -605,18 +740,13 @@ class System:
             request_class_rates,
             utilizations,
             replicas,
+            service_scvs=service_scvs,
         )
 
         lambdas = lambdas.tolist()
         mus = mus.tolist()
         replicas = replicas.tolist()
         utilizations = utilizations.tolist()
-        service_scvs = [0.0] * num_of_services
-        for service in self.get_services().values():
-            service_scvs[service.get_id()] = self.__service_time_scvs[
-                service.get_name()
-            ]
-
         queueing_models = self.__current_queueing_models()
         latencies = []
         for service_id, model in enumerate(queueing_models):
@@ -664,6 +794,7 @@ class System:
         latency. Use ``simulate_measurement_replications`` for the uncensored
         ``[W, W + M)`` measurement-arrival window and drain semantics.
         """
+        self.require_simulation_compatible_workload()
         if analytical_metrics is None:
             analytical_metrics = self.solve()
         if not analytical_metrics.get_stability():
@@ -725,6 +856,7 @@ class System:
 
     def run_warmup_ensemble(self, *, seeds, horizon, bucket_width, workers=1):
         """Run native empty-start replications and aggregate buckets online."""
+        self.require_simulation_compatible_workload()
         if not self.solve().get_stability():
             raise ValueError("Warm-up pilots require a stable replica configuration.")
         return get_native_backend().warmup_ensemble(
@@ -750,6 +882,7 @@ class System:
         tagged request exits. Each returned record contains one request-class
         p95 per replication, suitable for across-replication inference.
         """
+        self.require_simulation_compatible_workload()
         if not self.solve().get_stability():
             raise ValueError("Measurement replications require a stable configuration.")
         return get_native_backend().measurement_replications(
@@ -799,13 +932,17 @@ class System:
     def get_analytical_model_details(self):
         """Return model assumptions and variability inputs for diagnostics."""
         arrival_scvs = self.get_effective_arrival_scvs()
+        service_scvs = self.get_service_time_scvs()
         models = self.__current_queueing_models()
         return {
             service.get_name(): {
                 "model": models[service.get_id()].value,
                 "exact": models[service.get_id()].exact,
                 "arrival_scv": arrival_scvs[service.get_id()],
-                "service_scv": self.__service_time_scvs[service.get_name()],
+                "service_scv": service_scvs[service.get_id()],
+                "class_specific_service_time_mixture": (
+                    self.__class_specific_service_times
+                ),
             }
             for service in self.get_services().values()
         }
@@ -817,6 +954,34 @@ class System:
     def get_request_class_concurrency_weights(self):
         """Return normalized external-traffic shares by request class."""
         return dict(self.__request_class_concurrency_weights)
+
+    def get_request_class_visit_ratios(self):
+        """Return explicitly supplied analytical visits per external request."""
+        return {
+            request_class: dict(visits)
+            for request_class, visits in self.__request_class_visit_ratios.items()
+        }
+
+    def get_request_class_fixed_latency_overheads(self):
+        """Return non-queueing latency added to each analytical class mean."""
+        return dict(self.__request_class_fixed_latency_overheads)
+
+    def require_simulation_compatible_workload(self):
+        """Reject mean-flow-only workloads that do not define request paths."""
+        if self.__class_specific_service_times:
+            raise ValueError(
+                "Simulation does not yet support request-class-specific service-time "
+                "distributions. Use analytical evaluation or provide one shared "
+                "distribution per service."
+            )
+        visit_classes = tuple(sorted(self.__request_class_visit_ratios))
+        if visit_classes:
+            raise ValueError(
+                "Simulation requires sequential routing probabilities, but request "
+                f"classes {list(visit_classes)} define analytical visit ratios. "
+                "Use analytical replica evaluation or replace visits with a "
+                "simulation-compatible routing/path model."
+            )
 
     def get_request_class_mean_latency_limits(self):
         """Return analytical end-to-end mean-latency limits in seconds."""
@@ -892,8 +1057,7 @@ class System:
                 f"limits for request classes: {sorted(mismatched)}."
             )
         return {
-            request_class: slo["maximum_seconds"]
-            for request_class, slo in slos.items()
+            request_class: slo["maximum_seconds"] for request_class, slo in slos.items()
         }
 
     def get_configured_external_arrival_rates(self):
@@ -942,26 +1106,36 @@ class System:
         request_class_rates = self.__calculate_request_class_arrival_rates()
         lambdas = self.__calculate_aggregate_arrival_rates(request_class_rates)
         system_input = self.__initialize_system_input(self.__request_classes[0])
-        mus = np.array(system_input["mus"], dtype=float)
+        service_means, service_scvs = self.__calculate_service_time_moments(
+            request_class_rates
+        )
+        mus = 1.0 / np.array(service_means, dtype=float)
         replicas = np.array(system_input["replicas"], dtype=int)
         utilizations = lambdas / (replicas * mus)
         return self.__calculate_effective_arrival_scvs(
             request_class_rates,
             utilizations,
             replicas,
+            service_scvs=service_scvs,
         )
 
     def get_service_time_scvs(self):
-        values = [0.0] * len(self.get_services())
-        for service in self.get_services().values():
-            values[service.get_id()] = self.__service_time_scvs[
-                service.get_name()
-            ]
+        request_class_rates = self.__calculate_request_class_arrival_rates()
+        _, values = self.__calculate_service_time_moments(request_class_rates)
         return values
 
     def get_service_time_distribution_specs(self):
-        """Return immutable validated service-time specifications by service."""
+        """Return canonical specs; simulation rejects heterogeneous class specs."""
         return dict(self.__service_time_specs)
+
+    def get_request_class_service_time_distribution_specs(self):
+        """Return validated service-time distributions by request class/service."""
+        return {
+            request_class: dict(specifications)
+            for request_class, specifications in (
+                self.__request_class_service_time_specs.items()
+            )
+        }
 
     def get_external_arrival_distribution_specs(self):
         """Return validated external interarrival specifications by class/entry."""
@@ -977,18 +1151,20 @@ class System:
         smallest positive integer ``c`` satisfying ``arrival_rate < c * mu``
         is ``floor(arrival_rate / mu) + 1``.
         """
-        arrival_rates = self.get_effective_arrival_rates()
+        request_class_rates = self.__calculate_request_class_arrival_rates()
         minimum_replicas = [0 for _ in range(len(self.get_services()))]
 
         for service in self.get_services().values():
-            service_rate = service.get_mu()
-            if service_rate <= 0:
-                raise ValueError("Service rates must be greater than zero.")
-
             service_id = service.get_id()
-            minimum_replicas[service_id] = (
-                math.floor(arrival_rates[service_id] / service_rate) + 1
+            offered_load = sum(
+                float(arrival_rates[service_id])
+                * self.__request_class_service_time_specs[request_class][
+                    service.get_name()
+                ].mean
+                for request_class, arrival_rates in request_class_rates.items()
+                if float(arrival_rates[service_id]) > 0.0
             )
+            minimum_replicas[service_id] = math.floor(offered_load) + 1
 
         return minimum_replicas
 
@@ -1007,6 +1183,11 @@ class System:
         """
         service_latencies = self.solve().get_mean_latencies()
         class_rates = self.__calculate_request_class_arrival_rates()
+        service_means, _ = self.__calculate_service_time_moments(class_rates)
+        queue_waits = [
+            max(0.0, float(latency) - service_means[service_id])
+            for service_id, latency in enumerate(service_latencies)
+        ]
         results = {}
         for request_class, effective_rates in class_rates.items():
             external_rate = sum(
@@ -1017,10 +1198,25 @@ class System:
                 raise ValueError(
                     f"Request class {request_class!r} has no external traffic."
                 )
-            results[request_class] = sum(
-                float(rate) * float(latency)
-                for rate, latency in zip(effective_rates, service_latencies)
-            ) / external_rate
+            queueing_latency = 0.0
+            for service in self.get_services().values():
+                service_id = service.get_id()
+                rate = float(effective_rates[service_id])
+                if rate <= 0.0:
+                    continue
+                specification = self.__request_class_service_time_specs[
+                    request_class
+                ][service.get_name()]
+                visits = rate / external_rate
+                queueing_latency += visits * (
+                    specification.mean + queue_waits[service_id]
+                )
+            results[request_class] = queueing_latency + (
+                self.__request_class_fixed_latency_overheads.get(
+                    request_class,
+                    0.0,
+                )
+            )
         return results
 
     def configure_system_replicas(self, replicas_config):

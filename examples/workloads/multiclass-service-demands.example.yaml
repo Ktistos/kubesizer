@@ -1,0 +1,58 @@
+request_classes:
+  dataset_search:
+    concurrency_weight: 0.75
+    end_to_end_latency_slos:
+      mean_seconds: 0.5
+    fixed_latency_overhead_seconds: 0.03
+    visits:
+      api: 1.0
+      auth: 3.0
+      search: 1.0
+
+  organizations:
+    concurrency_weight: 0.25
+    end_to_end_latency_slos:
+      mean_seconds: 0.5
+    fixed_latency_overhead_seconds: 0.02
+    visits:
+      api: 1.0
+      auth: 2.0
+
+traffic_model:
+  entry_services:
+    dataset_search:
+      api:
+        distribution: exponential
+        rate: 12.0
+    organizations:
+      api:
+        distribution: exponential
+        rate: 4.0
+
+  # A service may declare one common distribution, as before, or an explicit
+  # request-class mapping. There is no fallback inside a class mapping: every
+  # class that visits the service must have a distribution.
+  service_times:
+    api:
+      dataset_search:
+        distribution: gamma
+        mean: 0.012
+        scv: 0.4
+      organizations:
+        distribution: gamma
+        mean: 0.008
+        scv: 0.2
+    auth:
+      dataset_search:
+        distribution: gamma
+        mean: 0.002
+        scv: 0.5
+      organizations:
+        distribution: gamma
+        mean: 0.0015
+        scv: 0.3
+    search:
+      dataset_search:
+        distribution: gamma
+        mean: 0.010
+        scv: 0.6

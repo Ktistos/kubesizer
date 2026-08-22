@@ -675,6 +675,14 @@ def _run_replica_workflow(system, args, replica_mode):
 
 def _command_run(args):
     system, _ = _load_system(args.workload)
+    if args.replica_evaluation == "simulation":
+        compatibility_check = getattr(
+            system,
+            "require_simulation_compatible_workload",
+            None,
+        )
+        if compatibility_check is not None:
+            compatibility_check()
     resources, _placement_status = _resources_or_skip(
         args.resources,
         skip_placement=args.skip_placement,

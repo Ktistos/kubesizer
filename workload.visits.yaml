@@ -1,0 +1,42 @@
+# Analytical fan-out/repeated-call example. `visits` is the expected number of
+# visits to each service per external request; it is not a next-hop probability.
+# This mean-flow form supports analytical optimization only because it does not
+# define the event order needed by the simulator.
+request_classes:
+  metadata_read:
+    concurrency_weight: 1.0
+    end_to_end_latency_slos:
+      mean_seconds: 0.5
+    visits:
+      stelarapi: 1.0
+      ckan: 1.0003
+      keycloak: 2.9960
+      solr: 0.7446
+    # Optional latency not represented by service queues, such as fixed network
+    # or gateway overhead. Omit this field when no defensible estimate exists.
+    fixed_latency_overhead_seconds: 0.0
+
+traffic_model:
+  entry_services:
+    metadata_read:
+      stelarapi:
+        distribution: exponential
+        rate: 4.0
+
+  service_times:
+    stelarapi:
+      distribution: lognormal
+      mean: 0.0125
+      scv: 0.04
+    ckan:
+      distribution: lognormal
+      mean: 0.0171
+      scv: 0.03
+    keycloak:
+      distribution: lognormal
+      mean: 0.00153
+      scv: 0.07
+    solr:
+      distribution: lognormal
+      mean: 0.00424
+      scv: 0.23
