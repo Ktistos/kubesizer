@@ -4,12 +4,14 @@ import math
 import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 4
-SIMULATOR_SEMANTICS_VERSION = "native-event-kernel-custom-distributions-cohort-v5"
+PROTOCOL_VERSION = 6
+SIMULATOR_SEMANTICS_VERSION = (
+    "native-event-kernel-synchronous-calls-dual-resources-deadlines-v7"
+)
 
 
 class NativeBackendError(RuntimeError):
@@ -55,6 +57,8 @@ class NativeMeasurementReplication:
     busy_replicas_at_end: tuple[int, ...]
     tagged_requests_in_flight_at_end: int
     maximum_drain_time: float
+    failed_measured_request_counts: dict[str, int] = field(default_factory=dict)
+    request_class_failures: dict[str, tuple[bool, ...]] = field(default_factory=dict)
 
 
 def _finite_positive(value, label):
@@ -184,6 +188,16 @@ class CppSimulationBackend:
         concurrency_weights = system.get_request_class_concurrency_weights()
         arrival_specs = system.get_external_arrival_distribution_specs()
         service_specs = system.get_service_time_distribution_specs()
+        class_service_specs = (
+            system.get_request_class_service_time_distribution_specs()
+        )
+        workflows = system.get_request_class_workflows()
+        call_graphs = system.get_request_class_call_graphs()
+        call_execution_modes = system.get_request_class_call_execution_modes()
+        fixed_overheads = system.get_request_class_fixed_latency_overheads()
+        timeouts = system.get_request_class_end_to_end_timeouts()
+        concurrency_limits = system.get_service_concurrency_limits_per_replica()
+        processing_slots = system.get_service_processing_slots_per_replica()
         for request_class in system.get_request_classes():
             routing = []
             for service in services:
@@ -201,7 +215,46 @@ class CppSimulationBackend:
                 {
                     "name": request_class,
                     "concurrency_weight": concurrency_weights[request_class],
+                    "flow_kind": (
+                        "workflow"
+                        if request_class in workflows
+                        else (
+                            "calls"
+                            if request_class in call_graphs
+                            else "routing"
+                        )
+                    ),
                     "routing": routing,
+                    "workflow": [
+                        {
+                            "service": system.get_service(visit.service).get_id(),
+                            "mean_visits": visit.mean_visits,
+                        }
+                        for visit in workflows.get(request_class, ())
+                    ],
+                    "calls": [
+                        [
+                            {
+                                "service": system.get_service(target).get_id(),
+                                "mean_visits": mean_calls,
+                            }
+                            for target, mean_calls in (
+                                call_graphs.get(request_class, {})
+                                .get(service.get_name(), {})
+                                .items()
+                            )
+                        ]
+                        for service in services
+                    ],
+                    "call_execution": call_execution_modes.get(
+                        request_class,
+                        "parallel",
+                    ),
+                    "fixed_latency_overhead": fixed_overheads.get(
+                        request_class,
+                        0.0,
+                    ),
+                    "end_to_end_timeout": timeouts.get(request_class, 0.0),
                 }
             )
 
@@ -225,10 +278,24 @@ class CppSimulationBackend:
             "services": [
                 {
                     "name": service.get_name(),
-                    "capacity": service.get_replicas(),
-                    "service_time_distribution": _serialize_distribution(
-                        service_specs[service.get_name()]
+                    "replicas": service.get_replicas(),
+                    "capacity": (
+                        service.get_replicas()
+                        * processing_slots[service.get_name()]
                     ),
+                    "concurrency_capacity": (
+                        service.get_replicas()
+                        * concurrency_limits[service.get_name()]
+                    ),
+                    "service_time_distributions": [
+                        _serialize_distribution(
+                            class_service_specs[request_class].get(
+                                service.get_name(),
+                                service_specs[service.get_name()],
+                            )
+                        )
+                        for request_class in system.get_request_classes()
+                    ],
                 }
                 for service in services
             ],
@@ -496,6 +563,10 @@ class CppSimulationBackend:
                     key: int(value)
                     for key, value in item["completed_measured_request_counts"].items()
                 }
+                failed_measured = {
+                    key: int(value)
+                    for key, value in item["failed_measured_request_counts"].items()
+                }
                 p95 = {
                     key: float(value)
                     for key, value in item["request_class_p95_latencies"].items()
@@ -508,25 +579,50 @@ class CppSimulationBackend:
                     key: _numeric_tuple(value, f"request_class_arrival_times[{key}]")
                     for key, value in item["request_class_arrival_times"].items()
                 }
+                raw_failures = item["request_class_failures"]
+                if not isinstance(raw_failures, dict) or any(
+                    not isinstance(values, list)
+                    or any(value not in (0, 1, False, True) for value in values)
+                    for values in raw_failures.values()
+                ):
+                    raise ValueError("request-class failure flags are invalid.")
+                failures = {
+                    key: tuple(bool(value) for value in values)
+                    for key, values in raw_failures.items()
+                }
+                effective_capacities = tuple(
+                    system.get_effective_service_capacities()
+                )
                 if (
                     set(measured) != expected_classes
+                    or set(completed_measured) != expected_classes
+                    or set(failed_measured) != expected_classes
                     or set(latencies) != expected_classes
                     or set(arrival_times) != expected_classes
+                    or set(failures) != expected_classes
                     or measured != completed_measured
                 ):
                     raise ValueError(
                         "tagged request cohort was not drained completely."
                     )
-                if any(value < 0 for value in measured.values()):
-                    raise ValueError("measured request count is negative.")
+                if any(value < 0 for value in measured.values()) or any(
+                    value < 0 or value > measured[key]
+                    for key, value in failed_measured.items()
+                ):
+                    raise ValueError("measured request outcome count is invalid.")
                 for request_class in expected_classes:
                     if not (
                         measured[request_class]
                         == len(latencies[request_class])
                         == len(arrival_times[request_class])
+                        == len(failures[request_class])
                     ):
                         raise ValueError(
                             "raw latency-cluster size does not match count."
+                        )
+                    if sum(failures[request_class]) != failed_measured[request_class]:
+                        raise ValueError(
+                            "raw failure flags do not match the failure count."
                         )
                     if any(
                         arrival < warmup_duration
@@ -573,7 +669,10 @@ class CppSimulationBackend:
                     or any(value < 0 for value in queue_lengths)
                     or any(
                         value < 0 or value > capacity
-                        for value, capacity in zip(busy_replicas, configuration)
+                        for value, capacity in zip(
+                            busy_replicas,
+                            effective_capacities,
+                        )
                     )
                     or tagged_in_flight != 0
                 ):
@@ -589,9 +688,11 @@ class CppSimulationBackend:
                         stop_time=stop_time,
                         measured_request_counts=measured,
                         completed_measured_request_counts=completed_measured,
+                        failed_measured_request_counts=failed_measured,
                         request_class_p95_latencies=p95,
                         request_class_latencies=latencies,
                         request_class_arrival_times=arrival_times,
+                        request_class_failures=failures,
                         processed_event_count=int(item["processed_event_count"]),
                         external_arrival_count=int(item["external_arrival_count"]),
                         completed_request_count=int(item["completed_request_count"]),
@@ -631,17 +732,24 @@ def slice_measurement_replication(replication, measurement_duration):
     boundary = replication.warmup_duration + measurement_duration
     latencies = {}
     arrival_times = {}
+    failures = {}
     for request_class, raw_latencies in replication.request_class_latencies.items():
+        raw_failures = replication.request_class_failures.get(
+            request_class,
+            (False,) * len(raw_latencies),
+        )
         selected = tuple(
-            (arrival, latency)
-            for arrival, latency in zip(
+            (arrival, latency, failed)
+            for arrival, latency, failed in zip(
                 replication.request_class_arrival_times[request_class],
                 raw_latencies,
+                raw_failures,
             )
             if arrival < boundary
         )
         arrival_times[request_class] = tuple(item[0] for item in selected)
         latencies[request_class] = tuple(item[1] for item in selected)
+        failures[request_class] = tuple(item[2] for item in selected)
     counts = {name: len(values) for name, values in latencies.items()}
     p95 = {
         name: _percentile(values, 0.95) for name, values in latencies.items() if values
@@ -654,9 +762,13 @@ def slice_measurement_replication(replication, measurement_duration):
         stop_time=replication.stop_time,
         measured_request_counts=counts,
         completed_measured_request_counts=dict(counts),
+        failed_measured_request_counts={
+            name: sum(values) for name, values in failures.items()
+        },
         request_class_p95_latencies=p95,
         request_class_latencies=latencies,
         request_class_arrival_times=arrival_times,
+        request_class_failures=failures,
         processed_event_count=replication.processed_event_count,
         external_arrival_count=replication.external_arrival_count,
         completed_request_count=replication.completed_request_count,

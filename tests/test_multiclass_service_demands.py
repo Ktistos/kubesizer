@@ -77,11 +77,28 @@ def test_missing_reachable_class_service_distribution_fails():
         parse_workload_spec(workload)
 
 
-def test_native_simulation_rejects_heterogeneous_class_service_times():
-    system = System("multiclass", _workload(), QueueingNetworkType.OPEN)
+def test_native_simulation_uses_request_class_specific_service_times():
+    workload = _workload()
+    for request_class in workload["request_classes"].values():
+        request_class["workflow"] = [{"service": "api"}]
+        del request_class["visits"]
+    for streams in workload["traffic_model"]["entry_services"].values():
+        streams["api"] = {"distribution": "deterministic", "rate": 1.0}
+    system = System("multiclass", workload, QueueingNetworkType.OPEN)
+    system.get_service("api").set_replicas(2)
 
-    with pytest.raises(ValueError, match="request-class-specific"):
-        system.simulate(10.0)
+    replications = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=5.5,
+        seeds=(17,),
+    )
+
+    assert replications[0].request_class_latencies["fast"] == pytest.approx(
+        (0.1,) * 5
+    )
+    assert replications[0].request_class_latencies["slow"] == pytest.approx(
+        (0.3,) * 5
+    )
 
 
 def test_analytical_optimizer_enforces_every_class_specific_mean_slo():

@@ -1,6 +1,7 @@
 # Statistically controlled simulation workflow
 
-The production experiment has three deliberately separate stages. The
+The production experiment has three deliberately separate statistical stages
+and a prior real-cluster model-validation gate. The
 `kubesizer` command uses the public functions in `statistical_workflow.py`; it
 does not load calibration profiles and has no persistent evaluation cache.
 
@@ -10,9 +11,17 @@ does not load calibration profiles and has no persistent evaluation cache.
 from statistical_workflow import (
     calibrate,
     evaluate_configuration,
-    optimize_with_calibrated_simulation,
-    validate_final_configuration,
+    recommend_replicas_with_validated_simulation,
 )
+from predictive_validation import validate_simulator_predictions
+
+# `holdout_cases` contain fresh observed means or p95s and observed error rates.
+predictive_certificate = validate_simulator_predictions(
+    system,
+    holdout_cases,
+    options=predictive_options,
+)
+predictive_certificate.assert_valid_for(system)
 
 profile = calibrate(
     system,
@@ -22,20 +31,48 @@ profile = calibrate(
 )
 
 evaluation = evaluate_configuration(system, configuration, profile)
-optimization = optimize_with_calibrated_simulation(system, profile)
-final = validate_final_configuration(
+recommendation = recommend_replicas_with_validated_simulation(
     system,
-    optimization.configuration,
     profile,
+    predictive_certificate,
 )
-if not final.passed:
-    raise RuntimeError(final.failure_reason)
+if not recommendation.recommendable:
+    raise RuntimeError(recommendation.guarantee)
 ```
 
 `CalibrationOptions` controls pilot replications, tolerances, sample minima,
 `R_min`, `R_max`, batch size, alpha, bootstrap resamples, drain protection and
 all seed namespaces. Defaults are scientific starting points, not universal
 constants.
+
+## Prior gate: does the simulator represent the cluster?
+
+Monte Carlo confidence intervals show uncertainty inside the simulator; they
+cannot show that the simulator represents Kubernetes. Before a plan is called
+a recommendation, `validate_simulator_predictions` runs the frozen model on at
+least two fresh real-cluster holdouts, including the exact target workload. It
+checks every request class against directional practical-error tolerances,
+requires a sufficiently precise simulation interval, and rejects observations
+whose failures are not represented by an explicit request deadline. When a
+deadline is declared, timeout outcomes remain in the latency sample and their
+replication-cluster-bootstrap failure rate must also match the holdout. The
+immutable result is fingerprinted to the workload, topology,
+service demands, call semantics, capacity semantics, and simulator version.
+
+`recommend_replicas_with_validated_simulation` requires an accepted
+certificate, runs calibrated optimization, and then performs the separate
+fresh-seed Stage C validation. This yields either a validated bounded-model
+optimum, a validated feasible heuristic, or no recommendation. “Bounded-model
+optimum” never means globally optimal for unmeasured live-cluster behavior.
+
+The simulation-ready workload can represent an ordered workflow or a
+synchronous call graph. A call graph must explicitly choose `parallel` or
+`sequential` sibling execution. Each replica contributes separately configured
+processing slots and admitted-request concurrency. A parent releases its
+processing slot but retains its concurrency slot while waiting for downstream
+calls. This captures CPU contention and worker/thread exhaustion as different
+mechanisms. Mean visit ratios remain analytical-only because edge telemetry
+does not reveal call order or synchronization.
 
 ## Stage A: calibration
 
@@ -127,4 +164,7 @@ routing; undrainable cohorts; unresolved warm-up transients; inadequate rare
 classes; or a changed simulator-semantics version. Cluster percentile bootstrap
 coverage is conservative through Bonferroni error allocation but remains a
 finite-replication approximation, especially for very rare or heavy-tailed
-classes.
+classes. The kernel can represent a measured terminal deadline, but it cannot
+infer the capacity that caused a backlog or explain retries, hidden databases,
+or connection pools unless those resources and policies are explicitly measured
+and modeled; an affected holdout rejects the predictive certificate.

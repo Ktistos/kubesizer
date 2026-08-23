@@ -593,15 +593,47 @@ def experiment_fingerprints(system):
     )
     request_classes = tuple(system.get_request_classes())
     visit_ratios = getattr(system, "get_request_class_visit_ratios", lambda: {})()
+    workflows = getattr(system, "get_request_class_workflows", lambda: {})()
+    call_graphs = getattr(system, "get_request_class_call_graphs", lambda: {})()
+    call_execution_modes = getattr(
+        system,
+        "get_request_class_call_execution_modes",
+        lambda: {},
+    )()
+    concurrency_limits = getattr(
+        system,
+        "get_service_concurrency_limits_per_replica",
+        lambda: {service.get_name(): 1 for service in services},
+    )()
+    processing_slots = getattr(
+        system,
+        "get_service_processing_slots_per_replica",
+        lambda: {service.get_name(): 1 for service in services},
+    )()
     fixed_latency_overheads = getattr(
         system,
         "get_request_class_fixed_latency_overheads",
         lambda: {},
     )()
+    end_to_end_timeouts = getattr(
+        system,
+        "get_request_class_end_to_end_timeouts",
+        lambda: {},
+    )()
     topology = {
         "network_type": system.get_type().value,
         "services": [
-            {"id": service.get_id(), "name": service.get_name()} for service in services
+            {
+                "id": service.get_id(),
+                "name": service.get_name(),
+                "concurrency_limit_per_replica": concurrency_limits[
+                    service.get_name()
+                ],
+                "processing_slots_per_replica": processing_slots[
+                    service.get_name()
+                ],
+            }
+            for service in services
         ],
         "request_classes": [
             {
@@ -632,6 +664,29 @@ def experiment_fingerprints(system):
                         visit_ratios.get(request_class, {}).items()
                     )
                 ],
+                "workflow": [
+                    {
+                        "service": visit.service,
+                        "mean_visits": float(visit.mean_visits),
+                    }
+                    for visit in workflows.get(request_class, ())
+                ],
+                "calls": [
+                    {
+                        "source": source,
+                        "targets": [
+                            {
+                                "target": target,
+                                "mean_calls": float(mean_calls),
+                            }
+                            for target, mean_calls in targets.items()
+                        ],
+                    }
+                    for source, targets in sorted(
+                        call_graphs.get(request_class, {}).items()
+                    )
+                ],
+                "call_execution": call_execution_modes.get(request_class),
             }
             for request_class in request_classes
         ],
@@ -645,6 +700,13 @@ def experiment_fingerprints(system):
             {
                 "request_class": request_class,
                 "seconds": float(fixed_latency_overheads.get(request_class, 0.0)),
+            }
+            for request_class in request_classes
+        ],
+        "request_class_end_to_end_timeouts": [
+            {
+                "request_class": request_class,
+                "seconds": float(end_to_end_timeouts.get(request_class, 0.0)),
             }
             for request_class in request_classes
         ],

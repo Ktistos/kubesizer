@@ -67,6 +67,18 @@ def _rescale_interarrival_spec(specification, target_rate):
     )
 
 
+def _reachable_call_services(call_graph, entry_services):
+    reachable = set(entry_services)
+    pending = list(reachable)
+    while pending:
+        source = pending.pop()
+        for target, mean_calls in call_graph.get(source, {}).items():
+            if mean_calls > 0.0 and target not in reachable:
+                reachable.add(target)
+                pending.append(target)
+    return reachable
+
+
 class System:
 
     def __init__(
@@ -85,7 +97,13 @@ class System:
         self.__traffic_distribution_spec = None
         self.__request_class_latency_slos = {}
         self.__request_class_visit_ratios = {}
+        self.__request_class_workflows = {}
+        self.__request_class_call_graphs = {}
+        self.__request_class_call_execution_modes = {}
         self.__request_class_fixed_latency_overheads = {}
+        self.__request_class_end_to_end_timeouts = {}
+        self.__service_processing_slots_per_replica = {}
+        self.__service_concurrency_limits_per_replica = {}
         self.__class_specific_service_times = False
         if structured:
             parsed = parse_workload_spec(
@@ -98,8 +116,33 @@ class System:
                 request_class: dict(visits)
                 for request_class, visits in (parsed.request_class_visit_ratios.items())
             }
+            self.__request_class_workflows = {
+                request_class: tuple(workflow)
+                for request_class, workflow in parsed.request_class_workflows.items()
+            }
+            self.__request_class_call_graphs = {
+                request_class: {
+                    source: dict(targets)
+                    for source, targets in call_graph.items()
+                }
+                for request_class, call_graph in (
+                    parsed.request_class_call_graphs.items()
+                )
+            }
+            self.__request_class_call_execution_modes = dict(
+                parsed.request_class_call_execution_modes
+            )
             self.__request_class_fixed_latency_overheads = dict(
                 parsed.request_class_fixed_latency_overheads
+            )
+            self.__request_class_end_to_end_timeouts = dict(
+                parsed.request_class_end_to_end_timeouts
+            )
+            self.__service_processing_slots_per_replica = dict(
+                parsed.traffic_model.processing_slots_per_replica
+            )
+            self.__service_concurrency_limits_per_replica = dict(
+                parsed.traffic_model.concurrency_limits_per_replica
             )
             self.__class_specific_service_times = any(
                 len(
@@ -296,6 +339,18 @@ class System:
             )
         ]
         self.__initialize_distribution_metadata()
+        if not self.__service_processing_slots_per_replica:
+            self.__service_processing_slots_per_replica = {
+                service.get_name(): 1
+                for service in self.get_services().values()
+            }
+        if not self.__service_concurrency_limits_per_replica:
+            self.__service_concurrency_limits_per_replica = {
+                service.get_name(): self.__service_processing_slots_per_replica[
+                    service.get_name()
+                ]
+                for service in self.get_services().values()
+            }
         self.__poisson_arrival_flags = self.__calculate_poisson_arrival_flags()
 
     def __initialize_distribution_metadata(self):
@@ -399,6 +454,23 @@ class System:
         flags = [True] * service_count
         reachable_by_class = {}
         for request_class in self.get_request_classes():
+            call_graph = self.__request_class_call_graphs.get(request_class)
+            if call_graph is not None:
+                reachable = {
+                    self.get_service(service_name).get_id()
+                    for service_name in _reachable_call_services(
+                        call_graph,
+                        (
+                            service.get_name()
+                            for service in self.get_services().values()
+                            if service.get_gamma(request_class) > 0.0
+                        ),
+                    )
+                }
+                reachable_by_class[request_class] = reachable
+                for service_id in reachable:
+                    flags[service_id] = False
+                continue
             explicit_visits = self.__request_class_visit_ratios.get(request_class)
             if explicit_visits is not None:
                 reachable = {
@@ -476,7 +548,12 @@ class System:
                     self.__service_time_distributions[service.get_name()]
                     == "exponential"
                 ),
-                replicas=service.get_replicas(),
+                replicas=(
+                    service.get_replicas()
+                    * self.__service_processing_slots_per_replica[
+                        service.get_name()
+                    ]
+                ),
             )
         return tuple(models)
 
@@ -593,6 +670,7 @@ class System:
         gammas = [0.0 for _ in range(num_of_services)]
         mus = [0.0 for _ in range(num_of_services)]
         replicas = [0 for _ in range(num_of_services)]
+        servers = [0 for _ in range(num_of_services)]
 
         routing_probability_matrix = [
             [0 for _ in range(num_of_services)] for _ in range(num_of_services)
@@ -608,6 +686,10 @@ class System:
             gammas[order_index] = service_gamma
             mus[order_index] = service_mu
             replicas[order_index] = service_replicas
+            servers[order_index] = (
+                service_replicas
+                * self.__service_processing_slots_per_replica[service_name]
+            )
 
             adjacency_list = service.get_adjacency_list(request_class_name)
 
@@ -626,6 +708,7 @@ class System:
             "gammas": gammas,
             "mus": mus,
             "replicas": replicas,
+            "servers": servers,
             "routing_probability_matrix": routing_probability_matrix,
         }
 
@@ -650,6 +733,31 @@ class System:
     def __calculate_request_class_arrival_rates(self):
         rates = {}
         for request_class in self.get_request_classes():
+            call_graph = self.__request_class_call_graphs.get(request_class)
+            if call_graph is not None:
+                system_input = self.__initialize_system_input(request_class)
+                service_count = len(self.get_services())
+                calls = np.zeros((service_count, service_count), dtype=float)
+                for source_name, targets in call_graph.items():
+                    source_id = self.get_service(source_name).get_id()
+                    for target_name, mean_calls in targets.items():
+                        calls[source_id, self.get_service(target_name).get_id()] = (
+                            mean_calls
+                        )
+                spectral_radius = max(
+                    abs(value) for value in np.linalg.eigvals(calls)
+                )
+                if spectral_radius >= 1.0 - 1e-12:
+                    raise ValueError(
+                        f"Request class {request_class!r} synchronous call graph "
+                        "is not open; its mean offspring spectral radius must be "
+                        "less than one."
+                    )
+                rates[request_class] = np.linalg.solve(
+                    np.eye(service_count) - calls.T,
+                    np.array(system_input["gammas"], dtype=float),
+                )
+                continue
             explicit_visits = self.__request_class_visit_ratios.get(request_class)
             if explicit_visits is None:
                 rates[request_class] = self.__calculate_effective_arrival_rates(
@@ -732,20 +840,20 @@ class System:
             request_class_rates
         )
         mus = 1.0 / np.array(service_means, dtype=float)
-        replicas = np.array(system_input["replicas"], dtype=int)
+        servers = np.array(system_input["servers"], dtype=int)
 
-        capacities = replicas * mus
+        capacities = servers * mus
         utilizations = lambdas / capacities
         arrival_scvs = self.__calculate_effective_arrival_scvs(
             request_class_rates,
             utilizations,
-            replicas,
+            servers,
             service_scvs=service_scvs,
         )
 
         lambdas = lambdas.tolist()
         mus = mus.tolist()
-        replicas = replicas.tolist()
+        servers = servers.tolist()
         utilizations = utilizations.tolist()
         queueing_models = self.__current_queueing_models()
         latencies = []
@@ -754,7 +862,7 @@ class System:
                 latency = mmc_mean_response_time(
                     lambdas[service_id],
                     mus[service_id],
-                    replicas[service_id],
+                    servers[service_id],
                 )
             elif model is AnalyticalQueueingModel.MG1:
                 latency = mg1_mean_response_time(
@@ -766,7 +874,7 @@ class System:
                 latency = variability_adjusted_mean_response_time(
                     lambdas[service_id],
                     mus[service_id],
-                    replicas[service_id],
+                    servers[service_id],
                     arrival_scv=arrival_scvs[service_id],
                     service_scv=service_scvs[service_id],
                 )
@@ -943,6 +1051,22 @@ class System:
                 "class_specific_service_time_mixture": (
                     self.__class_specific_service_times
                 ),
+                "concurrency_limit_per_replica": (
+                    self.__service_concurrency_limits_per_replica[
+                        service.get_name()
+                    ]
+                ),
+                "processing_slots_per_replica": (
+                    self.__service_processing_slots_per_replica[
+                        service.get_name()
+                    ]
+                ),
+                "effective_processing_slots": (
+                    service.get_replicas()
+                    * self.__service_processing_slots_per_replica[
+                        service.get_name()
+                    ]
+                ),
             }
             for service in self.get_services().values()
         }
@@ -962,25 +1086,49 @@ class System:
             for request_class, visits in self.__request_class_visit_ratios.items()
         }
 
+    def get_request_class_workflows(self):
+        """Return executable ordered visit specifications by request class."""
+        return {
+            request_class: tuple(workflow)
+            for request_class, workflow in self.__request_class_workflows.items()
+        }
+
+    def get_request_class_call_graphs(self):
+        """Return expected synchronous child calls per source service call."""
+        return {
+            request_class: {
+                source: dict(targets)
+                for source, targets in call_graph.items()
+            }
+            for request_class, call_graph in self.__request_class_call_graphs.items()
+        }
+
+    def get_request_class_call_execution_modes(self):
+        """Return parallel/sequential sibling-call semantics by class."""
+        return dict(self.__request_class_call_execution_modes)
+
     def get_request_class_fixed_latency_overheads(self):
         """Return non-queueing latency added to each analytical class mean."""
         return dict(self.__request_class_fixed_latency_overheads)
 
+    def get_request_class_end_to_end_timeouts(self):
+        """Return client-visible terminal deadlines; zero disables a deadline."""
+        return dict(self.__request_class_end_to_end_timeouts)
+
     def require_simulation_compatible_workload(self):
-        """Reject mean-flow-only workloads that do not define request paths."""
-        if self.__class_specific_service_times:
-            raise ValueError(
-                "Simulation does not yet support request-class-specific service-time "
-                "distributions. Use analytical evaluation or provide one shared "
-                "distribution per service."
+        """Reject mean-flow-only visits that do not define executable paths."""
+        visit_classes = tuple(
+            sorted(
+                set(self.__request_class_visit_ratios)
+                - set(self.__request_class_workflows)
             )
-        visit_classes = tuple(sorted(self.__request_class_visit_ratios))
+        )
         if visit_classes:
             raise ValueError(
                 "Simulation requires sequential routing probabilities, but request "
                 f"classes {list(visit_classes)} define analytical visit ratios. "
-                "Use analytical replica evaluation or replace visits with a "
-                "simulation-compatible routing/path model."
+                "Use analytical replica evaluation or replace visits with an "
+                "executable workflow."
             )
 
     def get_request_class_mean_latency_limits(self):
@@ -1096,6 +1244,26 @@ class System:
             replicas[service_id] = service.get_replicas()
         return replicas
 
+    def get_service_concurrency_limits_per_replica(self):
+        """Return maximum in-flight calls admitted by one replica."""
+        return dict(self.__service_concurrency_limits_per_replica)
+
+    def get_service_processing_slots_per_replica(self):
+        """Return effective processing servers contributed by one replica."""
+        return dict(self.__service_processing_slots_per_replica)
+
+    def get_effective_service_capacities(self):
+        """Return total processing slots in service-ID order."""
+        capacities = [0 for _ in range(len(self.get_services()))]
+        for service in self.get_services().values():
+            capacities[service.get_id()] = (
+                service.get_replicas()
+                * self.__service_processing_slots_per_replica[
+                    service.get_name()
+                ]
+            )
+        return capacities
+
     def get_effective_arrival_rates(self):
         """Return aggregate analytical arrival rates in service-ID order."""
         request_class_rates = self.__calculate_request_class_arrival_rates()
@@ -1110,12 +1278,12 @@ class System:
             request_class_rates
         )
         mus = 1.0 / np.array(service_means, dtype=float)
-        replicas = np.array(system_input["replicas"], dtype=int)
-        utilizations = lambdas / (replicas * mus)
+        servers = np.array(system_input["servers"], dtype=int)
+        utilizations = lambdas / (servers * mus)
         return self.__calculate_effective_arrival_scvs(
             request_class_rates,
             utilizations,
-            replicas,
+            servers,
             service_scvs=service_scvs,
         )
 
@@ -1147,9 +1315,9 @@ class System:
     def get_minimum_stable_replicas(self):
         """Return the minimum per-service replicas for strict stability.
 
-        Replica counts are returned in service-ID order. For each service the
-        smallest positive integer ``c`` satisfying ``arrival_rate < c * mu``
-        is ``floor(arrival_rate / mu) + 1``.
+        Replica counts are returned in service-ID order. If one replica exposes
+        ``p`` effective processing slots, the strict stability condition is
+        ``offered_load < replicas * p``.
         """
         request_class_rates = self.__calculate_request_class_arrival_rates()
         minimum_replicas = [0 for _ in range(len(self.get_services()))]
@@ -1164,7 +1332,12 @@ class System:
                 for request_class, arrival_rates in request_class_rates.items()
                 if float(arrival_rates[service_id]) > 0.0
             )
-            minimum_replicas[service_id] = math.floor(offered_load) + 1
+            processing_slots = self.__service_processing_slots_per_replica[
+                service.get_name()
+            ]
+            minimum_replicas[service_id] = (
+                math.floor(offered_load / processing_slots) + 1
+            )
 
         return minimum_replicas
 

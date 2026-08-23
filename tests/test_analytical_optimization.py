@@ -205,6 +205,19 @@ def test_percentile_workload_cannot_use_strict_analytical_optimization():
         )
 
 
+def test_deadline_workload_cannot_silently_use_strict_analytical_optimization():
+    workload = _structured_single_service_system().get_workload_spec()
+    workload["request_classes"]["request"]["end_to_end_timeout_seconds"] = 1.0
+    system = System("deadline", workload, QueueingNetworkType.OPEN)
+
+    with pytest.raises(ValueError, match="deadlines require simulation"):
+        optimize_with_analytical_model(
+            system,
+            maximum_replicas=3,
+            mode=OptimizationMode.EXACT,
+        )
+
+
 def test_workload_without_slos_optimizes_to_the_stable_vector():
     system = _structured_single_service_system()
     workload = system.get_workload_spec()

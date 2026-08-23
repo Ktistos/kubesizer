@@ -272,6 +272,7 @@ class CalibratedConfigurationEvaluator:
             processed_events = 0
             external_arrivals = 0
             completed_requests = 0
+            failed_measured_requests = 0
             maximum_stop_time = 0.0
             for look_index, replication_count in enumerate(
                 self._look_schedule(), start=1
@@ -348,6 +349,17 @@ class CalibratedConfigurationEvaluator:
                     int(getattr(item, "completed_request_count", 0))
                     for item in batch
                 )
+                failed_measured_requests += sum(
+                    sum(
+                        int(value)
+                        for value in getattr(
+                            item,
+                            "failed_measured_request_counts",
+                            {},
+                        ).values()
+                    )
+                    for item in batch
+                )
                 maximum_stop_time = max(
                     maximum_stop_time,
                     *(
@@ -420,6 +432,7 @@ class CalibratedConfigurationEvaluator:
                     ("processed_event_count", processed_events),
                     ("external_arrival_count", external_arrivals),
                     ("completed_request_count", completed_requests),
+                    ("failed_measured_request_count", failed_measured_requests),
                     ("maximum_stop_time", maximum_stop_time),
                     ("replication_count", previous_count),
                 ),

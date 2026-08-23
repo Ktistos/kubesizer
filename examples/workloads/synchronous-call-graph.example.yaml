@@ -1,0 +1,59 @@
+# Simulation-ready synchronous HTTP call graph. Each `calls[source][target]`
+# value is the expected number of child calls spawned by one visit to `source`.
+# `call_execution` says whether sibling calls run in their written order or in
+# parallel. The parent retains one concurrency slot until all descendants
+# return, while its CPU processing slot is released during downstream waits.
+request_classes:
+  metadata_read:
+    concurrency_weight: 1.0
+    end_to_end_latency_slos:
+      percentile:
+        quantile: 0.95
+        maximum_seconds: 0.500
+    # Optional client-visible deadline. A request still unfinished at this age
+    # terminates as a failed outcome whose latency equals the deadline. The
+    # server-side work is not magically cancelled.
+    end_to_end_timeout_seconds: 60.0
+    calls:
+      api:
+        catalog: 1.0
+        identity: 3.0
+      catalog:
+        search: 0.75
+    call_execution: parallel
+    fixed_latency_overhead_seconds: 0.020
+
+traffic_model:
+  entry_services:
+    metadata_read:
+      api:
+        distribution: exponential
+        rate: 40.0
+
+  service_times:
+    api:
+      # One CPU-like processing server and four admitted in-flight requests per
+      # Kubernetes replica. Both capacities scale when replicas are added.
+      processing_slots_per_replica: 1
+      concurrency_limit_per_replica: 4
+      distribution: gamma
+      mean: 0.012
+      scv: 0.20
+    catalog:
+      processing_slots_per_replica: 1
+      concurrency_limit_per_replica: 2
+      distribution: empirical
+      source: data/database-service-times.csv
+      column: service_time_seconds
+      sampling: iid_with_replacement
+    identity:
+      processing_slots_per_replica: 1
+      concurrency_limit_per_replica: 8
+      distribution: lognormal
+      mean: 0.001
+      scv: 0.50
+    search:
+      processing_slots_per_replica: 1
+      concurrency_limit_per_replica: 4
+      distribution: deterministic
+      mean: 0.004

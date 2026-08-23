@@ -257,15 +257,40 @@ def test_public_calibrated_workflow_uses_uniform_cost_by_default(monkeypatch):
         profile_fingerprint="profile",
     )
 
+    system = object()
+
+    class Certificate:
+        status = SimpleNamespace(value="VALIDATED")
+        certificate_fingerprint = "predictive-certificate"
+
+        def assert_valid_for(self, supplied_system):
+            assert supplied_system is system
+
     result = statistical_workflow.optimize_with_calibrated_simulation(
-        object(),
+        system,
         profile,
+        predictive_validation=Certificate(),
+        require_predictive_validation=True,
     )
 
     assert len(calls) == 1
     assert result.configuration == (2,)
     assert not result.minimality_proven
     assert result.unresolved_lower_cost_states == ((1,),)
+    assert result.predictive_validation_status == "VALIDATED"
+    assert (
+        result.predictive_validation_certificate_fingerprint
+        == "predictive-certificate"
+    )
+
+
+def test_simulation_recommendation_can_require_predictive_validation():
+    with pytest.raises(ValueError, match="predictive-validation certificate"):
+        statistical_workflow.optimize_with_calibrated_simulation(
+            object(),
+            object(),
+            require_predictive_validation=True,
+        )
 
 
 def test_public_calibrated_workflow_uses_runtime_adaptive_scalable_mode(monkeypatch):

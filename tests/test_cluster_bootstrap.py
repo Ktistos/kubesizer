@@ -6,6 +6,7 @@ from metrics import (
     percentile,
     replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
+    replication_cluster_bootstrap_rate,
     sequential_tail_alpha,
 )
 
@@ -159,3 +160,36 @@ def test_bootstrap_redraws_all_empty_cluster_samples_for_rare_classes():
     assert len(interval.bootstrap_p95_values) == 1_000
     assert all(value >= 1.0 for value in interval.bootstrap_p95_values)
     assert interval.nonempty_replication_count == 1
+
+
+def test_cluster_bootstrap_failure_rate_resamples_complete_replications():
+    clusters = ((False, False), (True, True))
+    interval = replication_cluster_bootstrap_rate(
+        clusters,
+        request_class="read",
+        resample_count=1_000,
+        seed=41,
+        lower_tail_probability=0.025,
+        upper_tail_probability=0.975,
+    )
+
+    assert interval.estimate == pytest.approx(0.5)
+    assert interval.failed_request_count == 2
+    assert interval.eligible_request_count == 4
+    assert set(interval.bootstrap_values) <= {0.0, 0.5, 1.0}
+
+
+def test_cluster_bootstrap_failure_rate_is_reproducible_and_rejects_bad_data():
+    arguments = dict(
+        request_class="read",
+        resample_count=1_000,
+        seed=17,
+        lower_tail_probability=0.025,
+        upper_tail_probability=0.975,
+    )
+    first = replication_cluster_bootstrap_rate(((False,), (True,)), **arguments)
+    second = replication_cluster_bootstrap_rate(((False,), (True,)), **arguments)
+
+    assert first == second
+    with pytest.raises(ValueError, match="binary"):
+        replication_cluster_bootstrap_rate(((False,), (2,)), **arguments)

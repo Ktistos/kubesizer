@@ -113,17 +113,20 @@ def test_visit_ratios_and_routing_are_mutually_exclusive():
     workload = _visit_workload()
     workload["request_classes"]["metadata_read"]["routing"] = {}
 
-    with pytest.raises(ValueError, match="exactly one of routing or visits"):
+    with pytest.raises(
+        ValueError,
+        match="exactly one of routing, visits, workflow, or calls",
+    ):
         parse_workload_spec(workload)
 
 
-def test_fixed_latency_overhead_is_limited_to_analytical_visit_workloads():
+def test_fixed_latency_overhead_requires_visits_or_an_executable_workflow():
     workload = _visit_workload()
     request_class = workload["request_classes"]["metadata_read"]
     request_class.pop("visits")
     request_class["routing"] = {}
 
-    with pytest.raises(ValueError, match="only with analytical visits"):
+    with pytest.raises(ValueError, match="only with visits, workflow, or calls"):
         parse_workload_spec(workload)
 
 
@@ -171,6 +174,61 @@ def test_visit_only_workload_is_rejected_before_native_simulation():
             measurement_duration=2.0,
             seeds=(1,),
         )
+
+
+def test_executable_workflow_derives_visits_and_runs_in_native_backend():
+    workload = _visit_workload(fixed_overhead=0.1)
+    request_class = workload["request_classes"]["metadata_read"]
+    del request_class["visits"]
+    request_class["workflow"] = [
+        {"service": "api"},
+        {"service": "auth", "mean_visits": 2.5},
+        {"service": "search", "mean_visits": 0.75},
+    ]
+    workload["traffic_model"]["entry_services"]["metadata_read"]["api"] = {
+        "distribution": "deterministic",
+        "rate": 1.0,
+    }
+    workload["traffic_model"]["service_times"] = {
+        service: {"distribution": "deterministic", "mean": 0.01}
+        for service in ("api", "auth", "search")
+    }
+
+    parsed = parse_workload_spec(workload)
+    system = System("workflow", workload, QueueingNetworkType.OPEN)
+    replication = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=20.5,
+        seeds=(101,),
+    )[0]
+
+    assert dict(parsed.request_class_visit_ratios["metadata_read"]) == {
+        "api": 1.0,
+        "auth": 2.5,
+        "search": 0.75,
+    }
+    assert tuple(
+        (visit.service, visit.mean_visits)
+        for visit in parsed.request_class_workflows["metadata_read"]
+    ) == (("api", 1.0), ("auth", 2.5), ("search", 0.75))
+    assert replication.measured_request_counts == {"metadata_read": 20}
+    assert replication.completed_measured_request_counts == {
+        "metadata_read": 20
+    }
+    assert all(
+        any(latency == pytest.approx(expected) for expected in (0.13, 0.14, 0.15))
+        for latency in replication.request_class_latencies["metadata_read"]
+    )
+
+
+def test_workflow_must_start_at_its_only_external_entry_service():
+    workload = _visit_workload()
+    request_class = workload["request_classes"]["metadata_read"]
+    del request_class["visits"]
+    request_class["workflow"] = [{"service": "auth"}]
+
+    with pytest.raises(ValueError, match="workflow must start"):
+        parse_workload_spec(workload)
 
 
 def test_analytical_optimizer_uses_visit_ratio_load_and_latency():

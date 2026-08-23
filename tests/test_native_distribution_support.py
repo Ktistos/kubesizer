@@ -76,8 +76,8 @@ def test_serializer_embeds_empirical_samples_instead_of_csv_paths(tmp_path):
     serialized = get_native_backend().serialize_system(system)
 
     service_distribution = serialized["services"][0][
-        "service_time_distribution"
-    ]
+        "service_time_distributions"
+    ][0]
     arrival_distribution = serialized["external_streams"][0][
         "interarrival_distribution"
     ]

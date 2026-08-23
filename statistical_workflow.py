@@ -39,6 +39,8 @@ class CalibratedOptimizationResult:
     configuration_evaluations: tuple[tuple[tuple[int, ...], object], ...]
     calibration_profile_fingerprint: str
     runtime_limit_calibration: object | None = None
+    predictive_validation_status: str = "NOT_PROVIDED"
+    predictive_validation_certificate_fingerprint: str | None = None
 
     @property
     def configuration(self):
@@ -201,6 +203,30 @@ class CalibratedOptimizationResult:
     @property
     def selection_reason(self):
         return getattr(self.optimization_result, "selection_reason", None)
+
+
+@dataclass(frozen=True)
+class ValidatedReplicaRecommendation:
+    """End-to-end recommendation evidence, including model and final holdouts."""
+
+    service_replicas: tuple[tuple[str, int], ...]
+    status: str
+    optimization: CalibratedOptimizationResult
+    final_validation: object
+    predictive_validation: object
+    bounded_model_optimal: bool
+    guarantee: str
+
+    @property
+    def configuration(self):
+        return tuple(replicas for _, replicas in self.service_replicas)
+
+    @property
+    def recommendable(self):
+        return self.status in {
+            "VALIDATED_BOUNDED_MODEL_OPTIMUM",
+            "VALIDATED_FEASIBLE_HEURISTIC",
+        }
 
 
 def _declared_latency_slo_kind(system):
@@ -450,6 +476,8 @@ def optimize_with_calibrated_simulation(
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
+    predictive_validation=None,
+    require_predictive_validation=False,
 ):
     """Run exact or bounded scalable statistically controlled replica sizing.
 
@@ -457,6 +485,19 @@ def optimize_with_calibrated_simulation(
     Both modes accept only statistically feasible configurations; scalable
     mode changes search coverage, never the confidence-interval procedure.
     """
+    if predictive_validation is None:
+        if require_predictive_validation:
+            raise ValueError(
+                "A held-out predictive-validation certificate is required for "
+                "this simulation recommendation."
+            )
+        predictive_status = "NOT_PROVIDED"
+        predictive_fingerprint = None
+    else:
+        predictive_validation.assert_valid_for(system)
+        predictive_status = predictive_validation.status.value
+        predictive_fingerprint = predictive_validation.certificate_fingerprint
+
     validate_profile_for_experiment(
         calibration_profile,
         system,
@@ -569,6 +610,24 @@ def optimize_with_calibrated_simulation(
         ),
         calibration_profile_fingerprint=calibration_profile.profile_fingerprint,
         runtime_limit_calibration=runtime_limit_calibration,
+        predictive_validation_status=predictive_status,
+        predictive_validation_certificate_fingerprint=predictive_fingerprint,
+    )
+
+
+def optimize_with_predictively_validated_simulation(
+    system,
+    calibration_profile,
+    predictive_validation,
+    **options,
+):
+    """Run simulation sizing only after held-out model validation passes."""
+    return optimize_with_calibrated_simulation(
+        system,
+        calibration_profile,
+        predictive_validation=predictive_validation,
+        require_predictive_validation=True,
+        **options,
     )
 
 
@@ -593,6 +652,16 @@ def optimize_with_analytical_model(
     mode estimates p95 latency or provides statistical SLO evidence.
     """
     declared_kind = _declared_latency_slo_kind(system)
+    declared_timeouts = getattr(
+        system,
+        "get_request_class_end_to_end_timeouts",
+        lambda: {},
+    )()
+    if any(float(value) > 0.0 for value in declared_timeouts.values()):
+        raise ValueError(
+            "Request-class end-to-end deadlines require simulation; strict "
+            "analytical evaluation does not model terminal timeouts."
+        )
     if declared_kind == "percentile":
         raise ValueError(
             "This workload selects percentile latency SLOs, which require "
@@ -643,6 +712,8 @@ def optimize_replica_sizing(
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
+    predictive_validation=None,
+    require_predictive_validation=False,
 ):
     """Select evaluation evidence independently from the search algorithm.
 
@@ -704,6 +775,8 @@ def optimize_replica_sizing(
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
+        predictive_validation=predictive_validation,
+        require_predictive_validation=require_predictive_validation,
     )
 
 
@@ -715,8 +788,18 @@ def validate_final_configuration(
     workers=1,
     report_directory=None,
     progress_callback=None,
+    predictive_validation=None,
+    require_predictive_validation=False,
 ):
     """Run the fixed fresh-seed holdout for the locked optimizer candidate."""
+    if predictive_validation is None:
+        if require_predictive_validation:
+            raise ValueError(
+                "A held-out predictive-validation certificate is required for "
+                "this final recommendation."
+            )
+    else:
+        predictive_validation.assert_valid_for(system)
     result = _validate_final_configuration(
         system,
         configuration,
@@ -727,3 +810,90 @@ def validate_final_configuration(
     if report_directory is not None:
         save_final_validation(result, report_directory)
     return result
+
+
+def recommend_replicas_with_validated_simulation(
+    system,
+    calibration_profile,
+    predictive_validation,
+    *,
+    workers=1,
+    mode=OptimizationMode.AUTO,
+    optimizer=None,
+    heuristic=None,
+    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
+    scalable_options=None,
+    runtime_limit_calibration=None,
+    replica_costs=None,
+    structural_feasibility=None,
+    progress_callback=None,
+):
+    """Optimize and validate a plan using a predictively validated simulator.
+
+    ``bounded_model_optimal`` is a proof only inside the declared finite bounds
+    and validated simulator domain. It is not a claim about unmodeled live-
+    cluster behaviors.
+    """
+    optimization = optimize_with_predictively_validated_simulation(
+        system,
+        calibration_profile,
+        predictive_validation,
+        optimizer=optimizer,
+        heuristic=heuristic,
+        workers=workers,
+        mode=mode,
+        exact_configuration_limit=exact_configuration_limit,
+        scalable_options=scalable_options,
+        runtime_limit_calibration=runtime_limit_calibration,
+        replica_costs=replica_costs,
+        structural_feasibility=structural_feasibility,
+        progress_callback=progress_callback,
+    )
+    final_validation = validate_final_configuration(
+        system,
+        optimization.configuration,
+        calibration_profile,
+        workers=workers,
+        progress_callback=progress_callback,
+        predictive_validation=predictive_validation,
+        require_predictive_validation=True,
+    )
+    services = tuple(
+        sorted(system.get_services().values(), key=lambda item: item.get_id())
+    )
+    service_replicas = tuple(
+        (service.get_name(), replicas)
+        for service, replicas in zip(
+            services,
+            optimization.configuration,
+            strict=True,
+        )
+    )
+    bounded_model_optimal = bool(optimization.optimality_proven)
+    if not final_validation.passed:
+        status = "FINAL_VALIDATION_FAILED"
+        guarantee = (
+            "No recommendation: fresh simulation seeds did not certify every "
+            "request-class SLO."
+        )
+    elif bounded_model_optimal:
+        status = "VALIDATED_BOUNDED_MODEL_OPTIMUM"
+        guarantee = (
+            "Minimum weighted replica cost was proven within the declared "
+            "bounds for a simulator that passed held-out predictive validation."
+        )
+    else:
+        status = "VALIDATED_FEASIBLE_HEURISTIC"
+        guarantee = (
+            "The plan passed held-out model validation and fresh final SLO "
+            "validation; global minimum replica cost was not proven."
+        )
+    return ValidatedReplicaRecommendation(
+        service_replicas=service_replicas,
+        status=status,
+        optimization=optimization,
+        final_validation=final_validation,
+        predictive_validation=predictive_validation,
+        bounded_model_optimal=bounded_model_optimal,
+        guarantee=guarantee,
+    )

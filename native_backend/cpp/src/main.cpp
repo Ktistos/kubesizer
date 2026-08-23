@@ -24,12 +24,24 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 4;
+constexpr int kProtocolVersion = 6;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
+constexpr int kDeadlinePriority = 2;
 
-enum class EventKind { ExternalArrival, Admit, ServiceCompletion, Grant, Resume };
+enum class EventKind {
+    ExternalArrival,
+    Admit,
+    ServiceCompletion,
+    Grant,
+    Resume,
+    ConcurrencyGrant,
+    FinalExit,
+    RequestTimeout
+};
 enum class RunMode { FixedHorizon, MeasurementDrain };
+enum class FlowKind { Routing, Workflow, Calls };
+enum class CallExecution { Parallel, Sequential };
 enum class DistributionKind {
     Exponential,
     Deterministic,
@@ -55,8 +67,10 @@ struct Distribution {
 
 struct Service {
     std::string name;
+    int replicas{};
     int capacity{};
-    Distribution service_time;
+    int concurrency_capacity{};
+    std::vector<Distribution> service_times;
 };
 
 struct Route {
@@ -64,10 +78,21 @@ struct Route {
     double probability{};
 };
 
+struct WorkflowVisit {
+    int service{-1};
+    double mean_visits{};
+};
+
 struct RequestClass {
     std::string name;
     double concurrency_weight{};
+    FlowKind flow_kind{FlowKind::Routing};
     std::vector<std::vector<Route>> routes;
+    std::vector<WorkflowVisit> workflow;
+    std::vector<std::vector<WorkflowVisit>> calls;
+    CallExecution call_execution{CallExecution::Parallel};
+    double fixed_latency_overhead{};
+    double end_to_end_timeout{};
 };
 
 struct ExternalStream {
@@ -96,6 +121,23 @@ struct Request {
     std::size_t ownership_index{};
     bool latency_eligible{};
     bool measurement_tagged{};
+    std::size_t workflow_index{};
+    std::int64_t workflow_visits_remaining{};
+    std::int64_t generated_visits{};
+    bool outcome_recorded{};
+    bool server_completed{};
+    bool deadline_processed{};
+};
+
+struct Visit {
+    Request* request{};
+    int service{-1};
+    Visit* parent{};
+    std::size_t ownership_index{};
+    std::int64_t pending_children{};
+    double arrival_time{};
+    std::vector<int> sequential_children;
+    std::size_t next_sequential_child{};
 };
 
 struct Event {
@@ -104,6 +146,7 @@ struct Event {
     std::uint64_t sequence{};
     EventKind kind{};
     Request* request{};
+    Visit* visit{};
     int index{};
 };
 
@@ -357,12 +400,15 @@ class Kernel {
         collect_service_samples_(collect_service_samples),
         collect_request_class_samples_(collect_request_class_samples),
         random_(static_cast<std::uint64_t>(seed)), waiting_(workload.services.size()),
+        admission_waiting_(workload.services.size()),
         busy_(workload.services.size()),
+        active_concurrency_(workload.services.size()),
         trace_states_(workload.external_streams.size()),
         recorder_(capacities(workload), capture_history, bucket_width, horizon),
         service_response_times_(workload.services.size()),
         request_class_response_times_(workload.request_classes.size()),
         request_class_arrival_times_(workload.request_classes.size()),
+        request_class_failure_flags_(workload.request_classes.size()),
         measured_request_counts_(workload.request_classes.size()) {}
 
     KernelSummary run() {
@@ -428,6 +474,9 @@ class Kernel {
     std::vector<std::vector<double>> take_request_class_arrival_times() {
         return std::move(request_class_arrival_times_);
     }
+    std::vector<std::vector<int>> take_request_class_failure_flags() {
+        return std::move(request_class_failure_flags_);
+    }
     const std::vector<std::int64_t>& measured_request_counts() const {
         return measured_request_counts_;
     }
@@ -443,8 +492,23 @@ class Kernel {
         return result;
     }
 
-    void schedule(double time, int priority, EventKind kind, Request* request, int index) {
-        future_events_.push({time, priority, sequence_++, kind, request, index});
+    void schedule(
+        double time,
+        int priority,
+        EventKind kind,
+        Request* request,
+        int index,
+        Visit* visit = nullptr
+    ) {
+        future_events_.push({
+            time,
+            priority,
+            sequence_++,
+            kind,
+            request,
+            visit,
+            index
+        });
     }
 
     double exponential(double mean) {
@@ -565,7 +629,59 @@ class Kernel {
         );
     }
 
+    std::int64_t sample_workflow_visits(double mean_visits) {
+        const double integral = std::floor(mean_visits);
+        std::int64_t count = static_cast<std::int64_t>(integral);
+        const double fractional = mean_visits - integral;
+        if (fractional > 0.0) {
+            std::bernoulli_distribution extra(fractional);
+            if (extra(random_)) ++count;
+        }
+        return count;
+    }
+
+    int start_workflow(Request* request) {
+        const auto& workflow =
+            workload_.request_classes[request->request_class].workflow;
+        if (workflow.empty()) return -1;
+        request->workflow_index = 0;
+        request->workflow_visits_remaining = sample_workflow_visits(
+            workflow.front().mean_visits
+        );
+        if (request->workflow_visits_remaining <= 0) {
+            throw std::runtime_error(
+                "the first workflow stage generated zero visits"
+            );
+        }
+        return workflow.front().service;
+    }
+
+    int advance_workflow(Request* request) {
+        const auto& workflow =
+            workload_.request_classes[request->request_class].workflow;
+        if (workflow.empty()) return -2;
+        if (request->workflow_visits_remaining <= 0
+            || request->workflow_index >= workflow.size()) {
+            throw std::runtime_error("invalid request workflow state");
+        }
+        --request->workflow_visits_remaining;
+        if (request->workflow_visits_remaining > 0) {
+            return workflow[request->workflow_index].service;
+        }
+        while (++request->workflow_index < workflow.size()) {
+            request->workflow_visits_remaining = sample_workflow_visits(
+                workflow[request->workflow_index].mean_visits
+            );
+            if (request->workflow_visits_remaining > 0) {
+                return workflow[request->workflow_index].service;
+            }
+        }
+        return -1;
+    }
+
     int choose_route(Request* request, int service) {
+        const int workflow_target = advance_workflow(request);
+        if (workflow_target != -2) return workflow_target;
         const auto& routes = workload_.request_classes[request->request_class].routes[service];
         if (routes.empty()) {
             throw std::runtime_error("a reached service has no route or exit probability");
@@ -583,11 +699,16 @@ class Kernel {
     void dispatch(const Event& event) {
         switch (event.kind) {
             case EventKind::ExternalArrival: external_arrival(event.index, event.time); break;
-            case EventKind::Admit: admit(event.request, event.index, event.time); break;
+            case EventKind::Admit: admit(event.visit, event.time); break;
             case EventKind::ServiceCompletion:
-                service_completion(event.request, event.index, event.time); break;
+                service_completion(event.visit, event.time); break;
             case EventKind::Grant: grant(event.index, event.time); break;
-            case EventKind::Resume: resume(event.request, event.index, event.time); break;
+            case EventKind::Resume: resume(event.visit, event.time); break;
+            case EventKind::ConcurrencyGrant:
+                concurrency_grant(event.index, event.time); break;
+            case EventKind::FinalExit: final_exit(event.request, event.time); break;
+            case EventKind::RequestTimeout:
+                request_timeout(event.request, event.time); break;
         }
     }
 
@@ -611,9 +732,21 @@ class Kernel {
         }
         requests_[ownership_index] = std::make_unique<Request>(Request{
             next_request_id_++, stream.request_class, now, ownership_index,
-            eligible, tagged
+            eligible, tagged, 0, 0, 0, false, false, false
         });
         Request* request = requests_[ownership_index].get();
+        const double timeout = workload_.request_classes[
+            request->request_class
+        ].end_to_end_timeout;
+        if (timeout > 0.0) {
+            schedule(
+                now + timeout,
+                kDeadlinePriority,
+                EventKind::RequestTimeout,
+                request,
+                -1
+            );
+        }
         ++processed_event_count_;
         ++external_arrival_count_;
         if (tagged) {
@@ -621,95 +754,386 @@ class Kernel {
             ++measured_request_counts_[stream.request_class];
         }
         recorder_.external_arrival(now);
-        schedule(now, kUrgentPriority, EventKind::Admit, request, stream.entry_service);
+        const auto& workflow = workload_.request_classes[
+            request->request_class
+        ].workflow;
+        const int entry_service = workflow.empty()
+            ? stream.entry_service
+            : start_workflow(request);
+        if (entry_service != stream.entry_service) {
+            throw std::runtime_error(
+                "workflow entry service does not match the external stream"
+            );
+        }
+        Visit* root = create_visit(request, entry_service, nullptr, now);
+        schedule(
+            now,
+            kUrgentPriority,
+            EventKind::Admit,
+            nullptr,
+            entry_service,
+            root
+        );
         schedule_next_external(stream_id, now);
     }
 
-    void admit(Request* request, int service, double now) {
-        current_visit_start_[request] = now;
+    Visit* create_visit(
+        Request* request,
+        int service,
+        Visit* parent,
+        double now
+    ) {
+        if (++request->generated_visits > 10'000) {
+            throw std::runtime_error(
+                "request exceeded the 10000-visit nontermination guard"
+            );
+        }
+        std::size_t ownership_index;
+        if (free_visit_slots_.empty()) {
+            ownership_index = visits_.size();
+            visits_.push_back(nullptr);
+        } else {
+            ownership_index = free_visit_slots_.back();
+            free_visit_slots_.pop_back();
+            if (visits_[ownership_index]) {
+                throw std::runtime_error("visit ownership slot was not empty");
+            }
+        }
+        visits_[ownership_index] = std::make_unique<Visit>(Visit{
+            request,
+            service,
+            parent,
+            ownership_index,
+            0,
+            now,
+            {},
+            0
+        });
+        return visits_[ownership_index].get();
+    }
+
+    const Distribution& service_time(Request* request, int service) const {
+        const auto& distributions = workload_.services[service].service_times;
+        if (request->request_class < 0
+            || static_cast<std::size_t>(request->request_class)
+                >= distributions.size()) {
+            throw std::runtime_error("missing request-class service distribution");
+        }
+        return distributions[request->request_class];
+    }
+
+    int total_waiting(int service) const {
+        return static_cast<int>(
+            admission_waiting_[service].size() + waiting_[service].size()
+        );
+    }
+
+    void record_service_state(int service, double now) {
+        recorder_.service_state(service, now, total_waiting(service), busy_[service]);
+    }
+
+    void queue_for_processing(Visit* visit, double now) {
+        const int service = visit->service;
         if (busy_[service] < workload_.services[service].capacity
             && waiting_[service].empty()) {
             ++busy_[service];
-            recorder_.service_state(
-                service, now, static_cast<int>(waiting_[service].size()), busy_[service]
-            );
+            if (busy_[service] > workload_.services[service].capacity) {
+                throw std::runtime_error("busy processing slots exceed capacity");
+            }
+            record_service_state(service, now);
             schedule(
-                now + sample(workload_.services[service].service_time),
+                now + sample(service_time(visit->request, service)),
                 kNormalPriority,
                 EventKind::ServiceCompletion,
-                request,
-                service
+                nullptr,
+                service,
+                visit
             );
         } else {
-            waiting_[service].push_back(request);
-            recorder_.service_state(
-                service, now, static_cast<int>(waiting_[service].size()), busy_[service]
-            );
+            waiting_[service].push_back(visit);
+            record_service_state(service, now);
         }
     }
 
-    void service_completion(Request* request, int service, double now) {
-        ++processed_event_count_;
-        ++completed_visit_count_;
+    void admit(Visit* visit, double now) {
+        const int service = visit->service;
+        if (
+            active_concurrency_[service]
+                < workload_.services[service].concurrency_capacity
+            && admission_waiting_[service].empty()
+        ) {
+            ++active_concurrency_[service];
+            if (
+                active_concurrency_[service]
+                > workload_.services[service].concurrency_capacity
+            ) {
+                throw std::runtime_error("active service concurrency exceeds capacity");
+            }
+            queue_for_processing(visit, now);
+        } else {
+            admission_waiting_[service].push_back(visit);
+            record_service_state(service, now);
+        }
+    }
+
+    void finish_or_delay(Request* request, double now) {
+        const double overhead = workload_.request_classes[
+            request->request_class
+        ].fixed_latency_overhead;
+        if (overhead > 0.0) {
+            schedule(
+                now + overhead,
+                kNormalPriority,
+                EventKind::FinalExit,
+                request,
+                -1
+            );
+        } else {
+            final_exit(request, now);
+        }
+    }
+
+    void release_processing(int service, double now) {
+        --busy_[service];
+        if (busy_[service] < 0) {
+            throw std::runtime_error("busy processing slots became negative");
+        }
+        record_service_state(service, now);
+        schedule(now, kNormalPriority, EventKind::Grant, nullptr, service);
+    }
+
+    void release_concurrency_and_destroy(Visit* visit, double now) {
+        const int service = visit->service;
         if (collect_service_samples_) {
             service_response_times_[service].push_back(
-                now - current_visit_start_.at(request)
+                now - visit->arrival_time
             );
         }
-        current_visit_start_.erase(request);
-        const int target = choose_route(request, service);
-        if (target < 0) {
-            ++completed_request_count_;
-            const double latency = now - request->external_entry_time;
-            if (request->latency_eligible && collect_request_class_samples_) {
-                request_class_arrival_times_[request->request_class].push_back(
-                    request->external_entry_time
-                );
-                request_class_response_times_[request->request_class].push_back(latency);
+        --active_concurrency_[service];
+        if (active_concurrency_[service] < 0) {
+            throw std::runtime_error("active service concurrency became negative");
+        }
+        record_service_state(service, now);
+        schedule(
+            now,
+            kNormalPriority,
+            EventKind::ConcurrencyGrant,
+            nullptr,
+            service
+        );
+        const std::size_t ownership_index = visit->ownership_index;
+        visits_[ownership_index].reset();
+        free_visit_slots_.push_back(ownership_index);
+    }
+
+    void schedule_child(Visit* parent, int child_service, double now) {
+        Visit* child_visit = create_visit(
+            parent->request,
+            child_service,
+            parent,
+            now
+        );
+        ++parent->pending_children;
+        schedule(
+            now,
+            kUrgentPriority,
+            EventKind::Admit,
+            nullptr,
+            child_service,
+            child_visit
+        );
+    }
+
+    bool start_next_sequential_child(Visit* parent, double now) {
+        if (parent->next_sequential_child >= parent->sequential_children.size()) {
+            return false;
+        }
+        const int child_service = parent->sequential_children[
+            parent->next_sequential_child++
+        ];
+        schedule_child(parent, child_service, now);
+        return true;
+    }
+
+    void complete_call_visit(Visit* visit, double now) {
+        Request* request = visit->request;
+        Visit* parent = visit->parent;
+        release_concurrency_and_destroy(visit, now);
+        if (parent != nullptr) {
+            if (parent->pending_children <= 0) {
+                throw std::runtime_error("call-graph child count became negative");
             }
-            if (request->measurement_tagged) {
-                if (tagged_requests_in_flight_ <= 0) {
-                    throw std::runtime_error("tagged request count became negative");
+            --parent->pending_children;
+            if (parent->pending_children == 0) {
+                const RequestClass& request_class = workload_.request_classes[
+                    parent->request->request_class
+                ];
+                if (
+                    request_class.call_execution == CallExecution::Sequential
+                    && start_next_sequential_child(parent, now)
+                ) {
+                    return;
                 }
-                --tagged_requests_in_flight_;
+                complete_call_visit(parent, now);
             }
-            recorder_.final_exit(now);
-            const std::size_t ownership_index = request->ownership_index;
-            requests_[ownership_index].reset();
-            free_request_slots_.push_back(ownership_index);
         } else {
-            schedule(now, kUrgentPriority, EventKind::Admit, request, target);
+            finish_or_delay(request, now);
+        }
+    }
+
+    void service_completion(Visit* visit, double now) {
+        ++processed_event_count_;
+        ++completed_visit_count_;
+        Request* request = visit->request;
+        const int service = visit->service;
+        const RequestClass& request_class = workload_.request_classes[
+            request->request_class
+        ];
+        release_processing(service, now);
+        if (request_class.flow_kind == FlowKind::Calls) {
+            for (const WorkflowVisit& child : request_class.calls[service]) {
+                const std::int64_t count = sample_workflow_visits(
+                    child.mean_visits
+                );
+                for (std::int64_t occurrence = 0; occurrence < count; ++occurrence) {
+                    if (request_class.call_execution == CallExecution::Parallel) {
+                        schedule_child(visit, child.service, now);
+                    } else {
+                        visit->sequential_children.push_back(child.service);
+                    }
+                }
+            }
+            if (
+                request_class.call_execution == CallExecution::Sequential
+                && start_next_sequential_child(visit, now)
+            ) {
+                return;
+            }
+            if (visit->pending_children == 0) {
+                complete_call_visit(visit, now);
+            }
+            return;
         }
 
-        --busy_[service];
-        if (busy_[service] < 0) throw std::runtime_error("busy replicas became negative");
-        recorder_.service_state(
-            service, now, static_cast<int>(waiting_[service].size()), busy_[service]
-        );
-        schedule(now, kNormalPriority, EventKind::Grant, nullptr, service);
+        const int target = choose_route(request, service);
+        if (target >= 0) {
+            Visit* next = create_visit(request, target, nullptr, now);
+            schedule(
+                now,
+                kUrgentPriority,
+                EventKind::Admit,
+                nullptr,
+                target,
+                next
+            );
+        }
+        release_concurrency_and_destroy(visit, now);
+        if (target < 0) {
+            finish_or_delay(request, now);
+        }
     }
 
     void grant(int service, double now) {
         if (!waiting_[service].empty()
             && busy_[service] < workload_.services[service].capacity) {
-            Request* request = waiting_[service].front();
+            Visit* visit = waiting_[service].front();
             waiting_[service].pop_front();
             ++busy_[service];
-            schedule(now, kNormalPriority, EventKind::Resume, request, service);
+            if (busy_[service] > workload_.services[service].capacity) {
+                throw std::runtime_error("busy processing slots exceed capacity");
+            }
+            schedule(
+                now,
+                kNormalPriority,
+                EventKind::Resume,
+                nullptr,
+                service,
+                visit
+            );
         }
     }
 
-    void resume(Request* request, int service, double now) {
-        recorder_.service_state(
-            service, now, static_cast<int>(waiting_[service].size()), busy_[service]
-        );
+    void concurrency_grant(int service, double now) {
+        if (
+            !admission_waiting_[service].empty()
+            && active_concurrency_[service]
+                < workload_.services[service].concurrency_capacity
+        ) {
+            Visit* visit = admission_waiting_[service].front();
+            admission_waiting_[service].pop_front();
+            ++active_concurrency_[service];
+            if (
+                active_concurrency_[service]
+                > workload_.services[service].concurrency_capacity
+            ) {
+                throw std::runtime_error("active service concurrency exceeds capacity");
+            }
+            record_service_state(service, now);
+            queue_for_processing(visit, now);
+        }
+    }
+
+    void resume(Visit* visit, double now) {
+        const int service = visit->service;
+        record_service_state(service, now);
         schedule(
-            now + sample(workload_.services[service].service_time),
+            now + sample(service_time(visit->request, service)),
             kNormalPriority,
             EventKind::ServiceCompletion,
-            request,
-            service
+            nullptr,
+            service,
+            visit
         );
+    }
+
+    void record_request_outcome(Request* request, double now, bool failed) {
+        if (request->outcome_recorded) return;
+        request->outcome_recorded = true;
+        const double latency = now - request->external_entry_time;
+        if (request->latency_eligible && collect_request_class_samples_) {
+            request_class_arrival_times_[request->request_class].push_back(
+                request->external_entry_time
+            );
+            request_class_response_times_[request->request_class].push_back(latency);
+            request_class_failure_flags_[request->request_class].push_back(
+                failed ? 1 : 0
+            );
+        }
+        if (request->measurement_tagged) {
+            if (tagged_requests_in_flight_ <= 0) {
+                throw std::runtime_error("tagged request count became negative");
+            }
+            --tagged_requests_in_flight_;
+        }
+    }
+
+    void release_request(Request* request) {
+        const std::size_t ownership_index = request->ownership_index;
+        requests_[ownership_index].reset();
+        free_request_slots_.push_back(ownership_index);
+    }
+
+    void request_timeout(Request* request, double now) {
+        ++processed_event_count_;
+        request->deadline_processed = true;
+        if (!request->server_completed) {
+            record_request_outcome(request, now, true);
+            return;
+        }
+        release_request(request);
+    }
+
+    void final_exit(Request* request, double now) {
+        ++completed_request_count_;
+        request->server_completed = true;
+        record_request_outcome(request, now, false);
+        recorder_.final_exit(now);
+        const double timeout = workload_.request_classes[
+            request->request_class
+        ].end_to_end_timeout;
+        if (timeout == 0.0 || request->deadline_processed) {
+            release_request(request);
+        }
     }
 
     const Workload& workload_;
@@ -724,16 +1148,20 @@ class Kernel {
     std::mt19937_64 random_;
     std::priority_queue<Event, std::vector<Event>, LaterEvent> future_events_;
     std::uint64_t sequence_{};
-    std::vector<std::deque<Request*>> waiting_;
+    std::vector<std::deque<Visit*>> waiting_;
+    std::vector<std::deque<Visit*>> admission_waiting_;
     std::vector<int> busy_;
+    std::vector<int> active_concurrency_;
     std::vector<TraceSamplerState> trace_states_;
     StateRecorder recorder_;
     std::vector<std::unique_ptr<Request>> requests_;
     std::vector<std::size_t> free_request_slots_;
-    std::unordered_map<Request*, double> current_visit_start_;
+    std::vector<std::unique_ptr<Visit>> visits_;
+    std::vector<std::size_t> free_visit_slots_;
     std::vector<std::vector<double>> service_response_times_;
     std::vector<std::vector<double>> request_class_response_times_;
     std::vector<std::vector<double>> request_class_arrival_times_;
+    std::vector<std::vector<int>> request_class_failure_flags_;
     std::vector<std::int64_t> measured_request_counts_;
     std::int64_t processed_event_count_{};
     std::int64_t external_arrival_count_{};
@@ -974,6 +1402,11 @@ std::vector<std::int64_t> parse_seeds(json_t* request) {
 Workload parse_workload(json_t* raw) {
     Workload workload;
     workload.name = json_text(raw, "name");
+    json_t* classes = required(raw, "request_classes");
+    if (!json_is_array(classes) || json_array_size(classes) == 0) {
+        throw std::runtime_error("workload must contain request classes");
+    }
+    const std::size_t request_class_count = json_array_size(classes);
     json_t* services = required(raw, "services");
     if (!json_is_array(services) || json_array_size(services) == 0) {
         throw std::runtime_error("workload must contain services");
@@ -985,17 +1418,72 @@ Workload parse_workload(json_t* raw) {
         if (capacity <= 0 || capacity > 1'000'000) {
             throw std::runtime_error("service capacity must be positive");
         }
-        workload.services.push_back({
-            json_text(item, "name"),
-            static_cast<int>(capacity),
-            parse_distribution(required(item, "service_time_distribution"), false)
-        });
+        Service service;
+        service.name = json_text(item, "name");
+        service.capacity = static_cast<int>(capacity);
+        json_t* raw_concurrency_capacity = json_object_get(
+            item,
+            "concurrency_capacity"
+        );
+        service.concurrency_capacity = (
+            raw_concurrency_capacity == nullptr
+            ? service.capacity
+            : static_cast<int>(json_integer_value(raw_concurrency_capacity))
+        );
+        if (
+            raw_concurrency_capacity != nullptr
+            && (!json_is_integer(raw_concurrency_capacity)
+                || service.concurrency_capacity < service.capacity
+                || service.concurrency_capacity > 10'000'000)
+        ) {
+            throw std::runtime_error("service concurrency capacity is invalid");
+        }
+        json_t* raw_replicas = json_object_get(item, "replicas");
+        if (raw_replicas == nullptr) {
+            service.replicas = service.capacity;
+        } else {
+            if (!json_is_integer(raw_replicas)
+                || json_integer_value(raw_replicas) <= 0
+                || json_integer_value(raw_replicas) > capacity) {
+                throw std::runtime_error("service replicas are invalid");
+            }
+            service.replicas = static_cast<int>(
+                json_integer_value(raw_replicas)
+            );
+        }
+        json_t* distributions = json_object_get(
+            item,
+            "service_time_distributions"
+        );
+        if (distributions != nullptr) {
+            if (!json_is_array(distributions)
+                || json_array_size(distributions) != request_class_count) {
+                throw std::runtime_error(
+                    "service_time_distributions must have one item per "
+                    "request class"
+                );
+            }
+            std::size_t class_index;
+            json_t* raw_distribution;
+            json_array_foreach(
+                distributions,
+                class_index,
+                raw_distribution
+            ) {
+                service.service_times.push_back(
+                    parse_distribution(raw_distribution, false)
+                );
+            }
+        } else {
+            const Distribution shared = parse_distribution(
+                required(item, "service_time_distribution"),
+                false
+            );
+            service.service_times.assign(request_class_count, shared);
+        }
+        workload.services.push_back(std::move(service));
     }
 
-    json_t* classes = required(raw, "request_classes");
-    if (!json_is_array(classes) || json_array_size(classes) == 0) {
-        throw std::runtime_error("workload must contain request classes");
-    }
     json_array_foreach(classes, index, item) {
         RequestClass request_class;
         request_class.name = json_text(item, "name");
@@ -1003,6 +1491,23 @@ Workload parse_workload(json_t* raw) {
         if (request_class.concurrency_weight < 0.0
             || request_class.concurrency_weight > 1.0) {
             throw std::runtime_error("concurrency weights must lie in [0, 1]");
+        }
+        json_t* raw_flow_kind = json_object_get(item, "flow_kind");
+        if (raw_flow_kind != nullptr) {
+            const char* value = json_string_value(raw_flow_kind);
+            if (value == nullptr) {
+                throw std::runtime_error("flow_kind must be a string");
+            }
+            const std::string name(value);
+            if (name == "routing") {
+                request_class.flow_kind = FlowKind::Routing;
+            } else if (name == "workflow") {
+                request_class.flow_kind = FlowKind::Workflow;
+            } else if (name == "calls") {
+                request_class.flow_kind = FlowKind::Calls;
+            } else {
+                throw std::runtime_error("unsupported flow_kind: " + name);
+            }
         }
         json_t* routing = required(item, "routing");
         if (!json_is_array(routing)
@@ -1034,6 +1539,126 @@ Workload parse_workload(json_t* raw) {
                 throw std::runtime_error("routing probabilities must sum to one");
             }
         }
+        json_t* raw_workflow = json_object_get(item, "workflow");
+        if (raw_workflow != nullptr) {
+            if (!json_is_array(raw_workflow)) {
+                throw std::runtime_error("workflow must be an array");
+            }
+            std::size_t visit_index;
+            json_t* raw_visit;
+            json_array_foreach(raw_workflow, visit_index, raw_visit) {
+                const std::int64_t service = required_integer(
+                    raw_visit,
+                    "service"
+                );
+                const double mean_visits = json_number(
+                    raw_visit,
+                    "mean_visits"
+                );
+                if (service < 0
+                    || service >= static_cast<std::int64_t>(
+                        workload.services.size()
+                    )
+                    || mean_visits <= 0.0) {
+                    throw std::runtime_error("invalid workflow visit");
+                }
+                request_class.workflow.push_back({
+                    static_cast<int>(service),
+                    mean_visits
+                });
+            }
+        }
+        json_t* raw_calls = json_object_get(item, "calls");
+        request_class.calls.resize(workload.services.size());
+        if (raw_calls != nullptr) {
+            if (!json_is_array(raw_calls)
+                || json_array_size(raw_calls) != workload.services.size()) {
+                throw std::runtime_error(
+                    "calls must have one row per source service"
+                );
+            }
+            std::size_t source_id;
+            json_t* raw_children;
+            json_array_foreach(raw_calls, source_id, raw_children) {
+                if (!json_is_array(raw_children)) {
+                    throw std::runtime_error("call row must be an array");
+                }
+                std::size_t child_index;
+                json_t* raw_child;
+                json_array_foreach(raw_children, child_index, raw_child) {
+                    const std::int64_t service = required_integer(
+                        raw_child,
+                        "service"
+                    );
+                    const double mean_visits = json_number(
+                        raw_child,
+                        "mean_visits"
+                    );
+                    if (service < 0
+                        || service >= static_cast<std::int64_t>(
+                            workload.services.size()
+                        )
+                        || mean_visits <= 0.0) {
+                        throw std::runtime_error("invalid synchronous child call");
+                    }
+                    request_class.calls[source_id].push_back({
+                        static_cast<int>(service),
+                        mean_visits
+                    });
+                }
+            }
+        }
+        json_t* raw_call_execution = json_object_get(item, "call_execution");
+        if (raw_call_execution != nullptr) {
+            const char* value = json_string_value(raw_call_execution);
+            if (value == nullptr) {
+                throw std::runtime_error("call_execution must be a string");
+            }
+            const std::string name(value);
+            if (name == "parallel") {
+                request_class.call_execution = CallExecution::Parallel;
+            } else if (name == "sequential") {
+                request_class.call_execution = CallExecution::Sequential;
+            } else {
+                throw std::runtime_error(
+                    "unsupported call_execution: " + name
+                );
+            }
+        }
+        if (request_class.flow_kind == FlowKind::Workflow
+            && request_class.workflow.empty()) {
+            throw std::runtime_error("workflow flow_kind needs workflow visits");
+        }
+        json_t* raw_overhead = json_object_get(item, "fixed_latency_overhead");
+        if (raw_overhead != nullptr) {
+            if (!json_is_number(raw_overhead)) {
+                throw std::runtime_error(
+                    "fixed_latency_overhead must be numeric"
+                );
+            }
+            request_class.fixed_latency_overhead = json_number_value(
+                raw_overhead
+            );
+            if (!std::isfinite(request_class.fixed_latency_overhead)
+                || request_class.fixed_latency_overhead < 0.0) {
+                throw std::runtime_error(
+                    "fixed_latency_overhead must be finite and non-negative"
+                );
+            }
+        }
+        json_t* raw_timeout = json_object_get(item, "end_to_end_timeout");
+        if (raw_timeout != nullptr) {
+            if (!json_is_number(raw_timeout)) {
+                throw std::runtime_error("end_to_end_timeout must be numeric");
+            }
+            request_class.end_to_end_timeout = json_number_value(raw_timeout);
+            if (!std::isfinite(request_class.end_to_end_timeout)
+                || request_class.end_to_end_timeout < 0.0) {
+                throw std::runtime_error(
+                    "end_to_end_timeout must be finite and non-negative"
+                );
+            }
+        }
         workload.request_classes.push_back(std::move(request_class));
     }
     double concurrency_weight_total = 0.0;
@@ -1062,6 +1687,13 @@ Workload parse_workload(json_t* raw) {
             static_cast<int>(entry_service),
             parse_distribution(required(item, "interarrival_distribution"), true)
         });
+        const auto& workflow = workload.request_classes[request_class].workflow;
+        if (!workflow.empty()
+            && workflow.front().service != static_cast<int>(entry_service)) {
+            throw std::runtime_error(
+                "workflow must begin at its external entry service"
+            );
+        }
     }
     return workload;
 }
@@ -1105,6 +1737,23 @@ json_t* class_double_array_map(
     return output;
 }
 
+json_t* class_int_array_map(
+    const Workload& workload,
+    const std::vector<std::vector<int>>& observations
+) {
+    json_t* output = json_object();
+    for (std::size_t request_class = 0;
+         request_class < observations.size();
+         ++request_class) {
+        json_object_set_new(
+            output,
+            workload.request_classes[request_class].name.c_str(),
+            json_ints(observations[request_class])
+        );
+    }
+    return output;
+}
+
 json_t* json_history(const std::vector<Point>& history) {
     json_t* output = json_array();
     for (const Point& point : history) {
@@ -1133,7 +1782,7 @@ json_t* json_service_names(const Workload& workload) {
 json_t* json_capacities(const Workload& workload) {
     json_t* output = json_array();
     for (const Service& service : workload.services) {
-        json_array_append_new(output, json_integer(service.capacity));
+        json_array_append_new(output, json_integer(service.replicas));
     }
     return output;
 }
@@ -1420,6 +2069,7 @@ struct MeasurementOutput {
     std::vector<std::int64_t> measured_counts;
     std::vector<std::vector<double>> latencies;
     std::vector<std::vector<double>> arrival_times;
+    std::vector<std::vector<int>> failure_flags;
     int active_requests_at_end{};
     std::vector<int> queue_lengths_at_end;
     std::vector<int> busy_replicas_at_end;
@@ -1449,6 +2099,7 @@ json_t* run_measurement_replications(json_t* request, const Workload& workload) 
         output.measured_counts = kernel.measured_request_counts();
         output.latencies = kernel.take_request_class_response_times();
         output.arrival_times = kernel.take_request_class_arrival_times();
+        output.failure_flags = kernel.take_request_class_failure_flags();
         output.active_requests_at_end = kernel.recorder().active();
         output.queue_lengths_at_end = kernel.recorder().queues();
         output.busy_replicas_at_end = kernel.recorder().busy();
@@ -1481,16 +2132,32 @@ json_t* run_measurement_replications(json_t* request, const Workload& workload) 
             item, "request_class_arrival_times",
             class_double_array_map(workload, output.arrival_times)
         );
+        json_object_set_new(
+            item, "request_class_failures",
+            class_int_array_map(workload, output.failure_flags)
+        );
         std::vector<std::int64_t> completed_measured_counts;
+        std::vector<std::int64_t> failed_measured_counts;
         completed_measured_counts.reserve(output.latencies.size());
-        for (const auto& observations : output.latencies) {
+        failed_measured_counts.reserve(output.failure_flags.size());
+        for (std::size_t request_class = 0;
+             request_class < output.latencies.size();
+             ++request_class) {
+            const auto& observations = output.latencies[request_class];
             completed_measured_counts.push_back(
                 static_cast<std::int64_t>(observations.size())
             );
+            std::int64_t failed = 0;
+            for (int value : output.failure_flags[request_class]) failed += value;
+            failed_measured_counts.push_back(failed);
         }
         json_object_set_new(
             item, "completed_measured_request_counts",
             class_count_map(workload, completed_measured_counts)
+        );
+        json_object_set_new(
+            item, "failed_measured_request_counts",
+            class_count_map(workload, failed_measured_counts)
         );
         json_object_set_new(
             item, "active_requests_at_end", json_integer(output.active_requests_at_end)

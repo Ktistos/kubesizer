@@ -371,6 +371,20 @@ def validate_final_configuration(
                     for item in replications
                 ),
             ),
+            (
+                "failed_measured_request_count",
+                sum(
+                    sum(
+                        int(value)
+                        for value in getattr(
+                            item,
+                            "failed_measured_request_counts",
+                            {},
+                        ).values()
+                    )
+                    for item in replications
+                ),
+            ),
         )
         return CalibratedFinalValidationResult(
             replica_configuration=configuration,

@@ -54,6 +54,46 @@ def test_single_model_workload_has_no_schema_metadata_or_redundant_name():
         system.get_request_class_percentile_latency_limits()
 
 
+def test_request_class_end_to_end_timeout_is_optional_validated_and_fingerprinted():
+    workload = {
+        "request_classes": {
+            "request": {
+                "concurrency_weight": 1.0,
+                "end_to_end_timeout_seconds": 60.0,
+                "routing": {},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {
+                    "api": {"distribution": "exponential", "rate": 2.0}
+                }
+            },
+            "service_times": {
+                "api": {"distribution": "exponential", "rate": 10.0}
+            },
+        },
+    }
+    parsed = parse_workload_spec(workload)
+    system = System("timeout", workload, QueueingNetworkType.OPEN)
+    _, first_fingerprint = experiment_fingerprints(system)
+
+    assert parsed.request_class_end_to_end_timeouts == {"request": 60.0}
+    assert system.get_request_class_end_to_end_timeouts() == {"request": 60.0}
+
+    changed = copy.deepcopy(workload)
+    changed["request_classes"]["request"]["end_to_end_timeout_seconds"] = 30.0
+    _, second_fingerprint = experiment_fingerprints(
+        System("timeout", changed, QueueingNetworkType.OPEN)
+    )
+    assert second_fingerprint != first_fingerprint
+
+    invalid = copy.deepcopy(workload)
+    invalid["request_classes"]["request"]["end_to_end_timeout_seconds"] = -1.0
+    with pytest.raises(ValueError, match="end_to_end_timeout_seconds"):
+        parse_workload_spec(invalid)
+
+
 def test_single_model_workload_requires_explicit_concurrency_weights():
     workload = {
         "request_classes": {

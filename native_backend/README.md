@@ -62,7 +62,7 @@ busy_history = collector.get_busy_history()
 
 For statistically independent p95 replications, use the uncensored measurement
 API. Arrivals in `[W, W + M)` are tagged, background traffic continues, and the
-kernel stops only after every tagged request completes:
+kernel stops only after every tagged request reaches a terminal client outcome:
 
 ```python
 replications = system.simulate_measurement_replications(
@@ -79,6 +79,14 @@ for replication in replications:
     )
     print(replication.seed, replication.request_class_p95_latencies)
 ```
+
+An optional request-class `end_to_end_timeout_seconds` models a measured client
+or gateway deadline. A timeout is retained in the latency cohort at the exact
+deadline and marked in `request_class_failures`; it is never discarded as a
+fast-looking censored request. Server-side work continues until it completes,
+so final active/queue diagnostics can remain nonzero after every tagged client
+outcome has terminated. With no declared deadline, behavior is unchanged and
+all failure flags are false.
 
 ## Statistically controlled optimizer evaluation
 
@@ -199,9 +207,16 @@ samplers statistically before relying on analytical optimization.
 
 - exponential, deterministic, gamma, lognormal, Weibull, empirical, trace, and
   trusted custom-plugin sampling as applicable to arrivals and service times;
+- request-class-specific service-demand distributions;
 - one independent `std::mt19937_64` stream per replication;
-- FIFO waiting queues and fixed per-service replica capacities;
+- separate processing-slot and admitted-request-concurrency capacities, both of
+  which scale with replica count;
+- FIFO admission and processing queues;
 - fixed probabilistic routing, exits, revisits, and loops;
+- ordered workflows for simulation-ready sequential visit models;
+- synchronous call graphs with an explicit per-class `call_execution` mode:
+  sibling calls run either in declared sequence or in parallel, while parents
+  retain concurrency and release processing capacity as they wait;
 - event ordering by `(time, priority, sequence_number)`;
 - internal admission at service completion uses urgent same-time priority;
 - external active count changes only at external entry and final exit;
@@ -215,10 +230,29 @@ The new random generator is distributionally equivalent but does not reproduce
 the old Python `random`/SimPy trajectory bit for bit. Native seeds are stable and
 reproducible within this backend.
 
+The call-graph and dual-resource fields are illustrated in
+`examples/workloads/synchronous-call-graph.example.yaml`. A `visits` workload
+remains an analytical mean-flow input only: edge counters do not reveal whether
+calls were sequential, parallel, synchronous, or asynchronous, so Kubesizer
+does not invent executable timing semantics from visit ratios.
+
+For `call_execution: sequential`, child services execute in the mapping order
+written under each source. For `call_execution: parallel`, all sampled sibling
+calls start at the same simulation timestamp and the parent resumes only after
+the last child subtree completes.
+
+Processing service time should represent exclusive demand for the modeled
+processing resource, such as CPU-seconds/request divided by the declared CPU
+capacity. Inclusive Istio response time must not be used as CPU demand because
+it can contain downstream waits that the call graph already models. The
+concurrency limit represents worker/thread/in-flight capacity and must come
+from deployment configuration or a controlled measurement; it is not inferred
+from CPU demand.
+
 ## Protocol and failures
 
 The adapter sends one JSON request on standard input and expects one JSON
-response on standard output. Protocol version 4 supports:
+response on standard output. Protocol version 6 supports:
 
 - `simulate`;
 - `warmup_ensemble`;
@@ -236,8 +270,8 @@ pytest -q
 ```
 
 The backend suite covers reproducibility, state invariants, online bucket
-equivalence, measurement gates and draining, multiple entry streams, routing
-loops, structured failures, and M/M/1 statistical sanity. It is also run against
+equivalence, measurement gates and draining, client deadlines, multiple entry
+streams, routing loops, structured failures, and M/M/1 statistical sanity. It is also run against
 the ASan/UBSan build during validation.
 
 ## Analytical consistency validation

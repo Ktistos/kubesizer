@@ -11,11 +11,13 @@ from .simulation_metrics_collector import SimulationMetricsCollector
 from .time_weighted_buckets import time_weighted_bucket_averages
 from .cluster_bootstrap import (
     ClusterBootstrapP95Interval,
+    ClusterBootstrapRateInterval,
     draw_cluster_bootstrap_indices,
     fixed_experiment_tail_alpha,
     percentile,
     replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
+    replication_cluster_bootstrap_rate,
     sequential_tail_alpha,
 )
 
@@ -30,10 +32,12 @@ __all__ = [
     "SimulationMetricsCollector",
     "time_weighted_bucket_averages",
     "ClusterBootstrapP95Interval",
+    "ClusterBootstrapRateInterval",
     "draw_cluster_bootstrap_indices",
     "fixed_experiment_tail_alpha",
     "percentile",
     "replication_cluster_bootstrap_mean",
     "replication_cluster_bootstrap_p95",
+    "replication_cluster_bootstrap_rate",
     "sequential_tail_alpha",
 ]

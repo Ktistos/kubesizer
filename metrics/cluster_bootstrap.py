@@ -38,6 +38,23 @@ class ClusterBootstrapP95Interval:
         return self.slo - self.upper_bound
 
 
+@dataclass(frozen=True)
+class ClusterBootstrapRateInterval:
+    request_class: str
+    replication_count: int
+    eligible_request_count: int
+    failed_request_count: int
+    estimate: float
+    lower_bound: float
+    upper_bound: float
+    half_width: float
+    lower_tail_probability: float
+    upper_tail_probability: float
+    bootstrap_resample_count: int
+    bootstrap_seed: int
+    bootstrap_values: tuple[float, ...]
+
+
 def percentile(values, probability=0.95):
     """Linear sample percentile matching the native simulator definition."""
     values = np.asarray(tuple(values), dtype=float)
@@ -385,4 +402,85 @@ def replication_cluster_bootstrap_mean(
         bootstrap_seed=seed,
         bootstrap_p95_values=bootstrap_values,
         latency_statistic="mean",
+    )
+
+
+def replication_cluster_bootstrap_rate(
+    failure_clusters,
+    *,
+    request_class,
+    resample_count,
+    seed,
+    lower_tail_probability,
+    upper_tail_probability,
+    minimum_tail_draws=5,
+):
+    """Estimate a pooled terminal-failure rate by resampling whole runs."""
+    clusters = tuple(tuple(cluster) for cluster in failure_clusters)
+    if len(clusters) < 2:
+        raise ValueError("Cluster bootstrap requires at least two replications.")
+    if any(any(value not in (False, True, 0, 1) for value in cluster) for cluster in clusters):
+        raise ValueError("Failure clusters must contain only binary outcomes.")
+    sizes = np.asarray([len(cluster) for cluster in clusters], dtype=np.int64)
+    total = int(np.sum(sizes))
+    if total == 0:
+        raise ValueError("Cluster bootstrap requires at least one outcome.")
+    failures = np.asarray(
+        [sum(bool(value) for value in cluster) for cluster in clusters],
+        dtype=np.int64,
+    )
+    if not 0 < lower_tail_probability < upper_tail_probability < 1:
+        raise ValueError("Bootstrap interval probabilities are invalid.")
+    if (
+        isinstance(resample_count, bool)
+        or not isinstance(resample_count, int)
+        or resample_count <= 0
+    ):
+        raise ValueError("resample_count must be a positive integer.")
+    if (
+        isinstance(minimum_tail_draws, bool)
+        or not isinstance(minimum_tail_draws, int)
+        or minimum_tail_draws <= 0
+    ):
+        raise ValueError("minimum_tail_draws must be a positive integer.")
+    tail_resolution = min(
+        lower_tail_probability,
+        1.0 - upper_tail_probability,
+    ) * resample_count
+    if tail_resolution < minimum_tail_draws:
+        raise ValueError(
+            "Bootstrap resample count is insufficient for the requested tail "
+            "probabilities."
+        )
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("Bootstrap seed must be a non-negative integer.")
+
+    multiplicities = _draw_nonempty_cluster_multiplicities(
+        sizes,
+        resample_count=resample_count,
+        seed=seed,
+    ).astype(np.int64)
+    bootstrap_totals = multiplicities @ sizes
+    bootstrap_failures = multiplicities @ failures
+    bootstrap_values = tuple(
+        float(value)
+        for value in bootstrap_failures / bootstrap_totals
+    )
+    point = int(np.sum(failures)) / total
+    lower = percentile(bootstrap_values, lower_tail_probability)
+    upper = percentile(bootstrap_values, upper_tail_probability)
+    return ClusterBootstrapRateInterval(
+        request_class=str(request_class),
+        replication_count=len(clusters),
+        eligible_request_count=total,
+        failed_request_count=int(np.sum(failures)),
+        estimate=point,
+        lower_bound=lower,
+        upper_bound=upper,
+        half_width=(upper - lower) / 2.0,
+        lower_tail_probability=lower_tail_probability,
+        upper_tail_probability=upper_tail_probability,
+        bootstrap_resample_count=resample_count,
+        bootstrap_seed=seed,
+        bootstrap_values=bootstrap_values,
     )

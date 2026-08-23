@@ -170,6 +170,8 @@ def test_measurement_window_tags_only_arrivals_in_window_and_drains_them():
                 10.0 <= arrival < 11.0
                 for arrival in result.request_class_arrival_times[request_class]
             )
+            assert not any(result.request_class_failures[request_class])
+            assert result.failed_measured_request_counts[request_class] == 0
 
     shorter_direct = system.simulate_measurement_replications(
         warmup_duration=10.0,
@@ -184,6 +186,83 @@ def test_measurement_window_tags_only_arrivals_in_window_and_drains_them():
     assert shorter_prefix.request_class_latencies == (
         shorter_direct.request_class_latencies
     )
+    assert shorter_prefix.request_class_failures == (
+        shorter_direct.request_class_failures
+    )
+
+
+def test_end_to_end_deadline_records_client_timeout_without_dropping_latency():
+    workload = {
+        "request_classes": {
+            "read": {
+                "concurrency_weight": 1.0,
+                "end_to_end_timeout_seconds": 0.05,
+                "routing": {},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "read": {
+                    "api": {"distribution": "exponential", "rate": 100.0}
+                }
+            },
+            "service_times": {
+                "api": {"distribution": "deterministic", "mean": 0.2}
+            },
+        },
+    }
+    system = System("client-timeout", workload, QueueingNetworkType.OPEN)
+    system.configure_system_replicas((25,))
+
+    result = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=0.1,
+        seeds=(901,),
+    )[0]
+
+    assert result.measured_request_counts["read"] > 0
+    assert result.completed_measured_request_counts == result.measured_request_counts
+    assert result.failed_measured_request_counts == result.measured_request_counts
+    assert all(result.request_class_failures["read"])
+    assert result.request_class_latencies["read"] == pytest.approx(
+        (0.05,) * result.measured_request_counts["read"]
+    )
+    assert result.active_requests_at_end > 0
+    assert result.completed_request_count == 0
+
+
+def test_completion_exactly_at_deadline_is_a_success():
+    workload = {
+        "request_classes": {
+            "read": {
+                "concurrency_weight": 1.0,
+                "end_to_end_timeout_seconds": 0.05,
+                "routing": {},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "read": {
+                    "api": {"distribution": "deterministic", "rate": 1.0}
+                }
+            },
+            "service_times": {
+                "api": {"distribution": "deterministic", "mean": 0.05}
+            },
+        },
+    }
+    system = System("deadline-tie", workload, QueueingNetworkType.OPEN)
+
+    result = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=2.5,
+        seeds=(902,),
+    )[0]
+
+    assert result.measured_request_counts == {"read": 2}
+    assert result.failed_measured_request_counts == {"read": 0}
+    assert result.request_class_failures == {"read": (False, False)}
+    assert result.request_class_latencies["read"] == pytest.approx((0.05, 0.05))
 
 
 def test_measurement_worker_count_preserves_exact_seed_results():

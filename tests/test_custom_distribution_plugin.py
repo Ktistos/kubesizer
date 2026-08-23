@@ -66,11 +66,14 @@ def test_custom_distribution_example_parses_and_serializes_plugin_metadata():
         for stream in payload["external_streams"]
         if stream["interarrival_distribution"]["distribution"] == "custom"
     ] + [
-        service["service_time_distribution"]
+        distribution
         for service in payload["services"]
-        if service["service_time_distribution"]["distribution"] == "custom"
+        for distribution in service["service_time_distributions"]
+        if distribution["distribution"] == "custom"
     ]
-    assert len(custom_distributions) == 3
+    # Service distributions are serialized once per request class because the
+    # native protocol supports class-specific demand at a shared service.
+    assert len(custom_distributions) == 5
     assert all(item["abi_version"] == 1 for item in custom_distributions)
     assert all(Path(item["library"]).is_absolute() for item in custom_distributions)
     assert all(len(item["library_sha256"]) == 64 for item in custom_distributions)

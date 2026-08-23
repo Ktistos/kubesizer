@@ -640,6 +640,21 @@ def _run_replica_workflow(system, args, replica_mode):
         raise CliUsageError(
             "Percentile latency SLOs require --replica-evaluation simulation."
         )
+    if (
+        evaluation_mode == ReplicaEvaluationMode.ANALYTICAL
+        and any(
+            value > 0.0
+            for value in getattr(
+                system,
+                "get_request_class_end_to_end_timeouts",
+                lambda: {},
+            )().values()
+        )
+    ):
+        raise CliUsageError(
+            "Request-class end-to-end deadlines require --replica-evaluation "
+            "simulation."
+        )
     if kind is None and evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         raise CliUsageError("Simulation optimization requires workload latency SLOs.")
 
