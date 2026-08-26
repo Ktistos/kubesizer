@@ -177,6 +177,8 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
     Exact/scalable describes search coverage. It does not change the queueing
     formulas selected by the system, and neither search mode turns analytical
     mean latency into a p95 or a statistical feasibility claim.
+    ``initial_configuration`` seeds scalable construction only; exact search
+    still starts at the analytical lower bound.
     """
 
     def __init__(
@@ -185,6 +187,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         request_class_mean_latency_limits,
         max_replicas,
         *,
+        initial_configuration=None,
         replica_costs=None,
         structural_feasibility=None,
         progress_callback=None,
@@ -206,6 +209,18 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             raise ValueError(
                 "Maximum replica bounds cannot be below the analytically "
                 "stable configuration."
+            )
+        self.__construction_start = (
+            self.__stable
+            if initial_configuration is None
+            else self.__normalize_configuration(initial_configuration)
+        )
+        if any(
+            value < minimum
+            for value, minimum in zip(self.__construction_start, self.__stable)
+        ):
+            raise ValueError(
+                "initial_configuration cannot be below analytical stability."
             )
         self.__replica_costs = self.__normalize_replica_costs(replica_costs)
         self.__structural_feasibility = structural_feasibility
@@ -289,6 +304,9 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
     def stable_configuration(self):
         return self.__stable
 
+    def construction_start_configuration(self):
+        return self.__construction_start
+
     def maximum_configuration(self):
         return self.__maximum
 
@@ -354,9 +372,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             return cached
         self.__system.configure_system_replicas(configuration)
         analytical = self.__system.solve()
-        class_means = (
-            self._request_class_means() if analytical.get_stability() else ()
-        )
+        class_means = self._request_class_means() if analytical.get_stability() else ()
         evidence = (analytical, class_means)
         self.__evidence_cache[configuration] = evidence
         return evidence
@@ -619,6 +635,15 @@ class ReplicaSizingProblem(GraphSearchProblem):
     def stable_configuration(self):
         return self.__stable_configuration
 
+    def construction_start_configuration(self):
+        return tuple(
+            max(initial, stable)
+            for initial, stable in zip(
+                self.__initial_state,
+                self.__stable_configuration,
+            )
+        )
+
     def configuration_count(self):
         return math.prod(self.__max_replicas)
 
@@ -811,13 +836,18 @@ class ReplicaSizingProblem(GraphSearchProblem):
 
 
 class CalibratedReplicaSizingProblem(GraphSearchProblem):
-    """Bounded graph search driven exclusively by calibrated simulation results."""
+    """Bounded graph search driven exclusively by calibrated simulation results.
+
+    ``initial_configuration`` is a heuristic construction seed. Statistical
+    deletion may remove its replicas down to the calibrated stability vector.
+    """
 
     def __init__(
         self,
         system,
         calibration_profile,
         *,
+        initial_configuration=None,
         heuristic=None,
         simulation_workers=1,
         evaluator=None,
@@ -837,6 +867,18 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         self.__progress_callback = progress_callback
         if len(self.__maximum) != self.__service_count:
             raise ValueError("Calibration profile does not match service count.")
+        self.__construction_start = (
+            self.__initial
+            if initial_configuration is None
+            else self.__normalize(initial_configuration)
+        )
+        if any(
+            value < minimum
+            for value, minimum in zip(self.__construction_start, self.__initial)
+        ):
+            raise ValueError(
+                "initial_configuration cannot be below calibrated stability."
+            )
         # The calibrated anchor is already strictly stable, so stability adds
         # no remaining-cost information. Keep a zero heuristic for callers that
         # provide a custom ranking heuristic.
@@ -906,6 +948,9 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
 
     def stable_configuration(self):
         return self.__initial
+
+    def construction_start_configuration(self):
+        return self.__construction_start
 
     def configuration_count(self):
         return math.prod(

@@ -1,0 +1,10 @@
+measurement_id: example-three-window-observation-with-capacity-envelope
+methodology_version: prometheus-istio-kubernetes-v1
+service_intervals: service-intervals.csv
+service_class_intervals: service-class-intervals.csv
+external_intervals: external-intervals.csv
+service_edges: service-edges.csv
+service_latency_histograms: service-latency-histograms.csv
+external_latency_histograms: external-latency-histograms.csv
+external_arrival_samples: external-arrival-samples.csv
+capacity_observations: capacity-observations.csv

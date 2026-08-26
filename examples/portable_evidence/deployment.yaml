@@ -1,0 +1,14 @@
+services:
+  api:
+    namespace: example
+    cpu_request_cores: 0.5
+    cpu_limit_cores: 1.0
+    memory_request_bytes: 536870912
+    memory_limit_bytes: 1073741824
+
+  database:
+    namespace: example
+    cpu_request_cores: 0.25
+    cpu_limit_cores: 0.5
+    memory_request_bytes: 1073741824
+    memory_limit_bytes: 2147483648

@@ -24,7 +24,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 6;
+constexpr int kProtocolVersion = 7;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 constexpr int kDeadlinePriority = 2;
@@ -42,6 +42,7 @@ enum class EventKind {
 enum class RunMode { FixedHorizon, MeasurementDrain };
 enum class FlowKind { Routing, Workflow, Calls };
 enum class CallExecution { Parallel, Sequential };
+enum class ExecutionModel { FixedSlots, ProcessorSharing };
 enum class DistributionKind {
     Exponential,
     Deterministic,
@@ -70,6 +71,7 @@ struct Service {
     int replicas{};
     int capacity{};
     int concurrency_capacity{};
+    ExecutionModel execution_model{ExecutionModel::FixedSlots};
     std::vector<Distribution> service_times;
 };
 
@@ -138,6 +140,7 @@ struct Visit {
     double arrival_time{};
     std::vector<int> sequential_children;
     std::size_t next_sequential_child{};
+    double remaining_work{};
 };
 
 struct Event {
@@ -148,6 +151,25 @@ struct Event {
     Request* request{};
     Visit* visit{};
     int index{};
+    std::uint64_t generation{};
+};
+
+struct ProcessorSharingEntry {
+    double finish_tag{};
+    std::int64_t request_id{};
+    Visit* visit{};
+};
+
+struct LaterProcessorSharingEntry {
+    bool operator()(
+        const ProcessorSharingEntry& left,
+        const ProcessorSharingEntry& right
+    ) const {
+        if (left.finish_tag != right.finish_tag) {
+            return left.finish_tag > right.finish_tag;
+        }
+        return left.request_id > right.request_id;
+    }
 };
 
 struct LaterEvent {
@@ -206,12 +228,24 @@ class TimeWeightedBuckets {
         const double interval_end = std::min(timestamp, bucket_horizon_);
         double current = std::min(last_time_, bucket_horizon_);
         while (current < interval_end) {
-            const std::size_t index = std::min(
+            std::size_t index = std::min(
                 static_cast<std::size_t>(current / width_),
                 areas_.size() - 1
             );
-            const double bucket_end = static_cast<double>(index + 1) * width_;
+            double bucket_end = static_cast<double>(index + 1) * width_;
+            // A decimal width such as 0.09 is not exactly representable.
+            // At an exact mathematical boundary current / width can therefore
+            // round just below the next integer.  That selects the preceding
+            // bucket whose computed end equals current, so the loop makes no
+            // progress.  Move to the next bucket explicitly in that case.
+            if (bucket_end <= current && index + 1 < areas_.size()) {
+                ++index;
+                bucket_end = static_cast<double>(index + 1) * width_;
+            }
             const double segment_end = std::min(interval_end, bucket_end);
+            if (segment_end <= current) {
+                throw std::runtime_error("bucket integration failed to advance");
+            }
             areas_[index] += static_cast<double>(value_) * (segment_end - current);
             current = segment_end;
         }
@@ -403,6 +437,10 @@ class Kernel {
         admission_waiting_(workload.services.size()),
         busy_(workload.services.size()),
         active_concurrency_(workload.services.size()),
+        processor_sharing_active_(workload.services.size()),
+        processor_sharing_last_update_(workload.services.size()),
+        processor_sharing_virtual_work_(workload.services.size()),
+        processor_sharing_generation_(workload.services.size()),
         trace_states_(workload.external_streams.size()),
         recorder_(capacities(workload), capture_history, bucket_width, horizon),
         service_response_times_(workload.services.size()),
@@ -498,7 +536,8 @@ class Kernel {
         EventKind kind,
         Request* request,
         int index,
-        Visit* visit = nullptr
+        Visit* visit = nullptr,
+        std::uint64_t generation = 0
     ) {
         future_events_.push({
             time,
@@ -507,7 +546,8 @@ class Kernel {
             kind,
             request,
             visit,
-            index
+            index,
+            generation
         });
     }
 
@@ -701,7 +741,7 @@ class Kernel {
             case EventKind::ExternalArrival: external_arrival(event.index, event.time); break;
             case EventKind::Admit: admit(event.visit, event.time); break;
             case EventKind::ServiceCompletion:
-                service_completion(event.visit, event.time); break;
+                service_completion(event); break;
             case EventKind::Grant: grant(event.index, event.time); break;
             case EventKind::Resume: resume(event.visit, event.time); break;
             case EventKind::ConcurrencyGrant:
@@ -807,7 +847,8 @@ class Kernel {
             0,
             now,
             {},
-            0
+            0,
+            0.0
         });
         return visits_[ownership_index].get();
     }
@@ -829,11 +870,32 @@ class Kernel {
     }
 
     void record_service_state(int service, double now) {
-        recorder_.service_state(service, now, total_waiting(service), busy_[service]);
+        int backlog = total_waiting(service);
+        if (
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+        ) {
+            // Every admitted visit receives CPU progress. For the fundamental
+            // N=Q+B state identity, visits beyond the replicas are reported as
+            // processor-sharing backlog even though they are not FIFO-blocked.
+            backlog += std::max(
+                0,
+                static_cast<int>(processor_sharing_active_[service].size())
+                    - workload_.services[service].replicas
+            );
+        }
+        recorder_.service_state(service, now, backlog, busy_[service]);
     }
 
     void queue_for_processing(Visit* visit, double now) {
         const int service = visit->service;
+        if (
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+        ) {
+            start_processor_sharing(visit, now);
+            return;
+        }
         if (busy_[service] < workload_.services[service].capacity
             && waiting_[service].empty()) {
             ++busy_[service];
@@ -855,15 +917,85 @@ class Kernel {
         }
     }
 
+    double processor_sharing_rate(int service) const {
+        const std::size_t active = processor_sharing_active_[service].size();
+        if (active == 0) return 0.0;
+        const double replicas = static_cast<double>(
+            workload_.services[service].replicas
+        );
+        return std::min(1.0, replicas / static_cast<double>(active));
+    }
+
+    void update_processor_sharing_work(int service, double now) {
+        const double previous = processor_sharing_last_update_[service];
+        if (now < previous) {
+            throw std::runtime_error("processor-sharing time moved backwards");
+        }
+        const double elapsed = now - previous;
+        if (elapsed > 0.0 && !processor_sharing_active_[service].empty()) {
+            processor_sharing_virtual_work_[service] +=
+                processor_sharing_rate(service) * elapsed;
+        }
+        processor_sharing_last_update_[service] = now;
+    }
+
+    void schedule_processor_sharing_completion(int service, double now) {
+        const std::uint64_t generation = ++processor_sharing_generation_[service];
+        auto& active = processor_sharing_active_[service];
+        if (active.empty()) return;
+        const ProcessorSharingEntry& next = active.top();
+        const double rate = processor_sharing_rate(service);
+        if (rate <= 0.0) {
+            throw std::runtime_error("processor-sharing service has no capacity");
+        }
+        schedule(
+            now + std::max(
+                0.0,
+                next.finish_tag - processor_sharing_virtual_work_[service]
+            ) / rate,
+            kNormalPriority,
+            EventKind::ServiceCompletion,
+            nullptr,
+            service,
+            next.visit,
+            generation
+        );
+    }
+
+    void start_processor_sharing(Visit* visit, double now) {
+        const int service = visit->service;
+        update_processor_sharing_work(service, now);
+        visit->remaining_work = processor_sharing_virtual_work_[service]
+            + sample(service_time(visit->request, service));
+        processor_sharing_active_[service].push({
+            visit->remaining_work,
+            visit->request->id,
+            visit
+        });
+        busy_[service] = std::min(
+            static_cast<int>(processor_sharing_active_[service].size()),
+            workload_.services[service].replicas
+        );
+        record_service_state(service, now);
+        schedule_processor_sharing_completion(service, now);
+    }
+
     void admit(Visit* visit, double now) {
         const int service = visit->service;
         if (
-            active_concurrency_[service]
-                < workload_.services[service].concurrency_capacity
-            && admission_waiting_[service].empty()
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+            || (
+                active_concurrency_[service]
+                    < workload_.services[service].concurrency_capacity
+                && admission_waiting_[service].empty()
+            )
         ) {
             ++active_concurrency_[service];
             if (
+                workload_.services[service].execution_model
+                    == ExecutionModel::FixedSlots
+                &&
                 active_concurrency_[service]
                 > workload_.services[service].concurrency_capacity
             ) {
@@ -981,15 +1113,66 @@ class Kernel {
         }
     }
 
-    void service_completion(Visit* visit, double now) {
+    bool release_processor_sharing(
+        Visit* visit,
+        double now,
+        std::uint64_t generation
+    ) {
+        const int service = visit->service;
+        if (generation != processor_sharing_generation_[service]) {
+            return false;
+        }
+        update_processor_sharing_work(service, now);
+        auto& active = processor_sharing_active_[service];
+        if (active.empty() || active.top().visit != visit) return false;
+        if (
+            visit->remaining_work - processor_sharing_virtual_work_[service]
+                > 1e-9
+        ) {
+            throw std::runtime_error(
+                "processor-sharing completion fired before work was exhausted"
+            );
+        }
+        active.pop();
+        busy_[service] = std::min(
+            static_cast<int>(active.size()),
+            workload_.services[service].replicas
+        );
+        record_service_state(service, now);
+        schedule_processor_sharing_completion(service, now);
+        return true;
+    }
+
+    void service_completion(const Event& event) {
+        const double now = event.time;
+        const int service = event.index;
+        if (
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+        ) {
+            // Superseded processor-sharing completions may refer to a visit
+            // which has already completed and been destroyed. Check the
+            // service generation before dereferencing that pointer.
+            if (event.generation != processor_sharing_generation_[service]) return;
+        }
+        Visit* visit = event.visit;
+        if (visit == nullptr || visit->service != service) {
+            throw std::runtime_error("service completion refers to an invalid visit");
+        }
+        if (
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+        ) {
+            if (!release_processor_sharing(visit, now, event.generation)) return;
+        } else {
+            release_processing(service, now);
+        }
         ++processed_event_count_;
         ++completed_visit_count_;
         Request* request = visit->request;
-        const int service = visit->service;
         const RequestClass& request_class = workload_.request_classes[
             request->request_class
         ];
-        release_processing(service, now);
         if (request_class.flow_kind == FlowKind::Calls) {
             for (const WorkflowVisit& child : request_class.calls[service]) {
                 const std::int64_t count = sample_workflow_visits(
@@ -1075,6 +1258,14 @@ class Kernel {
 
     void resume(Visit* visit, double now) {
         const int service = visit->service;
+        if (
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+        ) {
+            throw std::runtime_error(
+                "processor-sharing visits must not enter the fixed-slot queue"
+            );
+        }
         record_service_state(service, now);
         schedule(
             now + sample(service_time(visit->request, service)),
@@ -1152,6 +1343,14 @@ class Kernel {
     std::vector<std::deque<Visit*>> admission_waiting_;
     std::vector<int> busy_;
     std::vector<int> active_concurrency_;
+    std::vector<std::priority_queue<
+        ProcessorSharingEntry,
+        std::vector<ProcessorSharingEntry>,
+        LaterProcessorSharingEntry
+    >> processor_sharing_active_;
+    std::vector<double> processor_sharing_last_update_;
+    std::vector<double> processor_sharing_virtual_work_;
+    std::vector<std::uint64_t> processor_sharing_generation_;
     std::vector<TraceSamplerState> trace_states_;
     StateRecorder recorder_;
     std::vector<std::unique_ptr<Request>> requests_;
@@ -1420,6 +1619,23 @@ Workload parse_workload(json_t* raw) {
         }
         Service service;
         service.name = json_text(item, "name");
+        json_t* raw_execution_model = json_object_get(item, "execution_model");
+        if (raw_execution_model != nullptr) {
+            const char* value = json_string_value(raw_execution_model);
+            if (value == nullptr) {
+                throw std::runtime_error("execution_model must be a string");
+            }
+            const std::string model(value);
+            if (model == "fixed_slots") {
+                service.execution_model = ExecutionModel::FixedSlots;
+            } else if (model == "processor_sharing") {
+                service.execution_model = ExecutionModel::ProcessorSharing;
+            } else {
+                throw std::runtime_error(
+                    "unsupported execution_model: " + model
+                );
+            }
+        }
         service.capacity = static_cast<int>(capacity);
         json_t* raw_concurrency_capacity = json_object_get(
             item,
@@ -1449,6 +1665,14 @@ Workload parse_workload(json_t* raw) {
             }
             service.replicas = static_cast<int>(
                 json_integer_value(raw_replicas)
+            );
+        }
+        if (
+            service.execution_model == ExecutionModel::ProcessorSharing
+            && service.capacity != service.replicas
+        ) {
+            throw std::runtime_error(
+                "processor-sharing capacity must equal replica count"
             );
         }
         json_t* distributions = json_object_get(

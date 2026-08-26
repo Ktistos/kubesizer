@@ -34,6 +34,7 @@ class TrafficModelSpec:
     entry_services: Mapping
     service_times: Mapping
     service_times_by_request_class: Mapping
+    service_execution_models: Mapping
     processing_slots_per_replica: Mapping
     concurrency_limits_per_replica: Mapping
 
@@ -80,6 +81,7 @@ class ParsedWorkload:
     request_class_end_to_end_timeouts: Mapping
     concurrency_weights: Mapping
     request_class_latency_slos: Mapping
+    request_class_failure_rate_slos: Mapping
     traffic_model: TrafficModelSpec
     service_names: tuple[str, ...]
 
@@ -282,25 +284,43 @@ def _parse_distribution(specification, label, *, quantity, base_path):
         )
 
     if distribution == empirical_name:
-        expected = {"distribution", "source", "column", "sampling"}
-        if set(specification) != expected:
+        file_fields = {"distribution", "source", "column", "sampling"}
+        inline_fields = {"distribution", "samples", "sampling"}
+        if set(specification) not in (file_fields, inline_fields):
             raise ValueError(
-                f"{label} must contain exactly distribution, source, column, "
-                "and sampling."
+                f"{label} must contain distribution and sampling with either "
+                "source plus column or inline samples."
             )
         if specification["sampling"] != "iid_with_replacement":
             raise ValueError(f"{label}.sampling must be 'iid_with_replacement'.")
-        values = _csv_values(
-            specification["source"], specification["column"], label, base_path
-        )
-        mean, scv = _sample_moments(values, f"{label}.source values")
-        source = Path(specification["source"])
-        resolved = source if source.is_absolute() else Path(base_path or ".") / source
+        if "samples" in specification:
+            raw_values = specification["samples"]
+            if not isinstance(raw_values, (list, tuple)) or not raw_values:
+                raise ValueError(f"{label}.samples must be a nonempty array.")
+            values = tuple(raw_values)
+            normalized_specification = dict(specification)
+            normalized_specification["samples"] = values
+            parameters = _parameter_items(normalized_specification)
+            sample_label = f"{label}.samples"
+        else:
+            values = _csv_values(
+                specification["source"], specification["column"], label, base_path
+            )
+            source = Path(specification["source"])
+            resolved = (
+                source if source.is_absolute() else Path(base_path or ".") / source
+            )
+            parameters = _parameter_items(
+                specification,
+                resolved_source=resolved.resolve(),
+            )
+            sample_label = f"{label}.source values"
+        mean, scv = _sample_moments(values, sample_label)
         return DistributionSpec(
             distribution,
             mean,
             scv,
-            _parameter_items(specification, resolved_source=resolved.resolve()),
+            parameters,
             tuple(values),
         )
 
@@ -441,6 +461,7 @@ def _parse_request_classes(
     end_to_end_timeouts = {}
     concurrency_weights = {}
     latency_slos = {}
+    failure_rate_slos = {}
     weighted_classes = []
     for request_class_name, request_class in request_classes.items():
         if not isinstance(request_class_name, str) or not request_class_name:
@@ -451,6 +472,7 @@ def _parse_request_classes(
             "concurrency_weight",
             "end_to_end_latency_slos",
             "end_to_end_timeout_seconds",
+            "maximum_terminal_failure_rate",
             "fixed_latency_overhead_seconds",
             "routing",
             "visits",
@@ -459,15 +481,14 @@ def _parse_request_classes(
             "call_execution",
         }
         unknown_fields = set(request_class) - allowed_fields
-        flow_fields = {"routing", "visits", "workflow", "calls"} & set(
-            request_class
-        )
+        flow_fields = {"routing", "visits", "workflow", "calls"} & set(request_class)
         if len(flow_fields) != 1 or unknown_fields:
             raise ValueError(
                 f"Request class {request_class_name!r} must contain exactly one "
                 "of routing, visits, workflow, or calls and may contain "
                 "concurrency_weight, "
-                "end_to_end_latency_slos, end_to_end_timeout_seconds, and "
+                "end_to_end_latency_slos, end_to_end_timeout_seconds, "
+                "maximum_terminal_failure_rate, and "
                 "fixed_latency_overhead_seconds; "
                 f"unknown fields={sorted(unknown_fields)}."
             )
@@ -540,14 +561,29 @@ def _parse_request_classes(
         )
         end_to_end_timeouts[request_class_name] = _finite_nonnegative(
             request_class.get("end_to_end_timeout_seconds", 0.0),
-            (
-                f"request_classes.{request_class_name}."
-                "end_to_end_timeout_seconds"
-            ),
+            (f"request_classes.{request_class_name}." "end_to_end_timeout_seconds"),
         )
-        if (
-            "fixed_latency_overhead_seconds" in request_class
-            and not ({"visits", "workflow", "calls"} & set(request_class))
+        if "maximum_terminal_failure_rate" in request_class:
+            failure_rate = _finite_nonnegative(
+                request_class["maximum_terminal_failure_rate"],
+                (
+                    f"request_classes.{request_class_name}."
+                    "maximum_terminal_failure_rate"
+                ),
+            )
+            if failure_rate >= 1.0:
+                raise ValueError(
+                    f"request_classes.{request_class_name}."
+                    "maximum_terminal_failure_rate must be less than one."
+                )
+            if end_to_end_timeouts[request_class_name] <= 0.0:
+                raise ValueError(
+                    f"Request class {request_class_name!r} declares a terminal "
+                    "failure-rate SLO but no positive end_to_end_timeout_seconds."
+                )
+            failure_rate_slos[request_class_name] = failure_rate
+        if "fixed_latency_overhead_seconds" in request_class and not (
+            {"visits", "workflow", "calls"} & set(request_class)
         ):
             raise ValueError(
                 f"Request class {request_class_name!r} may define "
@@ -564,9 +600,7 @@ def _parse_request_classes(
             workflow = []
             workflow_visits = {}
             for index, raw_visit in enumerate(raw_workflow):
-                label = (
-                    f"request_classes.{request_class_name}.workflow[{index}]"
-                )
+                label = f"request_classes.{request_class_name}.workflow[{index}]"
                 if not isinstance(raw_visit, Mapping) or set(raw_visit) not in (
                     {"service"},
                     {"service", "mean_visits"},
@@ -740,6 +774,7 @@ def _parse_request_classes(
         _freeze_mapping(end_to_end_timeouts),
         _freeze_mapping(concurrency_weights),
         _freeze_mapping(latency_slos),
+        _freeze_mapping(failure_rate_slos),
     )
 
 
@@ -781,6 +816,7 @@ def parse_workload_spec(workload, *, base_path=None):
         end_to_end_timeouts,
         concurrency_weights,
         request_class_latency_slos,
+        request_class_failure_rate_slos,
     ) = _parse_request_classes(
         request_classes,
         service_name_set,
@@ -810,6 +846,7 @@ def parse_workload_spec(workload, *, base_path=None):
             )
         model_path = "traffic_model"
         service_times = {}
+        service_execution_models = {}
         processing_slots_per_replica = {}
         concurrency_limits_per_replica = {}
         service_times_by_request_class = {
@@ -820,10 +857,31 @@ def parse_workload_spec(workload, *, base_path=None):
             service_path = f"{model_path}.service_times.{service_name}"
             if not isinstance(raw_service_time, Mapping):
                 raise ValueError(f"{service_path} must be a mapping.")
+            execution_model = raw_service_time.get("execution_model", "fixed_slots")
+            if execution_model not in {"fixed_slots", "processor_sharing"}:
+                raise ValueError(
+                    f"{service_path}.execution_model must be fixed_slots or "
+                    "processor_sharing."
+                )
             processing_slots = _positive_integer(
                 raw_service_time.get("processing_slots_per_replica", 1),
                 f"{service_path}.processing_slots_per_replica",
             )
+            if execution_model == "processor_sharing" and processing_slots != 1:
+                raise ValueError(
+                    f"{service_path}.processing_slots_per_replica must be one "
+                    "for processor_sharing; CPU contention is represented by "
+                    "the processor-sharing kernel itself."
+                )
+            if (
+                execution_model == "processor_sharing"
+                and "concurrency_limit_per_replica" in raw_service_time
+            ):
+                raise ValueError(
+                    f"{service_path}.concurrency_limit_per_replica cannot be "
+                    "combined with processor_sharing. Portable CPU sharing does "
+                    "not invent an application worker or connection-pool limit."
+                )
             concurrency_limit = _positive_integer(
                 raw_service_time.get(
                     "concurrency_limit_per_replica",
@@ -838,6 +896,7 @@ def parse_workload_spec(workload, *, base_path=None):
                 )
             processing_slots_per_replica[service_name] = processing_slots
             concurrency_limits_per_replica[service_name] = concurrency_limit
+            service_execution_models[service_name] = execution_model
             distribution_specification = {
                 key: value
                 for key, value in raw_service_time.items()
@@ -845,6 +904,7 @@ def parse_workload_spec(workload, *, base_path=None):
                 not in {
                     "processing_slots_per_replica",
                     "concurrency_limit_per_replica",
+                    "execution_model",
                 }
             }
             if "distribution" in distribution_specification:
@@ -991,9 +1051,8 @@ def parse_workload_spec(workload, *, base_path=None):
                     )
                 }
             ),
-            processing_slots_per_replica=_freeze_mapping(
-                processing_slots_per_replica
-            ),
+            service_execution_models=_freeze_mapping(service_execution_models),
+            processing_slots_per_replica=_freeze_mapping(processing_slots_per_replica),
             concurrency_limits_per_replica=_freeze_mapping(
                 concurrency_limits_per_replica
             ),
@@ -1009,6 +1068,7 @@ def parse_workload_spec(workload, *, base_path=None):
         request_class_end_to_end_timeouts=end_to_end_timeouts,
         concurrency_weights=concurrency_weights,
         request_class_latency_slos=request_class_latency_slos,
+        request_class_failure_rate_slos=request_class_failure_rate_slos,
         traffic_model=models[SINGLE_TRAFFIC_MODEL_NAME],
         service_names=service_names,
     )
@@ -1066,9 +1126,9 @@ def normalize_workload_spec(workload, *, base_path=None):
                 continue
             normalized_services[service_name] = {
                 "gamma": entry_rates[request_class_name].get(service_name, 0.0),
-                "mu": traffic_model.service_times_by_request_class[
-                    request_class_name
-                ][service_name].rate,
+                "mu": traffic_model.service_times_by_request_class[request_class_name][
+                    service_name
+                ].rate,
                 "routes": dict(class_routing.get(service_name, {})),
             }
         normalized[request_class_name] = {

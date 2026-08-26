@@ -96,6 +96,7 @@ class System:
         self.__workload_base_path = workload_base_path
         self.__traffic_distribution_spec = None
         self.__request_class_latency_slos = {}
+        self.__request_class_failure_rate_slos = {}
         self.__request_class_visit_ratios = {}
         self.__request_class_workflows = {}
         self.__request_class_call_graphs = {}
@@ -104,6 +105,7 @@ class System:
         self.__request_class_end_to_end_timeouts = {}
         self.__service_processing_slots_per_replica = {}
         self.__service_concurrency_limits_per_replica = {}
+        self.__service_execution_models = {}
         self.__class_specific_service_times = False
         if structured:
             parsed = parse_workload_spec(
@@ -112,6 +114,9 @@ class System:
             )
             self.__traffic_distribution_spec = parsed.traffic_model
             self.__request_class_latency_slos = dict(parsed.request_class_latency_slos)
+            self.__request_class_failure_rate_slos = dict(
+                parsed.request_class_failure_rate_slos
+            )
             self.__request_class_visit_ratios = {
                 request_class: dict(visits)
                 for request_class, visits in (parsed.request_class_visit_ratios.items())
@@ -122,8 +127,7 @@ class System:
             }
             self.__request_class_call_graphs = {
                 request_class: {
-                    source: dict(targets)
-                    for source, targets in call_graph.items()
+                    source: dict(targets) for source, targets in call_graph.items()
                 }
                 for request_class, call_graph in (
                     parsed.request_class_call_graphs.items()
@@ -143,6 +147,9 @@ class System:
             )
             self.__service_concurrency_limits_per_replica = dict(
                 parsed.traffic_model.concurrency_limits_per_replica
+            )
+            self.__service_execution_models = dict(
+                parsed.traffic_model.service_execution_models
             )
             self.__class_specific_service_times = any(
                 len(
@@ -341,14 +348,18 @@ class System:
         self.__initialize_distribution_metadata()
         if not self.__service_processing_slots_per_replica:
             self.__service_processing_slots_per_replica = {
-                service.get_name(): 1
-                for service in self.get_services().values()
+                service.get_name(): 1 for service in self.get_services().values()
             }
         if not self.__service_concurrency_limits_per_replica:
             self.__service_concurrency_limits_per_replica = {
                 service.get_name(): self.__service_processing_slots_per_replica[
                     service.get_name()
                 ]
+                for service in self.get_services().values()
+            }
+        if not self.__service_execution_models:
+            self.__service_execution_models = {
+                service.get_name(): "fixed_slots"
                 for service in self.get_services().values()
             }
         self.__poisson_arrival_flags = self.__calculate_poisson_arrival_flags()
@@ -550,9 +561,7 @@ class System:
                 ),
                 replicas=(
                     service.get_replicas()
-                    * self.__service_processing_slots_per_replica[
-                        service.get_name()
-                    ]
+                    * self.__service_processing_slots_per_replica[service.get_name()]
                 ),
             )
         return tuple(models)
@@ -744,9 +753,7 @@ class System:
                         calls[source_id, self.get_service(target_name).get_id()] = (
                             mean_calls
                         )
-                spectral_radius = max(
-                    abs(value) for value in np.linalg.eigvals(calls)
-                )
+                spectral_radius = max(abs(value) for value in np.linalg.eigvals(calls))
                 if spectral_radius >= 1.0 - 1e-12:
                     raise ValueError(
                         f"Request class {request_class!r} synchronous call graph "
@@ -816,16 +823,20 @@ class System:
                 means[service_id] = specification.mean
                 scvs[service_id] = specification.scv
                 continue
-            mean = sum(
-                rate * specification.mean for rate, specification in observations
-            ) / total_rate
-            second_moment = sum(
-                rate
-                * (1.0 + specification.scv)
-                * specification.mean
-                * specification.mean
-                for rate, specification in observations
-            ) / total_rate
+            mean = (
+                sum(rate * specification.mean for rate, specification in observations)
+                / total_rate
+            )
+            second_moment = (
+                sum(
+                    rate
+                    * (1.0 + specification.scv)
+                    * specification.mean
+                    * specification.mean
+                    for rate, specification in observations
+                )
+                / total_rate
+            )
             means[service_id] = mean
             scvs[service_id] = max(0.0, second_moment / (mean * mean) - 1.0)
         return means, scvs
@@ -1052,20 +1063,15 @@ class System:
                     self.__class_specific_service_times
                 ),
                 "concurrency_limit_per_replica": (
-                    self.__service_concurrency_limits_per_replica[
-                        service.get_name()
-                    ]
+                    self.__service_concurrency_limits_per_replica[service.get_name()]
                 ),
                 "processing_slots_per_replica": (
-                    self.__service_processing_slots_per_replica[
-                        service.get_name()
-                    ]
+                    self.__service_processing_slots_per_replica[service.get_name()]
                 ),
+                "execution_model": self.__service_execution_models[service.get_name()],
                 "effective_processing_slots": (
                     service.get_replicas()
-                    * self.__service_processing_slots_per_replica[
-                        service.get_name()
-                    ]
+                    * self.__service_processing_slots_per_replica[service.get_name()]
                 ),
             }
             for service in self.get_services().values()
@@ -1097,8 +1103,7 @@ class System:
         """Return expected synchronous child calls per source service call."""
         return {
             request_class: {
-                source: dict(targets)
-                for source, targets in call_graph.items()
+                source: dict(targets) for source, targets in call_graph.items()
             }
             for request_class, call_graph in self.__request_class_call_graphs.items()
         }
@@ -1160,6 +1165,10 @@ class System:
             request_class: slo.to_dict()
             for request_class, slo in self.__request_class_latency_slos.items()
         }
+
+    def get_request_class_failure_rate_slos(self):
+        """Return terminal-failure-rate limits declared for simulation."""
+        return dict(self.__request_class_failure_rate_slos)
 
     def get_request_class_percentile_latency_slos(self):
         """Return declared simulation percentile SLOs by request class."""
@@ -1252,15 +1261,17 @@ class System:
         """Return effective processing servers contributed by one replica."""
         return dict(self.__service_processing_slots_per_replica)
 
+    def get_service_execution_models(self):
+        """Return the native execution semantics selected for each service."""
+        return dict(self.__service_execution_models)
+
     def get_effective_service_capacities(self):
         """Return total processing slots in service-ID order."""
         capacities = [0 for _ in range(len(self.get_services()))]
         for service in self.get_services().values():
             capacities[service.get_id()] = (
                 service.get_replicas()
-                * self.__service_processing_slots_per_replica[
-                    service.get_name()
-                ]
+                * self.__service_processing_slots_per_replica[service.get_name()]
             )
         return capacities
 
@@ -1377,9 +1388,9 @@ class System:
                 rate = float(effective_rates[service_id])
                 if rate <= 0.0:
                     continue
-                specification = self.__request_class_service_time_specs[
-                    request_class
-                ][service.get_name()]
+                specification = self.__request_class_service_time_specs[request_class][
+                    service.get_name()
+                ]
                 visits = rate / external_rate
                 queueing_latency += visits * (
                     specification.mean + queue_waits[service_id]

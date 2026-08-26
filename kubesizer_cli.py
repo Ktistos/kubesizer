@@ -22,6 +22,11 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 from calibration import CalibrationOptions
+from characterization import (
+    build_characterized_system_variants,
+    load_and_prepare_initial_sizing,
+    recommendation_initial_configuration,
+)
 from optimization import (
     NodePlacementProblem,
     OptimizationMode,
@@ -38,7 +43,7 @@ from statistical_workflow import (
 from runtime_estimation import estimate_workflow_runtime
 
 
-CLI_VERSION = "0.1.0"
+CLI_VERSION = "0.2.0"
 DEFAULT_MAXIMUM_REPLICAS = 10
 DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
 
@@ -100,6 +105,49 @@ def _load_system(
         ),
         path,
     )
+
+
+def _load_workflow_system(args):
+    """Load either a native workload or the portable evidence workflow."""
+    portable_paths = (args.deployment, args.measurements)
+    if any(portable_paths) and not all(portable_paths):
+        raise CliUsageError(
+            "--deployment and --measurements must be supplied together."
+        )
+    if not all(portable_paths):
+        system, workload_path = _load_system(args.workload)
+        return system, workload_path, None
+
+    workload_path = Path(args.workload).expanduser().resolve()
+    plan = load_and_prepare_initial_sizing(
+        args.deployment,
+        workload_path,
+        args.measurements,
+    )
+    variants = build_characterized_system_variants(
+        plan.inputs,
+        plan.characterization,
+    )
+    if len(variants) != 1:
+        names = [variant.name for variant, _system in variants]
+        raise CliUsageError(
+            "The measurements leave call ordering ambiguous and produce "
+            f"multiple simulation variants {names}. Declare call_execution "
+            "for every request class before optimization."
+        )
+    _variant, system = variants[0]
+    service_order = tuple(
+        service.get_name()
+        for service in sorted(
+            system.get_services().values(),
+            key=lambda item: item.get_id(),
+        )
+    )
+    initial_configuration = recommendation_initial_configuration(
+        plan.recommendation,
+        service_order,
+    )
+    return system, workload_path, initial_configuration
 
 
 def _resources_or_skip(
@@ -557,10 +605,7 @@ def _prepare_runtime_reporting(
     if evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         expected_stages.append("calibration")
     expected_stages.append("replica_sizing")
-    if (
-        evaluation_mode == ReplicaEvaluationMode.SIMULATION
-        and not args.skip_final_validation
-    ):
+    if evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         expected_stages.append("validation")
     if resources is not None:
         expected_stages.append("placement")
@@ -633,7 +678,12 @@ def _run_calibration(system, args):
     return result
 
 
-def _run_replica_workflow(system, args, replica_mode):
+def _run_replica_workflow(
+    system,
+    args,
+    replica_mode,
+    initial_configuration=None,
+):
     evaluation_mode = ReplicaEvaluationMode(args.replica_evaluation.upper())
     kind = system.get_request_class_latency_slo_kind()
     if kind == "percentile" and evaluation_mode != ReplicaEvaluationMode.SIMULATION:
@@ -663,6 +713,7 @@ def _run_replica_workflow(system, args, replica_mode):
             system,
             maximum_replicas=args.max_replicas,
             mode=replica_mode,
+            initial_configuration=initial_configuration,
             progress_callback=_progress_callback(args),
         )
         return result, None, None
@@ -673,23 +724,22 @@ def _run_replica_workflow(system, args, replica_mode):
         profile,
         workers=args.workers,
         mode=replica_mode,
+        initial_configuration=initial_configuration,
         progress_callback=_progress_callback(args),
     )
-    validation = None
-    if not getattr(args, "skip_final_validation", False):
-        validation = validate_final_configuration(
-            system,
-            result.configuration,
-            profile,
-            workers=args.workers,
-            progress_callback=_progress_callback(args),
-        )
-        _notify_progress(args, "final_validation_completed")
+    validation = validate_final_configuration(
+        system,
+        result.configuration,
+        profile,
+        workers=args.workers,
+        progress_callback=_progress_callback(args),
+    )
+    _notify_progress(args, "final_validation_completed")
     return result, profile, validation
 
 
 def _command_run(args):
-    system, _ = _load_system(args.workload)
+    system, _, initial_configuration = _load_workflow_system(args)
     if args.replica_evaluation == "simulation":
         compatibility_check = getattr(
             system,
@@ -715,6 +765,7 @@ def _command_run(args):
         system,
         args,
         replica_mode,
+        initial_configuration,
     )
     simulation_valid = validation is None or validation.passed
     if not simulation_valid:
@@ -768,6 +819,20 @@ def _add_workload_argument(parser):
         "--workload",
         default="workload.yaml",
         help="Workload YAML path (default: workload.yaml).",
+    )
+    parser.add_argument(
+        "--deployment",
+        help=(
+            "Kubernetes resource facts for a portable measurement workflow. "
+            "Requires --measurements."
+        ),
+    )
+    parser.add_argument(
+        "--measurements",
+        help=(
+            "Versioned measurement-manifest YAML. Requires --deployment; "
+            "arrival rates are derived from its evidence."
+        ),
     )
 
 
@@ -825,7 +890,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workload_argument(parser)
     parser.add_argument(
         "--resources",
-        help="Cluster resources YAML. Placement is skipped when omitted or unavailable.",
+        help=(
+            "Cluster resources YAML. Placement is skipped when omitted or "
+            "unavailable."
+        ),
     )
     parser.add_argument("--skip-placement", action="store_true")
     _add_calibration_arguments(parser)
@@ -838,7 +906,6 @@ def build_parser() -> argparse.ArgumentParser:
             "require simulation. Node placement is always analytical."
         ),
     )
-    parser.add_argument("--skip-final-validation", action="store_true")
     _add_full_search_arguments(parser)
     _add_output_arguments(parser)
     return parser

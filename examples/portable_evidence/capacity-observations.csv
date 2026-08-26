@@ -1,0 +1,10 @@
+run_id,service,replicas,offered_rate_rps,completed_rate_rps,error_rate,healthy,cpu_throttling_ratio
+api-c1-r1,api,1,35,34.8,0.000,true,0.010
+api-c1-r2,api,1,35,34.5,0.000,true,0.012
+api-c1-r3,api,1,35,34.7,0.000,true,0.011
+api-c2-r1,api,2,60,59.5,0.000,true,0.008
+api-c2-r2,api,2,60,59.1,0.000,true,0.009
+api-c2-r3,api,2,60,59.3,0.000,true,0.008
+database-c1-r1,database,1,40,39.6,0.000,true,0.005
+database-c1-r2,database,1,40,39.2,0.000,true,0.006
+database-c1-r3,database,1,40,39.4,0.000,true,0.005

@@ -145,6 +145,21 @@ class MultiStartReplicaVNSOptimizer(Optimizer):
         return tuple(method() if method is not None else problem.initial_state())
 
     @staticmethod
+    def _construction_start(problem, stable):
+        method = getattr(problem, "construction_start_configuration", None)
+        if method is None:
+            return stable
+        start = tuple(method())
+        if len(start) != len(stable) or any(
+            value < minimum for value, minimum in zip(start, stable)
+        ):
+            raise ValueError(
+                "The construction start must be componentwise at or above the "
+                "analytical stability vector."
+            )
+        return start
+
+    @staticmethod
     def _cost(problem, configuration):
         method = getattr(problem, "configuration_cost", None)
         if method is not None:
@@ -458,10 +473,13 @@ class MultiStartReplicaVNSOptimizer(Optimizer):
             cancellation_check=self.cancellation_check,
         )
         stable = self._stable(problem)
+        construction_start = self._construction_start(problem, stable)
         if not self._structural(problem, stable):
             raise NoFeasibleConfigurationError(
                 "The analytical stability vector violates structural constraints."
             )
+        if not self._structural(problem, construction_start):
+            construction_start = stable
         lower_bound = self._cost(problem, stable)
         trace = []
         current_journey = []
@@ -495,7 +513,12 @@ class MultiStartReplicaVNSOptimizer(Optimizer):
             restart_count = restart
             current_journey.clear()
             constructed = self._construct(
-                controller, problem, stable, rng, restart, record
+                controller,
+                problem,
+                construction_start,
+                rng,
+                restart,
+                record,
             )
             if constructed is None:
                 if controller.budget_exhausted:

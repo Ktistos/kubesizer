@@ -15,7 +15,13 @@ def make_system(gamma=1.0):
     )
 
 
-def make_profile(system, *, latency_slo_kind="percentile"):
+def make_profile(
+    system,
+    *,
+    latency_slo_kind="percentile",
+    failure_rate_slos=None,
+    replication_count=2,
+):
     options = CalibrationOptions(
         warmup_replications=2,
         warmup_validation_replications=2,
@@ -23,10 +29,10 @@ def make_profile(system, *, latency_slo_kind="percentile"):
         target_samples_per_class=2,
         minimum_eligible_samples_per_class=4,
         minimum_nonempty_replications_per_class=2,
-        minimum_optimization_replications=2,
-        maximum_optimization_replications=4,
+        minimum_optimization_replications=replication_count,
+        maximum_optimization_replications=max(4, replication_count),
         replication_batch_size=2,
-        final_validation_replications=2,
+        final_validation_replications=replication_count,
         bootstrap_resample_count=1_000,
     )
     minimum = tuple(system.get_minimum_stable_replicas())
@@ -44,6 +50,7 @@ def make_profile(system, *, latency_slo_kind="percentile"):
         options=options,
         creation_timestamp="2026-08-11T00:00:00+00:00",
         latency_slo_kind=latency_slo_kind,
+        request_class_failure_rate_slos=failure_rate_slos,
     )
 
 
@@ -64,6 +71,7 @@ class FakeFinalSystem:
             SimpleNamespace(
                 seed=seed,
                 request_class_latencies={"checkout": self.values},
+                request_class_failures={"checkout": tuple(False for _ in self.values)},
                 processed_event_count=10,
                 external_arrival_count=5,
                 completed_request_count=5,
@@ -102,6 +110,21 @@ def test_final_validation_uses_mean_interval_for_mean_slo_profile():
     assert result.intervals["checkout"].estimate == pytest.approx(0.3)
 
 
+def test_final_validation_requires_terminal_failure_rate_bound_too():
+    raw = make_system()
+    profile = make_profile(
+        raw,
+        failure_rate_slos={"checkout": 0.10},
+        replication_count=200,
+    )
+    system = FakeFinalSystem(raw, (0.5, 0.5))
+
+    result = validate_final_configuration(system, (1,), profile)
+
+    assert result.passed
+    assert 0.0 < result.failure_intervals["checkout"].upper_bound <= 0.10
+
+
 def test_final_validation_reports_fresh_replication_progress():
     raw = make_system()
     profile = make_profile(raw)
@@ -122,9 +145,7 @@ def test_final_validation_reports_fresh_replication_progress():
     assert events[-1][1]["completed_replications"] == len(
         profile.final_validation_seeds
     )
-    assert events[-1][1]["total_replications"] == len(
-        profile.final_validation_seeds
-    )
+    assert events[-1][1]["total_replications"] == len(profile.final_validation_seeds)
 
 
 def test_final_validation_failure_is_structured_and_not_reported_as_feasible():

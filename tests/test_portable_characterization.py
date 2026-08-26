@@ -1,0 +1,629 @@
+import copy
+from pathlib import Path
+
+import pytest
+import yaml
+
+from characterization import (
+    SizingPolicy,
+    build_characterized_system_variants,
+    build_simulation_workload_variants,
+    characterize_deployment,
+    load_and_prepare_initial_sizing,
+    load_portable_sizing_inputs,
+    measurement_methodology_contract,
+    parse_portable_sizing_inputs,
+    recommend_initial_replicas,
+    recommendation_initial_configuration,
+)
+from native_backend import get_native_backend
+from optimization import AnalyticalReplicaSizingProblem, ScalableReplicaOptimizer
+
+EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
+
+
+def _loaded_yaml(name):
+    with (EXAMPLE / name).open(encoding="utf-8") as stream:
+        return yaml.safe_load(stream)
+
+
+def _inputs():
+    return load_portable_sizing_inputs(
+        EXAMPLE / "deployment.yaml",
+        EXAMPLE / "workload.yaml",
+        EXAMPLE / "measurements.yaml",
+    )
+
+
+def test_portable_package_derives_rates_demands_edges_and_histograms():
+    inputs = _inputs()
+    result = characterize_deployment(inputs)
+
+    assert result.rate_source == "measured_workload"
+    assert result.observed_external_arrival_rate_rps == pytest.approx(20.0)
+    api = result.service_map["api"]
+    database = result.service_map["database"]
+    assert api.observed_replica_count == 2
+    assert database.observed_replica_count == 1
+    assert api.observed_arrival_rate_rps == pytest.approx(20.0)
+    assert api.workload_arrival_rate_rps == pytest.approx(20.0)
+    assert database.observed_arrival_rate_rps == pytest.approx(24.0)
+    assert database.workload_arrival_rate_rps == pytest.approx(24.0)
+    assert api.flow_balance_relative_error == pytest.approx(0.0)
+    assert database.flow_balance_relative_error == pytest.approx(0.0)
+    assert api.cpu_demand_window_means_seconds == pytest.approx(
+        (0.0080, 0.0082, 0.0084)
+    )
+    assert dict(api.outgoing_call_rates) == {"database": pytest.approx(24.0)}
+    assert dict(api.routing_probabilities) == {"database": pytest.approx(1.0)}
+    assert dict(api.visits_per_service_request) == {"database": pytest.approx(1.2)}
+    assert api.latency.mean_seconds == pytest.approx(774.0 / 18_000.0)
+    external = result.external_request_classes[0]
+    assert external.observed_arrival_rate_rps == pytest.approx(20.0)
+    assert external.error_rate_5xx == 0.0
+    assert external.latency.p95_seconds == pytest.approx(0.1)
+    assert api.observed_cpu_usage_cores_per_replica == pytest.approx(
+        (0.08, 0.082, 0.084)
+    )
+    assert api.maximum_memory_bytes_per_replica == 324009984
+    assert dict(result.capabilities)["aligned_cpu_demand_windows"] is True
+    assert dict(result.capabilities)["explicit_capacity_observations"] is False
+
+
+def test_measurement_contract_freezes_cross_cluster_counter_semantics():
+    contract = measurement_methodology_contract()
+
+    assert contract["version"] == "prometheus-istio-kubernetes-v1"
+    assert contract["service_requests"]["reporter"] == "destination"
+    assert contract["replica_join"]["keys"] == ["namespace", "pod"]
+    assert contract["cpu_capacity"]["source"] == (
+        "kubernetes_container_cpu_requests"
+    )
+    assert (
+        contract["derived_cpu_demand"]["per_request_distribution_identifiable"]
+        is False
+    )
+    assert contract["optional_capacity_envelope"]["sample_unit"] == (
+        "independent_fixed_replica_load_test_run"
+    )
+    assert "no automatic linear" in contract["optional_capacity_envelope"][
+        "replica_scaling"
+    ]
+
+
+def test_capacity_example_produces_detailed_bounded_evidence():
+    plan = load_and_prepare_initial_sizing(
+        EXAMPLE / "deployment.yaml",
+        EXAMPLE / "workload.yaml",
+        EXAMPLE / "measurements.with-capacity.yaml",
+    )
+
+    assert plan.recommendation.confidence == "DETAILED_TELEMETRY"
+    assert plan.recommendation.replicas == {"api": 1, "database": 1}
+    assert all(
+        service.empirical_capacity_evidence_replicas
+        for service in plan.recommendation.services
+    )
+
+
+def test_measurement_manifest_requires_the_supported_methodology():
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest.pop("methodology_version")
+    with pytest.raises(ValueError, match="missing.*methodology_version"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+    manifest["methodology_version"] = "cluster-specific-guess-v1"
+    with pytest.raises(ValueError, match="Unsupported measurement methodology"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+
+def test_workload_rejects_a_separate_arrival_rate_override():
+    workload = _loaded_yaml("workload.yaml")
+    workload["total_external_arrival_rate_rps"] = 40.0
+
+    with pytest.raises(ValueError, match="arrival rates come from the measurement"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            workload,
+            _loaded_yaml("measurements.yaml"),
+            base_path=EXAMPLE,
+        )
+
+def test_manifest_rejects_unobservable_per_request_cpu_samples():
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["service_demand_samples"] = "service-intervals.csv"
+
+    with pytest.raises(ValueError, match="unsupported fields"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+
+def test_measurement_namespace_must_match_the_declared_kubernetes_service():
+    deployment = _loaded_yaml("deployment.yaml")
+    deployment["services"]["api"]["namespace"] = "another-namespace"
+    inputs = parse_portable_sizing_inputs(
+        deployment,
+        _loaded_yaml("workload.yaml"),
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+
+    with pytest.raises(ValueError, match="namespace does not match"):
+        characterize_deployment(inputs)
+
+
+def test_measurement_infers_replicas_and_requires_a_fixed_observation(tmp_path):
+    source = (EXAMPLE / "service-intervals.csv").read_text(encoding="utf-8")
+    rows = source.splitlines()
+    changing_replicas = tmp_path / "changing-replicas.csv"
+    changing_replicas.write_text(
+        "\n".join(
+            row
+            for row in rows
+            if not (
+                row.startswith("2026-08-25T10:10:00Z,")
+                and ",api,example,api-b," in row
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["service_intervals"] = str(changing_replicas)
+    manifest.pop("service_class_intervals")
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+
+    with pytest.raises(ValueError, match="fixed-replica period"):
+        characterize_deployment(inputs)
+
+
+def test_service_counter_windows_must_be_unique_and_aligned(tmp_path):
+    source = (EXAMPLE / "service-intervals.csv").read_text(encoding="utf-8")
+    lines = source.splitlines()
+    duplicate = tmp_path / "duplicate.csv"
+    duplicate.write_text(source + lines[1] + "\n", encoding="utf-8")
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["service_intervals"] = str(duplicate)
+    with pytest.raises(ValueError, match="duplicate rows"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+    missing_window = tmp_path / "missing-window.csv"
+    missing_window.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    manifest["service_intervals"] = str(missing_window)
+    with pytest.raises(ValueError, match="same observation windows"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+
+def test_initial_sizing_uses_conservative_measured_cpu_bound():
+    inputs = _inputs()
+    characterization = characterize_deployment(inputs)
+    recommendation = recommend_initial_replicas(inputs, characterization)
+
+    assert recommendation.confidence == "TELEMETRY_INFORMED"
+    assert recommendation.replicas == {"api": 1, "database": 1}
+    api_recommendation = {item.service: item for item in recommendation.services}["api"]
+    assert api_recommendation.cpu_capacity_cores_per_replica == 0.5
+    assert api_recommendation.cpu_capacity_basis == "kubernetes_cpu_request"
+    database = {item.service: item for item in recommendation.services}["database"]
+    assert database.cpu_based_replicas == 1
+    assert database.empirical_capacity_based_replicas is None
+    assert database.limiting_factors == (
+        "one_replica_floor",
+        "cpu",
+    )
+    assert database.estimated_cpu_utilization < 0.65
+
+
+def _capacity_manifest(tmp_path, rows):
+    capacity = tmp_path / "capacity-observations.csv"
+    capacity.write_text(
+        "run_id,service,replicas,offered_rate_rps,completed_rate_rps,"
+        "error_rate,healthy,cpu_throttling_ratio\n"
+        + "\n".join(rows)
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["capacity_observations"] = str(capacity)
+    return manifest
+
+
+def test_empirical_capacity_envelope_is_bounded_by_observed_replica_count(
+    tmp_path,
+):
+    manifest = _capacity_manifest(
+        tmp_path,
+        (
+            "api-1-a,api,1,15,15,0,true,0",
+            "api-1-b,api,1,15,14.5,0,true,0",
+            "api-1-c,api,1,15,14,0,true,0",
+            "api-2-a,api,2,32,31,0,true,0",
+            "api-2-b,api,2,32,30,0,true,0",
+            "api-2-c,api,2,32,29,0,true,0",
+        ),
+    )
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+
+    characterization = characterize_deployment(inputs)
+    recommendation = recommend_initial_replicas(inputs, characterization)
+    api = {item.service: item for item in recommendation.services}["api"]
+
+    assert tuple(
+        point.replicas
+        for point in characterization.service_map["api"].capacity_envelope
+    ) == (1, 2)
+    assert api.empirical_capacity_based_replicas == 2
+    assert api.empirical_capacity_evidence_replicas == (1, 2)
+    assert api.empirical_capacity_extrapolated is False
+
+
+def test_empirical_capacity_does_not_extrapolate_linearly(tmp_path):
+    manifest = _capacity_manifest(
+        tmp_path,
+        (
+            "api-1-a,api,1,10,10,0,true,0",
+            "api-1-b,api,1,10,10,0,true,0",
+            "api-1-c,api,1,10,10,0,true,0",
+        ),
+    )
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+
+    recommendation = recommend_initial_replicas(
+        inputs,
+        characterize_deployment(inputs),
+    )
+    api = {item.service: item for item in recommendation.services}["api"]
+
+    assert api.empirical_capacity_based_replicas is None
+    assert api.empirical_capacity_extrapolated is True
+    assert any("no linear replica extrapolation" in item for item in api.warnings)
+
+
+def test_unhealthy_capacity_run_blocks_conflicting_replica_count(tmp_path):
+    manifest = _capacity_manifest(
+        tmp_path,
+        (
+            "api-2-a,api,2,32,31,0,true,0",
+            "api-2-b,api,2,32,30,0,true,0",
+            "api-2-c,api,2,32,29,0,true,0",
+            "api-2-failure,api,2,18,17,0.05,false,0",
+            "api-3-a,api,3,40,39,0,true,0",
+            "api-3-b,api,3,40,38,0,true,0",
+            "api-3-c,api,3,40,37,0,true,0",
+        ),
+    )
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+
+    recommendation = recommend_initial_replicas(
+        inputs,
+        characterize_deployment(inputs),
+    )
+    api = {item.service: item for item in recommendation.services}["api"]
+
+    assert api.empirical_capacity_based_replicas == 3
+
+
+def test_capacity_run_ids_must_be_unique_per_service_and_replica(tmp_path):
+    manifest = _capacity_manifest(
+        tmp_path,
+        (
+            "same,api,1,10,10,0,true,0",
+            "same,api,1,11,11,0,true,0",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="duplicate.*run_id"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+
+def test_cpu_demand_is_derived_from_time_aligned_cpu_and_request_counters():
+    manifest = _loaded_yaml("measurements.yaml")
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+
+    characterization = characterize_deployment(inputs)
+
+    assert characterization.service_map[
+        "api"
+    ].cpu_demand_window_means_seconds == pytest.approx((0.0080, 0.0082, 0.0084))
+    assert characterization.service_map[
+        "database"
+    ].cpu_demand_window_means_seconds == pytest.approx(
+        (28.1 / 7200, 28.8 / 7200, 30.2 / 7200)
+    )
+    variants = build_simulation_workload_variants(inputs, characterization)
+    assert "aligned U/X windows" in " ".join(variants[0].assumptions)
+
+
+def test_optional_evidence_can_be_omitted_without_blocking_initial_sizing():
+    manifest = {
+        "measurement_id": "minimal-observation",
+        "methodology_version": "prometheus-istio-kubernetes-v1",
+        "service_intervals": "service-intervals.csv",
+    }
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+
+    characterization = characterize_deployment(inputs)
+    recommendation = recommend_initial_replicas(inputs, characterization)
+
+    assert recommendation.confidence == "TELEMETRY_INFORMED"
+    assert recommendation.replicas == {"api": 1, "database": 1}
+    assert dict(characterization.capabilities)["service_edges"] is False
+    assert (
+        dict(characterization.capabilities)["explicit_capacity_observations"] is False
+    )
+
+
+def test_sizing_is_idempotent_and_workload_semantics_change_the_fingerprint():
+    first = load_and_prepare_initial_sizing(
+        EXAMPLE / "deployment.yaml",
+        EXAMPLE / "workload.yaml",
+        EXAMPLE / "measurements.yaml",
+    )
+    second = load_and_prepare_initial_sizing(
+        EXAMPLE / "deployment.yaml",
+        EXAMPLE / "workload.yaml",
+        EXAMPLE / "measurements.yaml",
+    )
+    assert first == second
+
+    target = _loaded_yaml("workload.yaml")
+    target["request_classes"]["browse"]["fixed_latency_overhead_seconds"] = 0.01
+    changed = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        target,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+    assert changed.fingerprint != first.inputs.fingerprint
+    assert characterize_deployment(changed).rate_source == "measured_workload"
+
+
+def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
+    target = _loaded_yaml("workload.yaml")
+    target["request_classes"]["browse"].pop("calls")
+    target["request_classes"]["browse"].pop("call_execution")
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        target,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+
+    result = characterize_deployment(inputs)
+
+    assert result.rate_source == "measured_workload"
+    assert result.service_map["api"].workload_arrival_rate_rps == pytest.approx(20)
+    assert result.service_map["database"].workload_arrival_rate_rps == pytest.approx(
+        24
+    )
+
+
+def test_recommendation_is_a_search_start_not_a_mandatory_replica_floor():
+    plan = load_and_prepare_initial_sizing(
+        EXAMPLE / "deployment.yaml",
+        EXAMPLE / "workload.yaml",
+        EXAMPLE / "measurements.yaml",
+    )
+    initial = recommendation_initial_configuration(
+        plan.recommendation,
+        ("api", "database"),
+    )
+    ((_, system),) = build_characterized_system_variants(
+        plan.inputs,
+        plan.characterization,
+    )
+    problem = AnalyticalReplicaSizingProblem(
+        system,
+        {},
+        max_replicas=(3, 3),
+        initial_configuration=initial,
+    )
+    result = ScalableReplicaOptimizer(
+        maximum_configuration_evaluations=20,
+        maximum_restarts=1,
+        random_seed=7,
+        collect_trace=True,
+    ).optimize(problem)
+
+    assert initial == (1, 1)
+    assert result.trace[0].configuration == initial
+    assert result.configuration == (1, 1)
+    assert plan.recommendation.method == "CONSERVATIVE_MULTI_BOUND_INITIAL_SIZING"
+
+
+def test_simulation_builder_uses_safe_aligned_demand_and_declared_call_semantics():
+    inputs = _inputs()
+    characterization = characterize_deployment(inputs)
+    variants = build_simulation_workload_variants(inputs, characterization)
+
+    assert [variant.name for variant in variants] == ["declared"]
+    workload = variants[0].workload
+    assert workload["request_classes"]["browse"]["call_execution"] == "sequential"
+    assert workload["request_classes"]["browse"]["calls"] == {"api": {"database": 1.2}}
+    api_distribution = workload["traffic_model"]["service_times"]["api"]
+    assert api_distribution["distribution"] == "deterministic"
+    assert api_distribution["mean"] == pytest.approx(0.00836 / 0.5)
+    assert (
+        workload["traffic_model"]["service_times"]["api"]["execution_model"]
+        == "processor_sharing"
+    )
+    arrival = workload["traffic_model"]["entry_services"]["browse"]["api"]
+    assert arrival["distribution"] == "empirical_interarrival"
+    assert sum(arrival["samples"]) / len(arrival["samples"]) == pytest.approx(
+        1.0 / 20.0
+    )
+
+
+def test_characterized_system_executes_in_mandatory_native_backend():
+    inputs = _inputs()
+    characterization = characterize_deployment(inputs)
+    recommendation = recommend_initial_replicas(inputs, characterization)
+    ((variant, system),) = build_characterized_system_variants(
+        inputs,
+        characterization,
+        recommendation=recommendation,
+    )
+
+    assert variant.name == "declared"
+    payload = get_native_backend().serialize_system(system)
+    assert [item["replicas"] for item in payload["services"]] == [1, 1]
+    assert all(
+        item["execution_model"] == "processor_sharing" for item in payload["services"]
+    )
+    replication = system.simulate_measurement_replications(
+        warmup_duration=0.1,
+        measurement_duration=0.2,
+        seeds=(101,),
+        workers=1,
+        maximum_drain_time=2.0,
+    )[0]
+    assert replication.measured_request_counts["browse"] >= 0
+    assert replication.tagged_requests_in_flight_at_end == 0
+
+
+def test_inferred_edge_ordering_returns_explicit_sequential_and_parallel_variants():
+    target = _loaded_yaml("workload.yaml")
+    target["request_classes"]["browse"].pop("calls")
+    target["request_classes"]["browse"].pop("call_execution")
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        target,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+    characterization = characterize_deployment(inputs)
+
+    variants = build_simulation_workload_variants(inputs, characterization)
+
+    assert [variant.name for variant in variants] == [
+        "browse-sequential",
+        "browse-parallel",
+    ]
+    assert {
+        variant.workload["request_classes"]["browse"]["call_execution"]
+        for variant in variants
+    } == {"sequential", "parallel"}
+
+
+def test_ambiguity_variant_budget_fails_instead_of_sampling_semantics():
+    target = _loaded_yaml("workload.yaml")
+    target["request_classes"]["browse"]["call_execution"] = "uncertain"
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        target,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+    characterization = characterize_deployment(inputs)
+
+    with pytest.raises(ValueError, match="2 ambiguity variants"):
+        build_simulation_workload_variants(
+            inputs,
+            characterization,
+            maximum_ambiguity_variants=1,
+        )
+
+
+def test_invalid_histogram_and_missing_simulation_rate_fail_clearly(tmp_path):
+    histogram = tmp_path / "hist.csv"
+    histogram.write_text(
+        "start,end,service,upper_bound_seconds,cumulative_count\n"
+        "0,10,api,0.1,10\n"
+        "0,10,api,0.2,9\n",
+        encoding="utf-8",
+    )
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["service_latency_histograms"] = str(histogram)
+    with pytest.raises(ValueError, match="cumulative counts decrease"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+    target = copy.deepcopy(_loaded_yaml("workload.yaml"))
+    target["request_classes"]["browse"].pop("calls")
+    target["request_classes"]["browse"].pop("call_execution")
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest.pop("service_edges")
+    manifest.pop("external_intervals")
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        target,
+        manifest,
+        base_path=EXAMPLE,
+    )
+    characterization = characterize_deployment(inputs)
+    with pytest.raises(ValueError, match="positive measured external arrival rate"):
+        build_simulation_workload_variants(inputs, characterization)
+
+
+def test_policy_validation_rejects_an_optimistic_invalid_threshold():
+    inputs = _inputs()
+    characterization = characterize_deployment(inputs)
+    with pytest.raises(ValueError, match="target_cpu_utilization"):
+        recommend_initial_replicas(
+            inputs,
+            characterization,
+            policy=SizingPolicy(target_cpu_utilization=1.0),
+        )

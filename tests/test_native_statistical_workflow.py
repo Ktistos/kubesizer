@@ -125,3 +125,44 @@ def test_native_timeout_outcomes_make_mean_slo_evaluation_infeasible():
     assert dict(evaluation.simulation_diagnostics)[
         "failed_measured_request_count"
     ] > 0
+
+
+def test_native_warmup_buckets_advance_across_decimal_boundaries():
+    workload = {
+        "request_classes": {
+            "request": {
+                "concurrency_weight": 1.0,
+                "calls": {"front": {"worker": 1.0}},
+                "call_execution": "sequential",
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {
+                    "front": {"distribution": "exponential", "rate": 24.0}
+                }
+            },
+            "service_times": {
+                "front": {
+                    "processing_slots_per_replica": 16,
+                    "concurrency_limit_per_replica": 16,
+                    "distribution": "exponential",
+                    "rate": 333.3333333333333,
+                },
+                "worker": {
+                    "distribution": "exponential",
+                    "rate": 55.55555555555556,
+                },
+            },
+        },
+    }
+    system = System("decimal-warmup-buckets", workload, QueueingNetworkType.OPEN)
+
+    ensemble = system.run_warmup_ensemble(
+        seeds=(1,),
+        horizon=5.0,
+        bucket_width=0.09,
+        workers=1,
+    )
+
+    assert len(ensemble.active_requests) == 55

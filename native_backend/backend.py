@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 SIMULATOR_SEMANTICS_VERSION = (
-    "native-event-kernel-synchronous-calls-dual-resources-deadlines-v7"
+    "native-event-kernel-synchronous-calls-dual-resources-deadlines-cpu-ps-v8"
 )
 
 
@@ -188,9 +188,7 @@ class CppSimulationBackend:
         concurrency_weights = system.get_request_class_concurrency_weights()
         arrival_specs = system.get_external_arrival_distribution_specs()
         service_specs = system.get_service_time_distribution_specs()
-        class_service_specs = (
-            system.get_request_class_service_time_distribution_specs()
-        )
+        class_service_specs = system.get_request_class_service_time_distribution_specs()
         workflows = system.get_request_class_workflows()
         call_graphs = system.get_request_class_call_graphs()
         call_execution_modes = system.get_request_class_call_execution_modes()
@@ -198,6 +196,7 @@ class CppSimulationBackend:
         timeouts = system.get_request_class_end_to_end_timeouts()
         concurrency_limits = system.get_service_concurrency_limits_per_replica()
         processing_slots = system.get_service_processing_slots_per_replica()
+        execution_models = system.get_service_execution_models()
         for request_class in system.get_request_classes():
             routing = []
             for service in services:
@@ -218,11 +217,7 @@ class CppSimulationBackend:
                     "flow_kind": (
                         "workflow"
                         if request_class in workflows
-                        else (
-                            "calls"
-                            if request_class in call_graphs
-                            else "routing"
-                        )
+                        else ("calls" if request_class in call_graphs else "routing")
                     ),
                     "routing": routing,
                     "workflow": [
@@ -278,14 +273,13 @@ class CppSimulationBackend:
             "services": [
                 {
                     "name": service.get_name(),
+                    "execution_model": execution_models[service.get_name()],
                     "replicas": service.get_replicas(),
                     "capacity": (
-                        service.get_replicas()
-                        * processing_slots[service.get_name()]
+                        service.get_replicas() * processing_slots[service.get_name()]
                     ),
                     "concurrency_capacity": (
-                        service.get_replicas()
-                        * concurrency_limits[service.get_name()]
+                        service.get_replicas() * concurrency_limits[service.get_name()]
                     ),
                     "service_time_distributions": [
                         _serialize_distribution(
@@ -590,9 +584,7 @@ class CppSimulationBackend:
                     key: tuple(bool(value) for value in values)
                     for key, values in raw_failures.items()
                 }
-                effective_capacities = tuple(
-                    system.get_effective_service_capacities()
-                )
+                effective_capacities = tuple(system.get_effective_service_capacities())
                 if (
                     set(measured) != expected_classes
                     or set(completed_measured) != expected_classes

@@ -1,0 +1,10 @@
+start,end,service,namespace,pod,request_count,cpu_seconds,errors_4xx,errors_5xx,throttled_seconds,memory_bytes,mean_active_requests,max_active_requests,response_duration_sum_seconds
+2026-08-25T10:00:00Z,2026-08-25T10:05:00Z,api,example,api-a,3000,23.4,0,0,0.1,314572800,0.58,3,126.0
+2026-08-25T10:00:00Z,2026-08-25T10:05:00Z,api,example,api-b,3000,24.6,0,0,0.1,319815680,0.62,3,129.0
+2026-08-25T10:05:00Z,2026-08-25T10:10:00Z,api,example,api-a,3000,24.0,0,0,0.1,316669952,0.60,3,127.5
+2026-08-25T10:05:00Z,2026-08-25T10:10:00Z,api,example,api-b,3000,25.2,0,0,0.1,321912832,0.64,4,130.5
+2026-08-25T10:10:00Z,2026-08-25T10:15:00Z,api,example,api-a,3000,24.6,0,0,0.1,318767104,0.63,4,129.0
+2026-08-25T10:10:00Z,2026-08-25T10:15:00Z,api,example,api-b,3000,25.8,0,0,0.1,324009984,0.66,4,132.0
+2026-08-25T10:00:00Z,2026-08-25T10:05:00Z,database,example,database-a,7200,28.1,0,0,0.0,805306368,1.15,4,180.0
+2026-08-25T10:05:00Z,2026-08-25T10:10:00Z,database,example,database-a,7200,28.8,0,0,0.0,811597824,1.20,4,183.6
+2026-08-25T10:10:00Z,2026-08-25T10:15:00Z,database,example,database-a,7200,30.2,0,0,0.0,817889280,1.24,4,187.2

@@ -234,7 +234,9 @@ def test_simulation_cli_preflight_estimates_selected_modes_and_skipped_placement
     observed = {}
     stages = tuple(
         StageRuntimeEstimate(name, 1.0, 2.0, "ordinary", "ceiling")
-        for name in kubesizer_cli._ConciseProgressReporter._STAGE_ESTIMATE_NAMES.values()
+        for name in (
+            kubesizer_cli._ConciseProgressReporter._STAGE_ESTIMATE_NAMES.values()
+        )
     )
     estimate = SimpleNamespace(
         stages=stages,
@@ -436,11 +438,12 @@ def test_failed_final_validation_does_not_emit_a_recommendation(
     assert "failed final validation" in output["error"]["message"]
 
 
-def test_explicit_skip_works_for_simulation_workflow(monkeypatch):
+def test_simulation_workflow_always_runs_internal_final_validation(monkeypatch):
     system = _fake_system(slo_kind="percentile")
     profile = SimpleNamespace(to_dict=lambda: {"profile": "test"})
     validation = SimpleNamespace(passed=True)
     result = _fake_replica_result()
+    observed = {}
     arguments = SimpleNamespace(
         replica_evaluation="simulation",
         max_replicas=10,
@@ -448,11 +451,11 @@ def test_explicit_skip_works_for_simulation_workflow(monkeypatch):
         skip_final_validation=False,
     )
     monkeypatch.setattr(kubesizer_cli, "_run_calibration", lambda *args: profile)
-    monkeypatch.setattr(
-        kubesizer_cli,
-        "optimize_with_calibrated_simulation",
-        lambda *args, **kwargs: result,
-    )
+    def optimize(*args, **kwargs):
+        observed["initial_configuration"] = kwargs["initial_configuration"]
+        return result
+
+    monkeypatch.setattr(kubesizer_cli, "optimize_with_calibrated_simulation", optimize)
     monkeypatch.setattr(
         kubesizer_cli,
         "validate_final_configuration",
@@ -469,12 +472,14 @@ def test_explicit_skip_works_for_simulation_workflow(monkeypatch):
             system,
             arguments,
             kubesizer_cli.OptimizationMode.SCALABLE,
+            (2,),
         )
     )
 
     assert selected is result
     assert selected_profile is profile
     assert selected_validation is validation
+    assert observed["initial_configuration"] == (2,)
 
 
 @pytest.mark.parametrize(
@@ -568,6 +573,7 @@ def test_each_search_flag_accepts_all_supported_modes(mode):
         ("--evaluation", "analytical"),
         ("--search-mode", "hybrid"),
         ("--placement-evaluation", "simulation"),
+        ("--skip-final-validation",),
     ),
 )
 def test_ambiguous_or_unsupported_mode_flags_are_rejected(obsolete_arguments):
@@ -596,6 +602,114 @@ def test_run_creates_no_files_without_out(tmp_path, capsys, monkeypatch):
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
     assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_portable_measurements_run_end_to_end_to_service_recommendations(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = kubesizer_cli.main(
+        [
+            "--workload",
+            str(evidence / "workload.yaml"),
+            "--deployment",
+            str(evidence / "deployment.yaml"),
+            "--measurements",
+            str(evidence / "measurements.yaml"),
+            "--replica-evaluation",
+            "analytical",
+            "--replica-search",
+            "exact",
+            "--max-replicas",
+            "4",
+            "--skip-placement",
+            "--json",
+            "--quiet",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert output["result"] == {
+        "services": {
+            "api": {
+                "recommended_replicas": 1,
+                "node_placement": None,
+            },
+            "database": {
+                "recommended_replicas": 1,
+                "node_placement": None,
+            },
+        }
+    }
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_portable_measurements_seed_the_internal_simulation_optimizer(
+    capsys,
+    monkeypatch,
+):
+    evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
+    observed = {}
+
+    def run_replica_workflow(system, args, mode, initial_configuration):
+        observed["request_classes"] = tuple(system.get_request_classes())
+        observed["initial_configuration"] = initial_configuration
+        return (
+            SimpleNamespace(configuration=(1, 1)),
+            object(),
+            SimpleNamespace(passed=True),
+        )
+
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "_run_replica_workflow",
+        run_replica_workflow,
+    )
+
+    exit_code = kubesizer_cli.main(
+        [
+            "--workload",
+            str(evidence / "workload.yaml"),
+            "--deployment",
+            str(evidence / "deployment.yaml"),
+            "--measurements",
+            str(evidence / "measurements.yaml"),
+            "--replica-evaluation",
+            "simulation",
+            "--skip-placement",
+            "--json",
+            "--quiet",
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert observed == {
+        "request_classes": ("browse",),
+        "initial_configuration": (1, 1),
+    }
+
+
+def test_portable_measurement_arguments_must_be_supplied_together(capsys):
+    exit_code = kubesizer_cli.main(
+        [
+            "--workload",
+            "unused.yaml",
+            "--deployment",
+            "deployment.yaml",
+            "--json",
+            "--quiet",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert "must be supplied together" in output["error"]["message"]
 
 
 def test_out_is_the_only_explicit_result_write(tmp_path, capsys):

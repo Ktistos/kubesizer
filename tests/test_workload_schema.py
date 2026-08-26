@@ -30,13 +30,9 @@ def test_single_model_workload_has_no_schema_metadata_or_redundant_name():
         },
         "traffic_model": {
             "entry_services": {
-                "request": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                }
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
 
@@ -65,13 +61,9 @@ def test_request_class_end_to_end_timeout_is_optional_validated_and_fingerprinte
         },
         "traffic_model": {
             "entry_services": {
-                "request": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                }
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
     parsed = parse_workload_spec(workload)
@@ -94,6 +86,49 @@ def test_request_class_end_to_end_timeout_is_optional_validated_and_fingerprinte
         parse_workload_spec(invalid)
 
 
+def test_terminal_failure_rate_slo_requires_a_deadline_and_is_fingerprinted():
+    workload = {
+        "request_classes": {
+            "request": {
+                "concurrency_weight": 1.0,
+                "end_to_end_latency_slos": _percentile_slo(p95_seconds=1.0),
+                "end_to_end_timeout_seconds": 2.0,
+                "maximum_terminal_failure_rate": 0.05,
+                "routing": {},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
+            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
+        },
+    }
+    parsed = parse_workload_spec(workload)
+    system = System("failure-slo", workload, QueueingNetworkType.OPEN)
+    _, original = experiment_fingerprints(system)
+
+    assert parsed.request_class_failure_rate_slos == {"request": 0.05}
+    assert system.get_request_class_failure_rate_slos() == {"request": 0.05}
+
+    changed = copy.deepcopy(workload)
+    changed["request_classes"]["request"]["maximum_terminal_failure_rate"] = 0.10
+    _, changed_fingerprint = experiment_fingerprints(
+        System("failure-slo", changed, QueueingNetworkType.OPEN)
+    )
+    assert changed_fingerprint != original
+
+    missing_deadline = copy.deepcopy(workload)
+    del missing_deadline["request_classes"]["request"]["end_to_end_timeout_seconds"]
+    with pytest.raises(ValueError, match="no positive end_to_end_timeout_seconds"):
+        parse_workload_spec(missing_deadline)
+
+    invalid = copy.deepcopy(workload)
+    invalid["request_classes"]["request"]["maximum_terminal_failure_rate"] = 1.0
+    with pytest.raises(ValueError, match="less than one"):
+        parse_workload_spec(invalid)
+
+
 def test_single_model_workload_requires_explicit_concurrency_weights():
     workload = {
         "request_classes": {
@@ -104,13 +139,9 @@ def test_single_model_workload_requires_explicit_concurrency_weights():
         },
         "traffic_model": {
             "entry_services": {
-                "request": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                }
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
 
@@ -120,18 +151,12 @@ def test_single_model_workload_requires_explicit_concurrency_weights():
 
 def test_single_model_workload_allows_omitting_latency_slos():
     workload = {
-        "request_classes": {
-            "request": {"concurrency_weight": 1.0, "routing": {}}
-        },
+        "request_classes": {"request": {"concurrency_weight": 1.0, "routing": {}}},
         "traffic_model": {
             "entry_services": {
-                "request": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                }
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
 
@@ -170,13 +195,9 @@ def test_single_model_workload_rejects_invalid_latency_slos(slos, message):
         },
         "traffic_model": {
             "entry_services": {
-                "request": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                }
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
 
@@ -195,13 +216,9 @@ def test_system_rejects_request_for_undeclared_percentile():
         },
         "traffic_model": {
             "entry_services": {
-                "request": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                }
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
     system = System("percentile-mismatch", workload, QueueingNetworkType.OPEN)
@@ -224,13 +241,9 @@ def test_latency_slo_changes_alter_the_workload_fingerprint():
         },
         "traffic_model": {
             "entry_services": {
-                "request": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                }
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
     changed = copy.deepcopy(workload)
@@ -267,9 +280,7 @@ def test_only_request_classes_with_slos_are_constrained():
                 name: {"api": {"distribution": "exponential", "rate": 1.0}}
                 for name in ("required", "unconstrained")
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
 
@@ -297,9 +308,7 @@ def test_workload_rejects_mixed_mean_and_percentile_slo_kinds():
                 name: {"api": {"distribution": "exponential", "rate": 1.0}}
                 for name in ("mean_class", "percentile_class")
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
 
@@ -350,16 +359,10 @@ def test_workload_applies_explicit_request_class_concurrency_weights():
         },
         "traffic_model": {
             "entry_services": {
-                "read": {
-                    "api": {"distribution": "exponential", "rate": 8.0}
-                },
-                "write": {
-                    "api": {"distribution": "exponential", "rate": 2.0}
-                },
+                "read": {"api": {"distribution": "exponential", "rate": 8.0}},
+                "write": {"api": {"distribution": "exponential", "rate": 2.0}},
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 100.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 100.0}},
         },
     }
 
@@ -407,14 +410,10 @@ def test_workload_rejects_invalid_concurrency_weights(
         "request_classes": request_classes,
         "traffic_model": {
             "entry_services": {
-                name: {
-                    "api": {"distribution": "exponential", "rate": 1.0}
-                }
+                name: {"api": {"distribution": "exponential", "rate": 1.0}}
                 for name in request_classes
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 10.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
         },
     }
 
@@ -432,9 +431,7 @@ def test_workload_requires_every_request_class_entry_stream():
             "entry_services": {
                 "read": {"api": {"distribution": "exponential", "rate": 6.0}}
             },
-            "service_times": {
-                "api": {"distribution": "exponential", "rate": 100.0}
-            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 100.0}},
         },
     }
 

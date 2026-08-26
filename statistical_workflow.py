@@ -439,6 +439,7 @@ def calibrate(
         latency_slo_kind=latency_slo_kind,
     )
 
+
 def evaluate_configuration(
     system,
     configuration,
@@ -473,6 +474,7 @@ def optimize_with_calibrated_simulation(
     exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     scalable_options=None,
     runtime_limit_calibration=None,
+    initial_configuration=None,
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
@@ -484,6 +486,8 @@ def optimize_with_calibrated_simulation(
     AUTO uses the full bounded configuration count, not service count alone.
     Both modes accept only statistically feasible configurations; scalable
     mode changes search coverage, never the confidence-interval procedure.
+    ``initial_configuration`` seeds scalable construction without becoming a
+    hard replica floor.
     """
     if predictive_validation is None:
         if require_predictive_validation:
@@ -529,6 +533,7 @@ def optimize_with_calibrated_simulation(
     problem = CalibratedReplicaSizingProblem(
         system,
         calibration_profile,
+        initial_configuration=initial_configuration,
         heuristic=heuristic,
         simulation_workers=workers,
         replica_costs=replica_costs,
@@ -640,6 +645,7 @@ def optimize_with_analytical_model(
     mode=OptimizationMode.AUTO,
     exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     scalable_options=None,
+    initial_configuration=None,
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
@@ -650,6 +656,7 @@ def optimize_with_analytical_model(
     model. SCALABLE (also accepted as APPROXIMATE) is a budgeted heuristic.
     With no declared mean SLO, the stable vector is the capacity target. Neither
     mode estimates p95 latency or provides statistical SLO evidence.
+    ``initial_configuration`` seeds scalable construction only.
     """
     declared_kind = _declared_latency_slo_kind(system)
     declared_timeouts = getattr(
@@ -680,6 +687,7 @@ def optimize_with_analytical_model(
         system,
         request_class_mean_latency_limits,
         maximum_replicas,
+        initial_configuration=initial_configuration,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
@@ -709,6 +717,7 @@ def optimize_replica_sizing(
     exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     scalable_options=None,
     runtime_limit_calibration=None,
+    initial_configuration=None,
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
@@ -741,6 +750,7 @@ def optimize_replica_sizing(
             mode=mode,
             exact_configuration_limit=exact_configuration_limit,
             scalable_options=scalable_options,
+            initial_configuration=initial_configuration,
             replica_costs=replica_costs,
             structural_feasibility=structural_feasibility,
             progress_callback=progress_callback,
@@ -772,6 +782,7 @@ def optimize_replica_sizing(
         exact_configuration_limit=exact_configuration_limit,
         scalable_options=scalable_options,
         runtime_limit_calibration=runtime_limit_calibration,
+        initial_configuration=initial_configuration,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,

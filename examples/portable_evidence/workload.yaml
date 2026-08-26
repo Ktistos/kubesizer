@@ -1,0 +1,11 @@
+request_classes:
+  browse:
+    concurrency_weight: 1.0
+    entry_services:
+      api: 1.0
+    calls:
+      api:
+        database: 1.2
+    call_execution: sequential
+    end_to_end_latency_slos:
+      mean_seconds: 0.25

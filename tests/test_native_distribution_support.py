@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from native_backend import get_native_backend
+from metrics import SimulationMetricsCollector
 from performance_models import QueueingNetworkType, System
 
 
@@ -13,9 +14,7 @@ MAXIMUM_WORKLOAD = ROOT / "workload.maximum.yaml"
 
 def _single_service_workload(arrival, service):
     return {
-        "request_classes": {
-            "request": {"concurrency_weight": 1.0, "routing": {}}
-        },
+        "request_classes": {"request": {"concurrency_weight": 1.0, "routing": {}}},
         "traffic_model": {
             "entry_services": {"request": {"service": arrival}},
             "service_times": {"service": service},
@@ -75,9 +74,7 @@ def test_serializer_embeds_empirical_samples_instead_of_csv_paths(tmp_path):
 
     serialized = get_native_backend().serialize_system(system)
 
-    service_distribution = serialized["services"][0][
-        "service_time_distributions"
-    ][0]
+    service_distribution = serialized["services"][0]["service_time_distributions"][0]
     arrival_distribution = serialized["external_streams"][0][
         "interarrival_distribution"
     ]
@@ -110,3 +107,95 @@ def test_declared_distribution_model_runs_reproducibly():
 
     assert first == second
     assert first[0].tagged_requests_in_flight_at_end == 0
+
+
+def _two_class_cpu_workload(execution_model):
+    return {
+        "request_classes": {
+            name: {"concurrency_weight": 0.5, "routing": {}}
+            for name in ("left", "right")
+        },
+        "traffic_model": {
+            "entry_services": {
+                name: {"service": {"distribution": "deterministic", "rate": 0.4}}
+                for name in ("left", "right")
+            },
+            "service_times": {
+                "service": {
+                    "execution_model": execution_model,
+                    "distribution": "deterministic",
+                    "mean": 1.0,
+                }
+            },
+        },
+    }
+
+
+def test_processor_sharing_recalculates_progress_when_concurrency_changes():
+    system = System(
+        "cpu-sharing",
+        _two_class_cpu_workload("processor_sharing"),
+        QueueingNetworkType.OPEN,
+    )
+
+    result = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=3.0,
+        seeds=(91,),
+    )[0]
+
+    assert result.measured_request_counts == {"left": 1, "right": 1}
+    assert result.request_class_latencies["left"] == pytest.approx((2.0,))
+    assert result.request_class_latencies["right"] == pytest.approx((2.0,))
+    assert result.queue_lengths_at_end == (0,)
+
+
+def test_processor_sharing_scales_with_replica_cpu_capacity():
+    system = System(
+        "cpu-sharing",
+        _two_class_cpu_workload("processor_sharing"),
+        QueueingNetworkType.OPEN,
+    )
+    system.configure_system_replicas((2,))
+
+    result = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=3.0,
+        seeds=(91,),
+    )[0]
+
+    assert result.request_class_latencies["left"] == pytest.approx((1.0,))
+    assert result.request_class_latencies["right"] == pytest.approx((1.0,))
+
+
+def test_processor_sharing_state_conserves_service_population():
+    system = System(
+        "cpu-sharing-state",
+        _two_class_cpu_workload("processor_sharing"),
+        QueueingNetworkType.OPEN,
+    )
+    collector = SimulationMetricsCollector(1)
+
+    system.simulate(4.75, metrics_collector=collector, seed=91)
+
+    assert collector.get_queue_history()[0] == (
+        (0.0, 0),
+        (2.5, 1),
+        (4.5, 0),
+    )
+    assert collector.get_busy_history()[0] == (
+        (0.0, 0),
+        (2.5, 1),
+        (4.5, 0),
+    )
+    assert collector.get_active_history() == (
+        (0.0, 0),
+        (2.5, 2),
+        (4.5, 0),
+    )
+
+    mid_run = SimulationMetricsCollector(1)
+    system.simulate(3.0, metrics_collector=mid_run, seed=91)
+    assert mid_run.get_queue_length(0) == 1
+    assert mid_run.get_busy_replicas(0) == 1
+    assert mid_run.get_number_in_system(0) == 2

@@ -5,9 +5,11 @@ from calibration import validate_profile_for_experiment
 
 from metrics import (
     ClusterBootstrapP95Interval,
+    IndependentReplicationRateInterval,
     fixed_experiment_tail_alpha,
     replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
+    independent_replication_rate_interval,
     ReliabilityStatus,
     RequestClassP95Reliability,
     evaluate_request_class_p95_reliability,
@@ -97,8 +99,7 @@ def validate_selected_replica_configuration(
             if interval.status != ReliabilityStatus.RELIABLY_FEASIBLE
         )
         raise FinalReplicaValidationError(
-            "Selected configuration failed independent final validation: "
-            + failing,
+            "Selected configuration failed independent final validation: " + failing,
             result=result,
         )
     return result
@@ -119,6 +120,7 @@ class CalibratedFinalValidationResult:
     replication_count: int
     seeds: tuple[int, ...]
     request_class_intervals: tuple[tuple[str, ClusterBootstrapP95Interval], ...]
+    failure_rate_intervals: tuple[tuple[str, IndependentReplicationRateInterval], ...]
     eligible_request_counts: tuple[tuple[str, int], ...]
     warmup_duration: float
     measurement_duration: float
@@ -134,6 +136,9 @@ class CalibratedFinalValidationResult:
     def intervals(self):
         return dict(self.request_class_intervals)
 
+    @property
+    def failure_intervals(self):
+        return dict(self.failure_rate_intervals)
 
 
 def validate_final_configuration(
@@ -154,6 +159,7 @@ def validate_final_configuration(
         replication_count=0,
         seeds=(),
         request_class_intervals=(),
+        failure_rate_intervals=(),
         eligible_request_counts=(),
         warmup_duration=profile.warmup_duration,
         measurement_duration=profile.measurement_duration,
@@ -165,6 +171,7 @@ def validate_final_configuration(
             profile,
             system,
             request_class_slos=profile.slos,
+            request_class_failure_rate_slos=profile.failure_rate_slos,
             maximum_configuration=profile.maximum_replica_configuration,
         )
     except Exception as error:
@@ -251,6 +258,7 @@ def validate_final_configuration(
                 replication_count=0,
                 seeds=(),
                 request_class_intervals=(),
+                failure_rate_intervals=(),
                 eligible_request_counts=(),
                 warmup_duration=profile.warmup_duration,
                 measurement_duration=profile.measurement_duration,
@@ -260,7 +268,8 @@ def validate_final_configuration(
             )
         tail_alpha = fixed_experiment_tail_alpha(
             profile.overall_alpha,
-            len(profile.request_class_slos),
+            len(profile.request_class_slos)
+            + len(profile.request_class_failure_rate_slos),
         )
         intervals = []
         counts = []
@@ -277,14 +286,13 @@ def validate_final_configuration(
                     replication_count=len(replications),
                     seeds=seeds,
                     request_class_intervals=tuple(intervals),
+                    failure_rate_intervals=(),
                     eligible_request_counts=tuple(counts),
                     warmup_duration=profile.warmup_duration,
                     measurement_duration=profile.measurement_duration,
                     calibration_profile_fingerprint=profile.profile_fingerprint,
                     simulation_diagnostics=(),
-                    failure_reason=(
-                        f"Missing raw final cohort for {request_class!r}."
-                    ),
+                    failure_reason=(f"Missing raw final cohort for {request_class!r}."),
                 )
             total = sum(len(cluster) for cluster in clusters)
             nonempty = sum(bool(cluster) for cluster in clusters)
@@ -299,6 +307,7 @@ def validate_final_configuration(
                     replication_count=len(replications),
                     seeds=seeds,
                     request_class_intervals=tuple(intervals),
+                    failure_rate_intervals=(),
                     eligible_request_counts=tuple(counts),
                     warmup_duration=profile.warmup_duration,
                     measurement_duration=profile.measurement_duration,
@@ -338,6 +347,7 @@ def validate_final_configuration(
                     replication_count=len(replications),
                     seeds=seeds,
                     request_class_intervals=tuple(intervals),
+                    failure_rate_intervals=(),
                     eligible_request_counts=tuple(counts),
                     warmup_duration=profile.warmup_duration,
                     measurement_duration=profile.measurement_duration,
@@ -346,8 +356,86 @@ def validate_final_configuration(
                     failure_reason=str(error),
                 )
             intervals.append((request_class, interval))
+        failure_intervals = []
+        for request_class, slo in profile.request_class_failure_rate_slos:
+            try:
+                clusters = tuple(
+                    tuple(item.request_class_failures[request_class])
+                    for item in replications
+                )
+                latency_sizes = tuple(
+                    len(item.request_class_latencies[request_class])
+                    for item in replications
+                )
+            except (AttributeError, KeyError, TypeError):
+                return CalibratedFinalValidationResult(
+                    replica_configuration=configuration,
+                    classification=FinalValidationClassification.SIMULATION_FAILURE,
+                    replication_count=len(replications),
+                    seeds=seeds,
+                    request_class_intervals=tuple(intervals),
+                    failure_rate_intervals=tuple(failure_intervals),
+                    eligible_request_counts=tuple(counts),
+                    warmup_duration=profile.warmup_duration,
+                    measurement_duration=profile.measurement_duration,
+                    calibration_profile_fingerprint=profile.profile_fingerprint,
+                    simulation_diagnostics=(),
+                    failure_reason=(
+                        f"Missing raw final failure cohort for {request_class!r}."
+                    ),
+                )
+            if tuple(len(cluster) for cluster in clusters) != latency_sizes:
+                return CalibratedFinalValidationResult(
+                    replica_configuration=configuration,
+                    classification=FinalValidationClassification.SIMULATION_FAILURE,
+                    replication_count=len(replications),
+                    seeds=seeds,
+                    request_class_intervals=tuple(intervals),
+                    failure_rate_intervals=tuple(failure_intervals),
+                    eligible_request_counts=tuple(counts),
+                    warmup_duration=profile.warmup_duration,
+                    measurement_duration=profile.measurement_duration,
+                    calibration_profile_fingerprint=profile.profile_fingerprint,
+                    simulation_diagnostics=(),
+                    failure_reason=(
+                        f"Failure and latency cohorts disagree for {request_class!r}."
+                    ),
+                )
+            if sum(bool(cluster) for cluster in clusters) < (
+                profile.minimum_nonempty_replications_per_request_class
+            ):
+                return CalibratedFinalValidationResult(
+                    replica_configuration=configuration,
+                    classification=FinalValidationClassification.SIMULATION_FAILURE,
+                    replication_count=len(replications),
+                    seeds=seeds,
+                    request_class_intervals=tuple(intervals),
+                    failure_rate_intervals=tuple(failure_intervals),
+                    eligible_request_counts=tuple(counts),
+                    warmup_duration=profile.warmup_duration,
+                    measurement_duration=profile.measurement_duration,
+                    calibration_profile_fingerprint=profile.profile_fingerprint,
+                    simulation_diagnostics=(),
+                    failure_reason=(
+                        f"Final failure cohort for {request_class!r} does not "
+                        "meet the nonempty-replication requirement."
+                    ),
+                )
+            failure_intervals.append(
+                (
+                    request_class,
+                    independent_replication_rate_interval(
+                        clusters,
+                        request_class=request_class,
+                        slo=slo,
+                        per_tail_alpha=tail_alpha,
+                    ),
+                )
+            )
         passed = all(
             interval.upper_bound <= interval.slo for _, interval in intervals
+        ) and all(
+            interval.upper_bound <= interval.slo for _, interval in failure_intervals
         )
         diagnostics = (
             (
@@ -396,19 +484,20 @@ def validate_final_configuration(
             replication_count=len(seeds),
             seeds=seeds,
             request_class_intervals=tuple(intervals),
+            failure_rate_intervals=tuple(failure_intervals),
             eligible_request_counts=tuple(counts),
             warmup_duration=profile.warmup_duration,
             measurement_duration=profile.measurement_duration,
             calibration_profile_fingerprint=profile.profile_fingerprint,
             simulation_diagnostics=diagnostics,
-        failure_reason=(
-            None
-            if passed
-            else (
-                "At least one fresh-seed latency upper bound exceeds its SLO "
-                f"for statistic {profile.latency_slo_kind!r}."
-            )
-        ),
+            failure_reason=(
+                None
+                if passed
+                else (
+                    "At least one fresh-seed latency or terminal-failure-rate upper "
+                    "bound exceeds its SLO."
+                )
+            ),
         )
     finally:
         system.configure_system_replicas(original)

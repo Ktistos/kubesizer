@@ -41,7 +41,14 @@ def make_options():
     )
 
 
-def make_profile(system, maximum=None, *, latency_slo_kind="percentile"):
+def make_profile(
+    system,
+    maximum=None,
+    *,
+    latency_slo_kind="percentile",
+    options=None,
+    failure_rate_slos=None,
+):
     minimum = tuple(system.get_minimum_stable_replicas())
     maximum = maximum or tuple(value + 1 for value in minimum)
     return build_calibration_profile(
@@ -54,9 +61,10 @@ def make_profile(system, maximum=None, *, latency_slo_kind="percentile"):
         warmup_bucket_width=1.0,
         representative_configurations=(minimum, maximum),
         calibration_diagnostics={"test": True},
-        options=make_options(),
+        options=options or make_options(),
         creation_timestamp="2026-08-11T00:00:00+00:00",
         latency_slo_kind=latency_slo_kind,
+        request_class_failure_rate_slos=failure_rate_slos,
     )
 
 
@@ -84,10 +92,13 @@ class FakeSimulationSystem:
         return tuple(
             SimpleNamespace(
                 seed=seed,
-                request_class_latencies={
-                    "checkout": tuple(
-                        self.latency_for_seed(seed, configuration)
-                    )
+                request_class_latencies=(
+                    latencies := {
+                        "checkout": tuple(self.latency_for_seed(seed, configuration))
+                    }
+                ),
+                request_class_failures={
+                    "checkout": tuple(False for _ in latencies["checkout"])
                 },
                 processed_event_count=20,
                 external_arrival_count=10,
@@ -131,6 +142,38 @@ def test_mean_slo_simulation_uses_cluster_bootstrap_mean():
     assert result.classification == SimulationClassification.STATISTICALLY_FEASIBLE
     assert interval.latency_statistic == "mean"
     assert interval.estimate == pytest.approx(0.3)
+
+
+def test_declared_terminal_failure_rate_is_an_independent_constraint():
+    system = make_system()
+    options = CalibrationOptions(
+        warmup_replications=2,
+        warmup_validation_replications=2,
+        measurement_calibration_replications=2,
+        target_samples_per_class=2,
+        minimum_eligible_samples_per_class=4,
+        minimum_nonempty_replications_per_class=2,
+        minimum_optimization_replications=200,
+        maximum_optimization_replications=200,
+        replication_batch_size=1,
+        final_validation_replications=200,
+        bootstrap_resample_count=1_000,
+        minimum_bootstrap_tail_draws=5,
+    )
+    profile = make_profile(
+        system,
+        options=options,
+        failure_rate_slos={"checkout": 0.10},
+    )
+    wrapped = FakeSimulationSystem(system, lambda seed, configuration: (0.5, 0.5))
+
+    result = CalibratedConfigurationEvaluator(wrapped, profile).evaluate((1,))
+
+    assert result.classification == SimulationClassification.STATISTICALLY_FEASIBLE
+    interval = result.failure_intervals["checkout"]
+    assert interval.failed_request_count == 0
+    assert 0.0 < interval.upper_bound <= 0.10
+    assert result.sequential_tail_alpha == pytest.approx(0.05 / (2 * 1 * 2))
 
 
 def test_configuration_evaluation_reports_sequential_batch_progress():
@@ -277,7 +320,9 @@ def test_optimizer_aborts_instead_of_treating_simulation_failure_as_infeasible()
         evaluator=FailedEvaluator(),
     )
 
-    with pytest.raises(StatisticalEvaluationError, match="could not be drained") as error:
+    with pytest.raises(
+        StatisticalEvaluationError, match="could not be drained"
+    ) as error:
         UniformCostReplicaOptimizer().optimize(problem)
 
     assert error.value.evaluation.classification == (

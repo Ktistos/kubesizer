@@ -93,9 +93,7 @@ def test_resource_capacity_semantics_invalidate_statistical_calibration():
         QueueingNetworkType.OPEN,
     )
 
-    assert experiment_fingerprints(original)[0] != experiment_fingerprints(
-        changed
-    )[0]
+    assert experiment_fingerprints(original)[0] != experiment_fingerprints(changed)[0]
 
 
 def test_omitted_limits_preserve_one_slot_per_replica():
@@ -111,3 +109,57 @@ def test_omitted_limits_preserve_one_slot_per_replica():
     assert system.get_service_processing_slots_per_replica() == {"api": 1}
     assert system.get_service_concurrency_limits_per_replica() == {"api": 1}
     assert system.get_minimum_stable_replicas() == [2]
+
+
+def test_processor_sharing_has_no_unmeasurable_slot_count():
+    workload = _workload(processing_slots=1, concurrency=4)
+    service = workload["traffic_model"]["service_times"]["api"]
+    service.pop("concurrency_limit_per_replica")
+    service["execution_model"] = "processor_sharing"
+    parsed = parse_workload_spec(workload)
+    system = System("cpu-api", workload, QueueingNetworkType.OPEN)
+
+    assert parsed.traffic_model.service_execution_models == {"api": "processor_sharing"}
+    assert system.get_service_execution_models() == {"api": "processor_sharing"}
+    assert (
+        get_native_backend().serialize_system(system)["services"][0]["execution_model"]
+        == "processor_sharing"
+    )
+
+
+def test_processor_sharing_rejects_competing_fixed_slot_semantics():
+    workload = _workload(processing_slots=2, concurrency=4)
+    workload["traffic_model"]["service_times"]["api"][
+        "execution_model"
+    ] = "processor_sharing"
+
+    with pytest.raises(ValueError, match="must be one for processor_sharing"):
+        parse_workload_spec(workload)
+
+
+def test_execution_model_changes_calibration_fingerprint():
+    fixed = _workload(processing_slots=1, concurrency=1)
+    shared = _workload(processing_slots=1, concurrency=1)
+    fixed["traffic_model"]["service_times"]["api"].pop("concurrency_limit_per_replica")
+    shared["traffic_model"]["service_times"]["api"].pop("concurrency_limit_per_replica")
+    shared["traffic_model"]["service_times"]["api"][
+        "execution_model"
+    ] = "processor_sharing"
+
+    fixed_system = System("api", fixed, QueueingNetworkType.OPEN)
+    shared_system = System("api", shared, QueueingNetworkType.OPEN)
+
+    assert (
+        experiment_fingerprints(fixed_system)[0]
+        != experiment_fingerprints(shared_system)[0]
+    )
+
+
+def test_processor_sharing_rejects_an_unmeasured_concurrency_limit():
+    workload = _workload(processing_slots=1, concurrency=4)
+    workload["traffic_model"]["service_times"]["api"][
+        "execution_model"
+    ] = "processor_sharing"
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        parse_workload_spec(workload)

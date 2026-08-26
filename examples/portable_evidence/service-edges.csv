@@ -1,0 +1,4 @@
+start,end,request_class,source_service,destination_service,call_count
+2026-08-25T10:00:00Z,2026-08-25T10:05:00Z,browse,api,database,7200
+2026-08-25T10:05:00Z,2026-08-25T10:10:00Z,browse,api,database,7200
+2026-08-25T10:10:00Z,2026-08-25T10:15:00Z,browse,api,database,7200

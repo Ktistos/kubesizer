@@ -12,7 +12,7 @@ from native_backend import SIMULATOR_SEMANTICS_VERSION
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
 
-CALIBRATION_PROFILE_VERSION = 6
+CALIBRATION_PROFILE_VERSION = 8
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
 MEAN_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-mean-bootstrap-v1"
 
@@ -193,6 +193,10 @@ class CalibrationProfile:
     calibration_diagnostics: str
     profile_fingerprint: str
     latency_slo_kind: str = "percentile"
+    request_class_failure_rate_slos: tuple[tuple[str, float], ...] = ()
+    failure_rate_confidence_interval_method: str = (
+        "independent-replication-empirical-bernstein-v1"
+    )
 
     @property
     def confidence_level(self):
@@ -206,6 +210,10 @@ class CalibrationProfile:
     @property
     def slos(self):
         return dict(self.request_class_slos)
+
+    @property
+    def failure_rate_slos(self):
+        return dict(self.request_class_failure_rate_slos)
 
     @property
     def diagnostics(self):
@@ -399,10 +407,32 @@ class CalibrationProfile:
             raise CalibrationProfileMismatchError(
                 "Profile request-class SLOs are invalid."
             )
+        failure_class_count = len(self.request_class_failure_rate_slos)
+        if (
+            len({name for name, _ in self.request_class_failure_rate_slos})
+            != failure_class_count
+            or any(
+                not name or not math.isfinite(slo) or not 0.0 <= slo < 1.0
+                for name, slo in self.request_class_failure_rate_slos
+            )
+            or not {name for name, _ in self.request_class_failure_rate_slos}.issubset(
+                {name for name, _ in self.request_class_slos}
+            )
+        ):
+            raise CalibrationProfileMismatchError(
+                "Profile request-class terminal-failure-rate SLOs are invalid."
+            )
+        if self.failure_rate_confidence_interval_method != (
+            "independent-replication-empirical-bernstein-v1"
+        ):
+            raise CalibrationProfileMismatchError(
+                "Unsupported terminal-failure-rate confidence-interval method."
+            )
         if not 0 < self.overall_alpha < 1:
             raise CalibrationProfileMismatchError("Profile overall alpha is invalid.")
+        constraint_count = class_count + failure_class_count
         tail_alpha = self.overall_alpha / (
-            2 * self.maximum_sequential_looks * class_count
+            2 * self.maximum_sequential_looks * constraint_count
         )
         if (
             self.bootstrap_resample_count * tail_alpha
@@ -445,8 +475,12 @@ class CalibrationProfile:
             "overall_alpha": self.overall_alpha,
             "confidence_level": self.confidence_level,
             "request_class_slos": self.slos,
+            "request_class_failure_rate_slos": self.failure_rate_slos,
             "latency_slo_kind": self.latency_slo_kind,
             "p95_confidence_interval_method": (self.p95_confidence_interval_method),
+            "failure_rate_confidence_interval_method": (
+                self.failure_rate_confidence_interval_method
+            ),
             "bootstrap_resample_count": self.bootstrap_resample_count,
             "minimum_bootstrap_tail_draws": self.minimum_bootstrap_tail_draws,
             "target_samples_per_class": self.target_samples_per_class,
@@ -514,6 +548,14 @@ class CalibrationProfile:
                     for name, slo in value["request_class_slos"].items()
                 )
             ),
+            request_class_failure_rate_slos=tuple(
+                sorted(
+                    (str(name), float(slo))
+                    for name, slo in value.get(
+                        "request_class_failure_rate_slos", {}
+                    ).items()
+                )
+            ),
             p95_confidence_interval_method=str(value["p95_confidence_interval_method"]),
             bootstrap_resample_count=int(value["bootstrap_resample_count"]),
             minimum_bootstrap_tail_draws=int(value["minimum_bootstrap_tail_draws"]),
@@ -551,6 +593,12 @@ class CalibrationProfile:
             ),
             profile_fingerprint=str(value["profile_fingerprint"]),
             latency_slo_kind=str(value.get("latency_slo_kind", "percentile")),
+            failure_rate_confidence_interval_method=str(
+                value.get(
+                    "failure_rate_confidence_interval_method",
+                    "independent-replication-empirical-bernstein-v1",
+                )
+            ),
         )
         return profile.validate_integrity()
 
@@ -610,6 +658,11 @@ def experiment_fingerprints(system):
         "get_service_processing_slots_per_replica",
         lambda: {service.get_name(): 1 for service in services},
     )()
+    execution_models = getattr(
+        system,
+        "get_service_execution_models",
+        lambda: {service.get_name(): "fixed_slots" for service in services},
+    )()
     fixed_latency_overheads = getattr(
         system,
         "get_request_class_fixed_latency_overheads",
@@ -626,12 +679,9 @@ def experiment_fingerprints(system):
             {
                 "id": service.get_id(),
                 "name": service.get_name(),
-                "concurrency_limit_per_replica": concurrency_limits[
-                    service.get_name()
-                ],
-                "processing_slots_per_replica": processing_slots[
-                    service.get_name()
-                ],
+                "concurrency_limit_per_replica": concurrency_limits[service.get_name()],
+                "processing_slots_per_replica": processing_slots[service.get_name()],
+                "execution_model": execution_models[service.get_name()],
             }
             for service in services
         ],
@@ -695,6 +745,10 @@ def experiment_fingerprints(system):
         latency_slos = system.get_request_class_latency_slos()
     except AttributeError:
         latency_slos = {}
+    try:
+        failure_rate_slos = system.get_request_class_failure_rate_slos()
+    except AttributeError:
+        failure_rate_slos = {}
     workload = {
         "request_class_fixed_latency_overheads": [
             {
@@ -718,15 +772,23 @@ def experiment_fingerprints(system):
             for request_class in request_classes
             if request_class in latency_slos
         ],
+        "request_class_failure_rate_slos": [
+            {
+                "request_class": request_class,
+                "maximum_terminal_failure_rate": float(
+                    failure_rate_slos[request_class]
+                ),
+            }
+            for request_class in request_classes
+            if request_class in failure_rate_slos
+        ],
         "traffic_model": {},
     }
     service_specs = system.get_service_time_distribution_specs()
     class_service_specs = getattr(
         system,
         "get_request_class_service_time_distribution_specs",
-        lambda: {
-            request_class: service_specs for request_class in request_classes
-        },
+        lambda: {request_class: service_specs for request_class in request_classes},
     )()
     arrival_specs = system.get_external_arrival_distribution_specs()
     workload["traffic_model"] = {
@@ -807,6 +869,7 @@ def build_calibration_profile(
     calibration_seeds=None,
     creation_timestamp=None,
     latency_slo_kind="percentile",
+    request_class_failure_rate_slos=None,
 ):
     options = options or CalibrationOptions()
     service_count = len(system.get_services())
@@ -829,6 +892,26 @@ def build_calibration_profile(
         )
     if any(not math.isfinite(slo) or slo <= 0 for _, slo in slos):
         raise ValueError("Request-class SLOs must be finite and positive.")
+    if request_class_failure_rate_slos is None:
+        request_class_failure_rate_slos = getattr(
+            system,
+            "get_request_class_failure_rate_slos",
+            lambda: {},
+        )()
+    failure_rate_slos = tuple(
+        sorted(
+            (str(name), float(slo))
+            for name, slo in request_class_failure_rate_slos.items()
+        )
+    )
+    if not {name for name, _ in failure_rate_slos}.issubset(slo_classes):
+        raise ValueError(
+            "Terminal-failure-rate SLOs must belong to latency-SLO request classes."
+        )
+    if any(
+        not math.isfinite(slo) or not 0.0 <= slo < 1.0 for _, slo in failure_rate_slos
+    ):
+        raise ValueError("Terminal-failure-rate SLOs must be finite values in [0, 1).")
     if latency_slo_kind not in {"mean", "percentile"}:
         raise ValueError("latency_slo_kind must be mean or percentile.")
     if not math.isfinite(warmup_duration) or warmup_duration < 0:
@@ -887,6 +970,7 @@ def build_calibration_profile(
         maximum_sequential_looks=options.maximum_sequential_looks,
         overall_alpha=options.overall_alpha,
         request_class_slos=slos,
+        request_class_failure_rate_slos=failure_rate_slos,
         p95_confidence_interval_method=(
             MEAN_CONFIDENCE_INTERVAL_METHOD
             if latency_slo_kind == "mean"
@@ -928,6 +1012,7 @@ def validate_profile_for_experiment(
     system,
     *,
     request_class_slos=None,
+    request_class_failure_rate_slos=None,
     maximum_configuration=None,
 ):
     profile.validate_integrity()
@@ -945,6 +1030,15 @@ def validate_profile_for_experiment(
         )
         if current_slos != profile.request_class_slos:
             mismatches.append("request-class SLOs")
+    if request_class_failure_rate_slos is not None:
+        current_failure_slos = tuple(
+            sorted(
+                (str(name), float(slo))
+                for name, slo in request_class_failure_rate_slos.items()
+            )
+        )
+        if current_failure_slos != profile.request_class_failure_rate_slos:
+            mismatches.append("request-class terminal-failure-rate SLOs")
     if maximum_configuration is not None:
         current_maximum = _normalize_configuration(
             maximum_configuration,

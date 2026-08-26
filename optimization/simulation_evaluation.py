@@ -4,6 +4,8 @@ from enum import Enum
 from calibration import CalibrationProfile, validate_profile_for_experiment
 from metrics import (
     ClusterBootstrapP95Interval,
+    IndependentReplicationRateInterval,
+    independent_replication_rate_interval,
     replication_cluster_bootstrap_mean,
     replication_cluster_bootstrap_p95,
 )
@@ -26,12 +28,17 @@ class SequentialLookResult:
     replication_count: int
     seeds_used: tuple[int, ...]
     request_class_intervals: tuple[tuple[str, ClusterBootstrapP95Interval], ...]
+    failure_rate_intervals: tuple[tuple[str, IndependentReplicationRateInterval], ...]
     eligible_request_counts: tuple[tuple[str, int], ...]
     classification: SimulationClassification
 
     @property
     def intervals(self):
         return dict(self.request_class_intervals)
+
+    @property
+    def failure_intervals(self):
+        return dict(self.failure_rate_intervals)
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,7 @@ class ConfigurationEvaluation:
     seeds_used: tuple[int, ...]
     eligible_request_counts: tuple[tuple[str, int], ...]
     request_class_intervals: tuple[tuple[str, ClusterBootstrapP95Interval], ...]
+    failure_rate_intervals: tuple[tuple[str, IndependentReplicationRateInterval], ...]
     warmup_duration: float
     measurement_duration: float
     calibration_profile_fingerprint: str
@@ -62,6 +70,10 @@ class ConfigurationEvaluation:
     @property
     def counts(self):
         return dict(self.eligible_request_counts)
+
+    @property
+    def failure_intervals(self):
+        return dict(self.failure_rate_intervals)
 
 
 class CalibratedConfigurationEvaluator:
@@ -99,6 +111,7 @@ class CalibratedConfigurationEvaluator:
             seeds_used=(),
             eligible_request_counts=(),
             request_class_intervals=(),
+            failure_rate_intervals=(),
             warmup_duration=self.profile.warmup_duration,
             measurement_duration=self.profile.measurement_duration,
             calibration_profile_fingerprint=self.profile.profile_fingerprint,
@@ -109,10 +122,11 @@ class CalibratedConfigurationEvaluator:
         )
 
     def _tail_alpha(self):
+        constraint_count = len(self.profile.request_class_slos) + len(
+            self.profile.request_class_failure_rate_slos
+        )
         return self.profile.overall_alpha / (
-            2
-            * self.profile.maximum_sequential_looks
-            * len(self.profile.request_class_slos)
+            2 * self.profile.maximum_sequential_looks * constraint_count
         )
 
     def _normalize_configuration(self, configuration):
@@ -192,20 +206,69 @@ class CalibratedConfigurationEvaluator:
                 minimum_tail_draws=self.profile.minimum_bootstrap_tail_draws,
             )
             intervals.append((request_class, interval))
-        return tuple(intervals), tuple(counts)
+        failure_intervals = []
+        for request_class, slo in self.profile.request_class_failure_rate_slos:
+            try:
+                clusters = tuple(
+                    tuple(replication.request_class_failures[request_class])
+                    for replication in replications
+                )
+            except (AttributeError, KeyError, TypeError) as error:
+                raise ValueError(
+                    f"Replication output has no failure cohort for "
+                    f"{request_class!r}."
+                ) from error
+            latency_sizes = tuple(
+                len(replication.request_class_latencies[request_class])
+                for replication in replications
+            )
+            if tuple(len(cluster) for cluster in clusters) != latency_sizes:
+                raise ValueError(
+                    f"Failure and latency cohorts disagree for {request_class!r}."
+                )
+            if sum(bool(cluster) for cluster in clusters) < (
+                self.profile.minimum_nonempty_replications_per_request_class
+            ):
+                continue
+            failure_intervals.append(
+                (
+                    request_class,
+                    independent_replication_rate_interval(
+                        clusters,
+                        request_class=request_class,
+                        slo=slo,
+                        per_tail_alpha=tail_alpha,
+                    ),
+                )
+            )
+        return tuple(intervals), tuple(failure_intervals), tuple(counts)
 
     @staticmethod
-    def _classification(intervals, request_class_count, at_maximum):
-        if len(intervals) != request_class_count:
+    def _classification(
+        intervals,
+        request_class_count,
+        failure_intervals,
+        failure_constraint_count,
+        at_maximum,
+    ):
+        if (
+            len(intervals) != request_class_count
+            or len(failure_intervals) != failure_constraint_count
+        ):
             return (
                 SimulationClassification.SIMULATION_FAILURE
                 if at_maximum
                 else SimulationClassification.CONTINUE_SAMPLING
             )
         values = tuple(interval for _, interval in intervals)
-        if all(interval.upper_bound <= interval.slo for interval in values):
+        failure_values = tuple(interval for _, interval in failure_intervals)
+        if all(interval.upper_bound <= interval.slo for interval in values) and all(
+            interval.upper_bound <= interval.slo for interval in failure_values
+        ):
             return SimulationClassification.STATISTICALLY_FEASIBLE
-        if any(interval.lower_bound > interval.slo for interval in values):
+        if any(interval.lower_bound > interval.slo for interval in values) or any(
+            interval.lower_bound > interval.slo for interval in failure_values
+        ):
             return SimulationClassification.STATISTICALLY_INFEASIBLE
         return (
             SimulationClassification.INCONCLUSIVE
@@ -267,6 +330,7 @@ class CalibratedConfigurationEvaluator:
             looks = []
             previous_count = 0
             final_intervals = ()
+            final_failure_intervals = ()
             final_counts = ()
             final_classification = SimulationClassification.INCONCLUSIVE
             processed_events = 0
@@ -310,6 +374,7 @@ class CalibratedConfigurationEvaluator:
                         seeds_used=all_seeds[:completed_replications],
                         eligible_request_counts=final_counts,
                         request_class_intervals=final_intervals,
+                        failure_rate_intervals=final_failure_intervals,
                         warmup_duration=self.profile.warmup_duration,
                         measurement_duration=self.profile.measurement_duration,
                         calibration_profile_fingerprint=self.profile.profile_fingerprint,
@@ -338,16 +403,13 @@ class CalibratedConfigurationEvaluator:
                     },
                 )
                 processed_events += sum(
-                    int(getattr(item, "processed_event_count", 0))
-                    for item in batch
+                    int(getattr(item, "processed_event_count", 0)) for item in batch
                 )
                 external_arrivals += sum(
-                    int(getattr(item, "external_arrival_count", 0))
-                    for item in batch
+                    int(getattr(item, "external_arrival_count", 0)) for item in batch
                 )
                 completed_requests += sum(
-                    int(getattr(item, "completed_request_count", 0))
-                    for item in batch
+                    int(getattr(item, "completed_request_count", 0)) for item in batch
                 )
                 failed_measured_requests += sum(
                     sum(
@@ -362,13 +424,14 @@ class CalibratedConfigurationEvaluator:
                 )
                 maximum_stop_time = max(
                     maximum_stop_time,
-                    *(
-                        float(getattr(item, "stop_time", 0.0))
-                        for item in batch
-                    ),
+                    *(float(getattr(item, "stop_time", 0.0)) for item in batch),
                 )
                 try:
-                    final_intervals, final_counts = self._calculate_intervals(
+                    (
+                        final_intervals,
+                        final_failure_intervals,
+                        final_counts,
+                    ) = self._calculate_intervals(
                         configuration,
                         replications,
                         look_index,
@@ -382,6 +445,7 @@ class CalibratedConfigurationEvaluator:
                         seeds_used=all_seeds[:replication_count],
                         eligible_request_counts=final_counts,
                         request_class_intervals=final_intervals,
+                        failure_rate_intervals=final_failure_intervals,
                         warmup_duration=self.profile.warmup_duration,
                         measurement_duration=self.profile.measurement_duration,
                         calibration_profile_fingerprint=self.profile.profile_fingerprint,
@@ -393,6 +457,8 @@ class CalibratedConfigurationEvaluator:
                 final_classification = self._classification(
                     final_intervals,
                     len(self.profile.request_class_slos),
+                    final_failure_intervals,
+                    len(self.profile.request_class_failure_rate_slos),
                     replication_count == self.profile.maximum_optimization_replications,
                 )
                 looks.append(
@@ -401,6 +467,7 @@ class CalibratedConfigurationEvaluator:
                         replication_count=replication_count,
                         seeds_used=all_seeds[:replication_count],
                         request_class_intervals=final_intervals,
+                        failure_rate_intervals=final_failure_intervals,
                         eligible_request_counts=final_counts,
                         classification=final_classification,
                     )
@@ -423,6 +490,7 @@ class CalibratedConfigurationEvaluator:
                 seeds_used=all_seeds[:previous_count],
                 eligible_request_counts=final_counts,
                 request_class_intervals=final_intervals,
+                failure_rate_intervals=final_failure_intervals,
                 warmup_duration=self.profile.warmup_duration,
                 measurement_duration=self.profile.measurement_duration,
                 calibration_profile_fingerprint=self.profile.profile_fingerprint,

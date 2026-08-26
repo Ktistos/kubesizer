@@ -14,6 +14,7 @@ request_classes:
     # terminates as a failed outcome whose latency equals the deadline. The
     # server-side work is not magically cancelled.
     end_to_end_timeout_seconds: 60.0
+    maximum_terminal_failure_rate: 0.01
     calls:
       api:
         catalog: 1.0
