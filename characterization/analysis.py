@@ -11,6 +11,7 @@ import numpy as np
 from metrics import student_t_quantile
 
 from .models import (
+    AlignedInputWindow,
     CapacityEnvelopePoint,
     DeploymentCharacterization,
     ExternalRequestClassCharacterization,
@@ -191,6 +192,60 @@ def _windowed_service_statistics(rows):
             }
         )
     return result
+
+
+def _aligned_input_windows(inputs, service_windows):
+    """Return complete joint windows without imputing missing dimensions."""
+    request_classes = tuple(
+        request_class.name for request_class in inputs.workload.request_classes
+    )
+    service_names = inputs.deployment.service_names
+    external = defaultdict(float)
+    for row in inputs.measurements.external_intervals:
+        external[(row.start, row.end, row.request_class)] += row.request_count
+    by_service_window = {
+        (service, item["start"], item["end"]): item
+        for service, items in service_windows.items()
+        for item in items
+    }
+    windows = sorted(
+        {
+            (item["start"], item["end"])
+            for item in next(iter(service_windows.values()), ())
+        }
+    )
+    result = []
+    for start, end in windows:
+        duration = end - start
+        arrivals = tuple(
+            (
+                request_class,
+                external.get((start, end, request_class), 0.0) / duration,
+            )
+            for request_class in request_classes
+        )
+        demands = tuple(
+            (
+                service,
+                by_service_window.get((service, start, end), {}).get("cpu_demand"),
+            )
+            for service in service_names
+        )
+        if (
+            all(rate > 0.0 for _, rate in arrivals)
+            and all(demand is not None and demand > 0.0 for _, demand in demands)
+        ):
+            result.append(
+                AlignedInputWindow(
+                    start=start,
+                    end=end,
+                    request_class_arrival_rates=arrivals,
+                    service_cpu_demands=tuple(
+                        (service, float(demand)) for service, demand in demands
+                    ),
+                )
+            )
+    return tuple(result)
 
 
 def _aggregate_rate(rows, identity):
@@ -488,11 +543,17 @@ def characterize_deployment(inputs):
         service_rates,
         external_rates,
     )
-    # The recommendation is for the measured workload. Observed destination
-    # rates are therefore the sizing rates; a separate forecast multiplier is
-    # intentionally not accepted by this workflow.
-    rate_source = "measured_workload"
-    workload_rates = dict(service_rates)
+    maximum_load_multiplier = inputs.workload.maximum_load_multiplier
+    rate_source = (
+        "measured_workload"
+        if maximum_load_multiplier == 1.0
+        else "measured_workload_forecast_upper_bound"
+    )
+    workload_rates = {
+        service: rate * maximum_load_multiplier
+        for service, rate in service_rates.items()
+    }
+    aligned_input_windows = _aligned_input_windows(inputs, windows)
 
     flow_balance_errors = {service: None for service in inputs.deployment.service_names}
     if all(
@@ -716,6 +777,7 @@ def characterize_deployment(inputs):
             "aligned_cpu_demand_windows",
             all(service.cpu_demand_window_means_seconds for service in services),
         ),
+        ("joint_aligned_input_windows", len(aligned_input_windows) >= 2),
         ("service_edges", bool(inputs.measurements.service_edges)),
         (
             "service_latency_histograms",
@@ -765,6 +827,7 @@ def characterize_deployment(inputs):
                 for request_class, calls in calls_by_class.items()
             )
         ),
+        aligned_input_windows=aligned_input_windows,
         capabilities=capabilities,
         warnings=tuple(global_warnings),
     )

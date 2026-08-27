@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from metrics import Metrics, SimulationMetricsCollector
+from metrics import Metrics
 from optimization import (
     AnalyticalStabilityHeuristic,
     ReplicaSizingEvaluation,
@@ -347,31 +347,6 @@ def test_configuration_seed_blocks_are_reproducible_and_disjoint():
     assert set(first).isdisjoint(neighbor)
     assert set(first).isdisjoint(other_neighbor)
     assert set(neighbor).isdisjoint(other_neighbor)
-
-
-def test_end_to_end_p95_is_not_sum_of_per_service_p95_values():
-    collector = SimulationMetricsCollector(2)
-
-    first_request = collector.start_external_request("checkout", 0.0)
-    collector.record_service_start(0, 0.0)
-    collector.record_request_completion(0, 1.0, 1.0)
-    collector.record_service_start(1, 1.0)
-    collector.record_request_completion(1, 9.0, 10.0)
-    collector.record_external_request_completion(first_request, 10.0)
-
-    second_request = collector.start_external_request("checkout", 10.0)
-    collector.record_service_start(0, 10.0)
-    collector.record_request_completion(0, 9.0, 19.0)
-    collector.record_service_start(1, 19.0)
-    collector.record_request_completion(1, 1.0, 20.0)
-    collector.record_external_request_completion(second_request, 20.0)
-
-    metrics = collector.finalize(20.0, [1, 1], True)
-    service_p95_sum = sum(metrics.get_p95_latencies())
-
-    assert metrics.get_request_class_p95_latencies()["checkout"] == 10.0
-    assert service_p95_sum == pytest.approx(17.2)
-    assert metrics.get_request_class_p95_latencies()["checkout"] != service_p95_sum
 
 
 def build_search_problem(heuristic):

@@ -8,9 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 7
+PROTOCOL_VERSION = 9
 SIMULATOR_SEMANTICS_VERSION = (
-    "native-event-kernel-synchronous-calls-dual-resources-deadlines-cpu-ps-v8"
+    "native-event-kernel-joint-input-blocks-burst-traces-concurrency-"
+    "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-ps-v10"
 )
 
 
@@ -59,6 +60,10 @@ class NativeMeasurementReplication:
     maximum_drain_time: float
     failed_measured_request_counts: dict[str, int] = field(default_factory=dict)
     request_class_failures: dict[str, tuple[bool, ...]] = field(default_factory=dict)
+    sampled_input_block_start: int | None = None
+    input_arrival_rate_multipliers: dict[str, float] = field(default_factory=dict)
+    input_service_time_multipliers: tuple[float, ...] = ()
+    placement_model_applied: bool = False
 
 
 def _finite_positive(value, label):
@@ -144,6 +149,10 @@ def _serialize_distribution(specification):
         )
     if specification.samples:
         result["samples"] = list(specification.samples)
+    if specification.sample_clusters:
+        result["clusters"] = [
+            list(cluster) for cluster in specification.sample_clusters
+        ]
     return result
 
 
@@ -192,11 +201,15 @@ class CppSimulationBackend:
         workflows = system.get_request_class_workflows()
         call_graphs = system.get_request_class_call_graphs()
         call_execution_modes = system.get_request_class_call_execution_modes()
-        fixed_overheads = system.get_request_class_fixed_latency_overheads()
+        overhead_specs = (
+            system.get_request_class_latency_overhead_distribution_specs()
+        )
         timeouts = system.get_request_class_end_to_end_timeouts()
         concurrency_limits = system.get_service_concurrency_limits_per_replica()
         processing_slots = system.get_service_processing_slots_per_replica()
         execution_models = system.get_service_execution_models()
+        joint_input_uncertainty = system.get_joint_input_uncertainty()
+        placement_model = system.get_simulation_placement_model()
         for request_class in system.get_request_classes():
             routing = []
             for service in services:
@@ -245,9 +258,10 @@ class CppSimulationBackend:
                         request_class,
                         "parallel",
                     ),
-                    "fixed_latency_overhead": fixed_overheads.get(
-                        request_class,
-                        0.0,
+                    "latency_overhead_distribution": (
+                        _serialize_distribution(overhead_specs[request_class])
+                        if request_class in overhead_specs
+                        else None
                     ),
                     "end_to_end_timeout": timeouts.get(request_class, 0.0),
                 }
@@ -268,7 +282,7 @@ class CppSimulationBackend:
                         }
                     )
 
-        return {
+        result = {
             "name": system.get_name(),
             "services": [
                 {
@@ -278,8 +292,13 @@ class CppSimulationBackend:
                     "capacity": (
                         service.get_replicas() * processing_slots[service.get_name()]
                     ),
-                    "concurrency_capacity": (
-                        service.get_replicas() * concurrency_limits[service.get_name()]
+                    **(
+                        {}
+                        if concurrency_limits[service.get_name()] is None
+                        else {
+                            "concurrency_capacity": service.get_replicas()
+                            * concurrency_limits[service.get_name()]
+                        }
                     ),
                     "service_time_distributions": [
                         _serialize_distribution(
@@ -296,6 +315,52 @@ class CppSimulationBackend:
             "request_classes": request_classes,
             "external_streams": external_streams,
         }
+        if joint_input_uncertainty is not None:
+            result["input_uncertainty"] = {
+                "sampling": joint_input_uncertainty.sampling,
+                "block_length": joint_input_uncertainty.block_length,
+                "epochs": [
+                    {
+                        "arrival_rate_multipliers": [
+                            epoch.arrival_rate_multipliers[request_class]
+                            for request_class in system.get_request_classes()
+                        ],
+                        "service_time_multipliers": [
+                            epoch.service_time_multipliers[service.get_name()]
+                            for service in services
+                        ],
+                    }
+                    for epoch in joint_input_uncertainty.epochs
+                ],
+            }
+        if placement_model is not None:
+            node_names = tuple(placement_model["node_names"])
+            result["placement_model"] = {
+                "node_names": list(node_names),
+                "service_replica_counts": [
+                    [
+                        placement_model["placement"][node_name][
+                            service.get_name()
+                        ]
+                        for node_name in node_names
+                    ]
+                    for service in services
+                ],
+                "communication_latency_seconds": [
+                    [
+                        placement_model["communication_latency_seconds"][source][
+                            destination
+                        ]
+                        for destination in node_names
+                    ]
+                    for source in node_names
+                ],
+                "execution_time_multipliers": [
+                    placement_model["execution_time_multipliers"][node_name]
+                    for node_name in node_names
+                ],
+            }
+        return result
 
     def _invoke(
         self,
@@ -654,6 +719,33 @@ class CppSimulationBackend:
                 )
                 active_requests = int(item["active_requests_at_end"])
                 tagged_in_flight = int(item["tagged_requests_in_flight_at_end"])
+                raw_block_start = item["sampled_input_block_start"]
+                if raw_block_start is not None and (
+                    isinstance(raw_block_start, bool)
+                    or not isinstance(raw_block_start, int)
+                    or raw_block_start < 0
+                ):
+                    raise ValueError("sampled input block start is invalid.")
+                input_arrival_multipliers_values = _numeric_tuple(
+                    item["input_arrival_rate_multipliers"],
+                    "input_arrival_rate_multipliers",
+                    length=len(expected_classes),
+                )
+                input_service_multipliers = _numeric_tuple(
+                    item["input_service_time_multipliers"],
+                    "input_service_time_multipliers",
+                    length=len(configuration),
+                )
+                if any(value <= 0 for value in input_arrival_multipliers_values):
+                    raise ValueError("input arrival multipliers must be positive.")
+                if any(value <= 0 for value in input_service_multipliers):
+                    raise ValueError("input service multipliers must be positive.")
+                input_arrival_multipliers = dict(
+                    zip(system.get_request_classes(), input_arrival_multipliers_values)
+                )
+                placement_model_applied = item["placement_model_applied"]
+                if not isinstance(placement_model_applied, bool):
+                    raise ValueError("placement model diagnostic must be boolean.")
                 if (
                     active_requests < 0
                     or len(queue_lengths) != len(configuration)
@@ -693,6 +785,10 @@ class CppSimulationBackend:
                         busy_replicas_at_end=busy_replicas,
                         tagged_requests_in_flight_at_end=tagged_in_flight,
                         maximum_drain_time=maximum_drain_time,
+                        sampled_input_block_start=raw_block_start,
+                        input_arrival_rate_multipliers=input_arrival_multipliers,
+                        input_service_time_multipliers=input_service_multipliers,
+                        placement_model_applied=placement_model_applied,
                     )
                 )
         except (KeyError, TypeError, ValueError) as error:
@@ -769,6 +865,12 @@ def slice_measurement_replication(replication, measurement_duration):
         busy_replicas_at_end=replication.busy_replicas_at_end,
         tagged_requests_in_flight_at_end=replication.tagged_requests_in_flight_at_end,
         maximum_drain_time=replication.maximum_drain_time,
+        sampled_input_block_start=replication.sampled_input_block_start,
+        input_arrival_rate_multipliers=dict(
+            replication.input_arrival_rate_multipliers
+        ),
+        input_service_time_multipliers=replication.input_service_time_multipliers,
+        placement_model_applied=replication.placement_model_applied,
     )
 
 

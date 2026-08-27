@@ -42,6 +42,24 @@ class SequentialLookResult:
 
 
 @dataclass(frozen=True)
+class SimulationUncertaintyDiagnostics:
+    """Observed uncertainty sources kept separate from statistical Monte Carlo."""
+
+    simulation_replication_count: int
+    input_uncertainty_method: str | None
+    sampled_input_block_starts: tuple[int, ...]
+    request_class_arrival_multiplier_ranges: tuple[
+        tuple[str, float, float], ...
+    ]
+    service_time_multiplier_ranges: tuple[tuple[int, float, float], ...]
+    request_class_statistic_variance_components: tuple[
+        tuple[str, float, float, float], ...
+    ] = ()
+    model_form_assumptions: tuple[tuple[str, str], ...] = ()
+    placement_effects_applied: bool = False
+
+
+@dataclass(frozen=True)
 class ConfigurationEvaluation:
     configuration: tuple[int, ...]
     classification: SimulationClassification
@@ -58,6 +76,7 @@ class ConfigurationEvaluation:
     looks: tuple[SequentialLookResult, ...]
     simulation_diagnostics: tuple[tuple[str, float | int], ...]
     failure_reason: str | None = None
+    uncertainty_diagnostics: SimulationUncertaintyDiagnostics | None = None
 
     @property
     def feasible(self):
@@ -127,6 +146,126 @@ class CalibratedConfigurationEvaluator:
         )
         return self.profile.overall_alpha / (
             2 * self.profile.maximum_sequential_looks * constraint_count
+        )
+
+    def _uncertainty_diagnostics(self, replications):
+        starts = tuple(
+            int(replication.sampled_input_block_start)
+            for replication in replications
+            if getattr(replication, "sampled_input_block_start", None) is not None
+        )
+        request_classes = sorted(
+            {
+                name
+                for replication in replications
+                for name in getattr(
+                    replication,
+                    "input_arrival_rate_multipliers",
+                    {},
+                )
+            }
+        )
+        arrival_ranges = []
+        for request_class in request_classes:
+            values = tuple(
+                replication.input_arrival_rate_multipliers[request_class]
+                for replication in replications
+            )
+            arrival_ranges.append(
+                (request_class, min(values), max(values))
+            )
+        service_count = max(
+            (
+                len(
+                    getattr(
+                        replication,
+                        "input_service_time_multipliers",
+                        (),
+                    )
+                )
+                for replication in replications
+            ),
+            default=0,
+        )
+        service_ranges = []
+        for service in range(service_count):
+            values = tuple(
+                replication.input_service_time_multipliers[service]
+                for replication in replications
+            )
+            service_ranges.append((service, min(values), max(values)))
+        variance_components = []
+        for request_class in self.system.get_request_classes():
+            statistics = []
+            grouped = {}
+            for replication in replications:
+                values = tuple(
+                    replication.request_class_latencies.get(request_class, ())
+                )
+                if not values:
+                    continue
+                if self.profile.latency_slo_kind == "mean":
+                    statistic = sum(values) / len(values)
+                else:
+                    ordered = sorted(values)
+                    position = (len(ordered) - 1) * 0.95
+                    lower = int(position)
+                    upper = min(lower + 1, len(ordered) - 1)
+                    weight = position - lower
+                    statistic = (
+                        ordered[lower] * (1.0 - weight)
+                        + ordered[upper] * weight
+                    )
+                statistics.append(statistic)
+                block = getattr(replication, "sampled_input_block_start", None)
+                grouped.setdefault(block, []).append(statistic)
+            if len(statistics) < 2:
+                continue
+            grand_mean = sum(statistics) / len(statistics)
+            total_sum_squares = sum(
+                (value - grand_mean) ** 2 for value in statistics
+            )
+            within_sum_squares = 0.0
+            for values in grouped.values():
+                group_mean = sum(values) / len(values)
+                within_sum_squares += sum(
+                    (value - group_mean) ** 2 for value in values
+                )
+            divisor = len(statistics) - 1
+            total_variance = total_sum_squares / divisor
+            within_contribution = within_sum_squares / divisor
+            between_input_contribution = max(
+                0.0,
+                (total_sum_squares - within_sum_squares) / divisor,
+            )
+            variance_components.append(
+                (
+                    request_class,
+                    total_variance,
+                    between_input_contribution,
+                    within_contribution,
+                )
+            )
+        return SimulationUncertaintyDiagnostics(
+            simulation_replication_count=len(replications),
+            input_uncertainty_method=(
+                "aligned-moving-block-bootstrap"
+                if starts
+                else None
+            ),
+            sampled_input_block_starts=starts,
+            request_class_arrival_multiplier_ranges=tuple(arrival_ranges),
+            service_time_multiplier_ranges=tuple(service_ranges),
+            request_class_statistic_variance_components=tuple(
+                variance_components
+            ),
+            model_form_assumptions=tuple(
+                sorted(self.system.get_service_execution_models().items())
+            ),
+            placement_effects_applied=any(
+                getattr(replication, "placement_model_applied", False)
+                for replication in replications
+            ),
         )
 
     def _normalize_configuration(self, configuration):
@@ -505,6 +644,9 @@ class CalibratedConfigurationEvaluator:
                     ("replication_count", previous_count),
                 ),
                 failure_reason=failure_reason,
+                uncertainty_diagnostics=self._uncertainty_diagnostics(
+                    replications
+                ),
             )
             self._progress(
                 "configuration_evaluation_completed",

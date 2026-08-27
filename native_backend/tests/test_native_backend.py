@@ -51,14 +51,8 @@ def assert_valid_history(history):
     assert all(left[1] != right[1] for left, right in zip(history, history[1:]))
 
 
-def test_system_simulate_uses_native_backend_and_is_seed_reproducible(monkeypatch):
+def test_system_simulate_is_seed_reproducible():
     system = make_single_service_system(gamma=2.0, mu=5.0)
-    monkeypatch.setattr(
-        "performance_models.service.Service.generate_external_traffic",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("SimPy execution path was used")
-        ),
-    )
 
     first_collector = SimulationMetricsCollector(1)
     second_collector = SimulationMetricsCollector(1)
@@ -392,7 +386,10 @@ def test_zero_arrival_workload_remains_empty_without_special_casing():
     assert replication.request_class_arrival_times == {"read": ()}
 
 
-def test_missing_mandatory_binary_fails_without_simpy_fallback(monkeypatch, tmp_path):
+def test_missing_mandatory_binary_fails_without_an_execution_fallback(
+    monkeypatch,
+    tmp_path,
+):
     backend = get_native_backend()
     monkeypatch.setattr(backend, "binary_path", tmp_path / "missing-simulator")
     system = make_single_service_system()

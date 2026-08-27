@@ -363,7 +363,7 @@ def slice_warmup_replication(
     *,
     bucket_width=None,
 ):
-    """Derive an exact shorter-horizon replication without rerunning SimPy."""
+    """Derive an exact shorter-horizon replication without rerunning the kernel."""
     if not math.isfinite(pilot_horizon) or pilot_horizon <= 0:
         raise ValueError("pilot_horizon must be finite and greater than zero.")
     if pilot_horizon > replication.pilot_horizon and not math.isclose(
@@ -411,7 +411,7 @@ def slice_warmup_replication(
 
 
 def rebucket_warmup_replication(replication, bucket_width):
-    """Recompute buckets from retained event histories without rerunning SimPy."""
+    """Recompute buckets from retained event histories without rerunning the kernel."""
     if not math.isfinite(bucket_width) or bucket_width <= 0:
         raise ValueError("bucket_width must be finite and greater than zero.")
     return slice_warmup_replication(

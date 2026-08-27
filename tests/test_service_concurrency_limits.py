@@ -155,11 +155,16 @@ def test_execution_model_changes_calibration_fingerprint():
     )
 
 
-def test_processor_sharing_rejects_an_unmeasured_concurrency_limit():
+def test_processor_sharing_accepts_a_declared_external_pool_limit():
     workload = _workload(processing_slots=1, concurrency=4)
     workload["traffic_model"]["service_times"]["api"][
         "execution_model"
     ] = "processor_sharing"
 
-    with pytest.raises(ValueError, match="cannot be combined"):
-        parse_workload_spec(workload)
+    parsed = parse_workload_spec(workload)
+    assert parsed.traffic_model.concurrency_limits_per_replica["api"] == 4
+
+    system = System("limited-processor-sharing", workload, QueueingNetworkType.OPEN)
+    serialized = get_native_backend().serialize_system(system)
+    assert serialized["services"][0]["execution_model"] == "processor_sharing"
+    assert serialized["services"][0]["concurrency_capacity"] == 4

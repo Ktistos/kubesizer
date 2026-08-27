@@ -16,6 +16,7 @@ class ServiceDeployment:
     cpu_limit_cores: float | None
     memory_request_bytes: float | None
     memory_limit_bytes: float | None
+    concurrency_limit_per_replica: int | None = None
 
     @property
     def cpu_capacity_cores(self):
@@ -55,6 +56,7 @@ class TargetRequestClass:
     calls: tuple[tuple[str, tuple[tuple[str, float], ...]], ...]
     call_execution: str | None
     fixed_latency_overhead_seconds: float
+    latency_overhead_distribution: object | None
     end_to_end_timeout_seconds: float
     latency_slo: tuple[tuple[str, object], ...] | None
     maximum_terminal_failure_rate: float | None
@@ -75,6 +77,31 @@ class TargetRequestClass:
 @dataclass(frozen=True)
 class WorkloadDefinition:
     request_classes: tuple[TargetRequestClass, ...]
+    load_forecast_multipliers: tuple[float, ...] = (1.0,)
+
+    @property
+    def maximum_load_multiplier(self):
+        return max(self.load_forecast_multipliers)
+
+
+@dataclass(frozen=True)
+class AlignedInputWindow:
+    """One joint observation used as an indivisible input-uncertainty unit."""
+
+    start: float
+    end: float
+    request_class_arrival_rates: tuple[tuple[str, float], ...]
+    service_cpu_demands: tuple[tuple[str, float], ...]
+
+
+@dataclass(frozen=True)
+class UncertaintyDimension:
+    """One named source of uncertainty and how the workflow treats it."""
+
+    kind: str
+    name: str
+    treatment: str
+    values: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -273,6 +300,7 @@ class DeploymentCharacterization:
     request_class_calls: tuple[
         tuple[str, tuple[tuple[str, tuple[tuple[str, float], ...]], ...]], ...
     ]
+    aligned_input_windows: tuple[AlignedInputWindow, ...]
     capabilities: tuple[tuple[str, bool], ...]
     warnings: tuple[str, ...]
 
@@ -340,6 +368,7 @@ class SimulationWorkloadVariant:
     name: str
     workload: dict
     assumptions: tuple[str, ...]
+    uncertainty_dimensions: tuple[UncertaintyDimension, ...] = ()
 
 
 @dataclass(frozen=True)

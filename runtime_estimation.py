@@ -10,7 +10,10 @@ from calibration import (
     measurement_duration_candidates,
     select_warmup_pilot_parameters,
 )
-from metrics import replication_cluster_bootstrap_p95
+from metrics import (
+    replication_cluster_bootstrap_mean,
+    replication_cluster_bootstrap_p95,
+)
 from optimization import (
     DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT,
     DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
@@ -394,6 +397,12 @@ def benchmark_runtime_rates(
         )
 
         request_classes = tuple(system.get_request_classes())
+        latency_slo_kind = system.get_request_class_latency_slo_kind()
+        bootstrap_latency_interval = (
+            replication_cluster_bootstrap_mean
+            if latency_slo_kind == "mean"
+            else replication_cluster_bootstrap_p95
+        )
         tail_alpha = options.overall_alpha / (
             2 * options.maximum_sequential_looks * len(request_classes)
         )
@@ -406,7 +415,7 @@ def benchmark_runtime_rates(
             )
             if not any(clusters):
                 continue
-            replication_cluster_bootstrap_p95(
+            bootstrap_latency_interval(
                 clusters,
                 request_class=request_class,
                 slo=1.0,
@@ -545,25 +554,43 @@ def calculate_workflow_runtime_estimate(
         + rates.bootstrap_seconds_per_replication_time_unit_per_class
         * measurement_calibration_bootstrap_work
     )
-    ordinary_warmup_duration = min(
-        parameters.pilot_horizon,
-        parameters.pilot_horizon * (2**doubling_count) / 3.0,
+    # The ordinary forecast assumes that the first candidate pair may be too
+    # short, then that the next paired-prefix batch succeeds.  Further horizon
+    # extensions belong to the configured failure-path ceiling, not to the ETA
+    # shown as ordinary work.
+    ordinary_doubling_count = min(doubling_count, 3)
+    ordinary_batch_horizon_factor = sum(
+        2 ** min(batch_start + 1, ordinary_doubling_count)
+        for batch_start in range(0, ordinary_doubling_count + 1, 2)
     )
+    ordinary_validation_horizon = parameters.pilot_horizon * (
+        2 ** max(0, ordinary_doubling_count - 1)
+    )
+    ordinary_warmup_duration = ordinary_validation_horizon / 3.0
     ordinary_warmup_work = (
-        options.warmup_replications * batch_horizon_factor * parameters.pilot_horizon
+        options.warmup_replications
+        * ordinary_batch_horizon_factor
+        * parameters.pilot_horizon
         + options.warmup_validation_replications
         * len(representatives)
         * options.warmup_max_validation_rounds
-        * parameters.pilot_horizon
-        * (2**doubling_count)
+        * ordinary_validation_horizon
     )
+    ordinary_measurement_study_durations = (durations[1],)
+    ordinary_measurement_analysis_durations = durations[:2]
     ordinary_measurement_calibration_work = (
         options.measurement_calibration_replications
         * len(representatives)
         * sum(
             ordinary_warmup_duration + duration
-            for duration in measurement_study_durations
+            for duration in ordinary_measurement_study_durations
         )
+    )
+    ordinary_measurement_calibration_bootstrap_work = (
+        options.measurement_calibration_replications
+        * len(representatives)
+        * len(system.get_request_classes())
+        * sum(ordinary_measurement_analysis_durations)
     )
     ordinary_calibration_seconds = (
         _parallel_runtime(
@@ -577,7 +604,7 @@ def calculate_workflow_runtime_estimate(
             workers,
         )
         + rates.bootstrap_seconds_per_replication_time_unit_per_class
-        * measurement_calibration_bootstrap_work
+        * ordinary_measurement_calibration_bootstrap_work
     )
 
     replica_configuration_count = math.prod(
@@ -658,8 +685,9 @@ def calculate_workflow_runtime_estimate(
         replica_configuration_count,
         1 + sum(high > low for low, high in zip(minimum, maximum)),
     )
+    ordinary_measurement_duration = durations[0]
     ordinary_per_replication_horizon = (
-        ordinary_warmup_duration + measurement_duration_ceiling
+        ordinary_warmup_duration + ordinary_measurement_duration
     )
     ordinary_optimization_simulation_work = (
         ordinary_replica_configuration_count
@@ -669,7 +697,7 @@ def calculate_workflow_runtime_estimate(
     ordinary_optimization_bootstrap_work = (
         ordinary_replica_configuration_count
         * len(system.get_request_classes())
-        * measurement_duration_ceiling
+        * ordinary_measurement_duration
         * options.minimum_optimization_replications
     )
     ordinary_optimization_seconds = (
@@ -702,6 +730,11 @@ def calculate_workflow_runtime_estimate(
     ordinary_final_simulation_work = (
         options.final_validation_replications * ordinary_per_replication_horizon
     )
+    ordinary_final_bootstrap_work = (
+        options.final_validation_replications
+        * len(system.get_request_classes())
+        * ordinary_measurement_duration
+    )
     ordinary_final_seconds = (
         _parallel_runtime(
             rates.measurement_seconds_per_replication_time_unit,
@@ -709,7 +742,7 @@ def calculate_workflow_runtime_estimate(
             workers,
         )
         + rates.bootstrap_seconds_per_replication_time_unit_per_class
-        * final_bootstrap_work
+        * ordinary_final_bootstrap_work
     )
 
     scalable_placement_options = (

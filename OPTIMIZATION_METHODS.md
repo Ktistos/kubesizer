@@ -156,11 +156,11 @@ heuristic budget. It is not proof of mathematical infeasibility.
 
 ## Pipeline boundary
 
-The current queue simulator does not consume node placement or inter-node
-latencies. Placement therefore does not change simulated request latency in
-the present model. If placement-dependent delay, routing, or node contention
-is later added, the combined result must undergo fresh end-to-end SLO
-validation.
+The native simulator consumes the selected replica placement, directional
+one-way node latencies, and optional measured node execution-time multipliers.
+Synchronous service calls include both request and response network delay.
+When simulation-based sizing and placement are both requested, the fresh-seed
+final SLO validation runs after placement so it certifies the combined plan.
 
 Replica sizing accepts an optional structural-feasibility callback so
 aggregate or downstream placement limits can reject impossible replica vectors

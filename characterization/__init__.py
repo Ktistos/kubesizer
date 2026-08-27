@@ -3,6 +3,7 @@
 from .analysis import characterize_deployment
 from .methodology import measurement_methodology_contract
 from .models import (
+    AlignedInputWindow,
     CapacityEnvelopePoint,
     DeploymentCharacterization,
     DeploymentSpec,
@@ -18,6 +19,7 @@ from .models import (
     SimulationWorkloadVariant,
     SizingPolicy,
     TargetRequestClass,
+    UncertaintyDimension,
     WorkloadDefinition,
 )
 from .parser import (
@@ -38,6 +40,7 @@ from .sizing import (
 from .workflow import load_and_prepare_initial_sizing, prepare_initial_sizing
 
 __all__ = [
+    "AlignedInputWindow",
     "CapacityEnvelopePoint",
     "DeploymentCharacterization",
     "DeploymentSpec",
@@ -53,6 +56,7 @@ __all__ = [
     "SimulationWorkloadVariant",
     "SizingPolicy",
     "TargetRequestClass",
+    "UncertaintyDimension",
     "WorkloadDefinition",
     "build_characterized_system_variants",
     "build_simulation_workload_variants",

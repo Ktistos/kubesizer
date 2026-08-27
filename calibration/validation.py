@@ -14,7 +14,7 @@ class WarmupValidationError(RuntimeError):
 class ConfigurationWarmupValidation:
     replica_configuration: tuple[int, ...]
     seeds: tuple[int, ...]
-    ensemble: WarmupEnsembleSeries
+    ensemble: WarmupEnsembleSeries | None
     required_warmup: float
     proposed_warmup: float
     post_warmup_check: PostWarmupStabilityResult
@@ -115,6 +115,7 @@ def validate_global_warmup(
     max_validation_rounds=1,
     cutoff_options=None,
     workers=1,
+    retain_diagnostic_series=True,
 ):
     """Select a conservative global W from fixed fresh-seed ensembles."""
     if initial_warmup < 0:
@@ -221,9 +222,11 @@ def validate_global_warmup(
             )
             configuration_results.append(
                 ConfigurationWarmupValidation(
-                    replica_configuration=configuration,
-                    seeds=seeds,
-                    ensemble=ensemble,
+                        replica_configuration=configuration,
+                        seeds=seeds,
+                        ensemble=(
+                            ensemble if retain_diagnostic_series else None
+                        ),
                     required_warmup=cutoff.warmup_duration,
                     proposed_warmup=proposed_warmup,
                     post_warmup_check=post_warmup,

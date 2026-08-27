@@ -9,3 +9,8 @@ request_classes:
     call_execution: sequential
     end_to_end_latency_slos:
       mean_seconds: 0.25
+
+# Optional forecast envelope. Kubesizer sizes and certifies the largest
+# multiplier; retain 1.0 to include the measured workload as a reference.
+# load_forecast:
+#   multipliers: [1.0, 1.25, 1.5]

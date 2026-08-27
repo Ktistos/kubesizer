@@ -3,6 +3,13 @@
 request_classes:
   interactive:
     concurrency_weight: 0.8
+    # Per-request latency outside modeled service queues: ingress, sidecars,
+    # serialization, and network transit. It is sampled independently after
+    # the final service visit and remains part of end-to-end latency.
+    latency_overhead:
+      distribution: lognormal
+      mean: 0.030
+      scv: 2.0
     end_to_end_latency_slos:
       percentile:
         quantile: 0.95
@@ -28,6 +35,13 @@ request_classes:
 
   batch:
     concurrency_weight: 0.2
+    latency_overhead:
+      distribution: empirical
+      source: examples/workloads/data/request-overhead-times.csv
+      column: overhead_seconds
+      cluster_column: measurement_window
+      # Resample complete observation windows across simulation replications.
+      sampling: cluster_bootstrap
     end_to_end_latency_slos:
       percentile:
         quantile: 0.95
@@ -75,6 +89,8 @@ traffic_model:
 
   service_times:
     gateway:
+      execution_model: processor_sharing
+      concurrency_limit_per_replica: 32
       distribution: exponential
       rate: 50.0
     database:
@@ -100,3 +116,23 @@ traffic_model:
     audit:
       distribution: exponential
       rate: 40.0
+
+  # Optional joint input uncertainty. Each epoch is one aligned measurement
+  # window; the native kernel samples consecutive windows as one block so a
+  # high-arrival/high-demand regime is never recombined with an unrelated one.
+  input_uncertainty:
+    sampling: moving_block_bootstrap
+    block_length: 2
+    epochs:
+      - arrival_rate_multipliers: {interactive: 0.80, batch: 0.85}
+        service_time_multipliers:
+          {gateway: 0.90, database: 0.90, worker: 0.85, cache: 0.90,
+           search: 0.90, mailer: 0.85, audit: 0.90}
+      - arrival_rate_multipliers: {interactive: 1.00, batch: 1.00}
+        service_time_multipliers:
+          {gateway: 1.00, database: 1.00, worker: 1.00, cache: 1.00,
+           search: 1.00, mailer: 1.00, audit: 1.00}
+      - arrival_rate_multipliers: {interactive: 1.25, batch: 1.20}
+        service_time_multipliers:
+          {gateway: 1.10, database: 1.15, worker: 1.20, cache: 1.05,
+           search: 1.15, mailer: 1.20, audit: 1.10}

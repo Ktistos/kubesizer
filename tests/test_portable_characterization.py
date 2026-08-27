@@ -385,7 +385,9 @@ def test_cpu_demand_is_derived_from_time_aligned_cpu_and_request_counters():
         (28.1 / 7200, 28.8 / 7200, 30.2 / 7200)
     )
     variants = build_simulation_workload_variants(inputs, characterization)
-    assert "aligned U/X windows" in " ".join(variants[0].assumptions)
+    assert "aligned arrival-rate and U/X windows" in " ".join(
+        variants[0].assumptions
+    )
 
 
 def test_optional_evidence_can_be_omitted_without_blocking_initial_sizing():
@@ -435,6 +437,31 @@ def test_sizing_is_idempotent_and_workload_semantics_change_the_fingerprint():
     )
     assert changed.fingerprint != first.inputs.fingerprint
     assert characterize_deployment(changed).rate_source == "measured_workload"
+
+
+def test_portable_workflow_preserves_clustered_latency_overhead_evidence():
+    target = _loaded_yaml("workload.yaml")
+    target["request_classes"]["browse"]["latency_overhead"] = {
+        "distribution": "empirical",
+        "clusters": [[0.01, 0.02], [0.10, 0.20]],
+        "sampling": "cluster_bootstrap",
+    }
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        target,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+    characterization = characterize_deployment(inputs)
+
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+    overhead = variant.workload["request_classes"]["browse"]["latency_overhead"]
+
+    assert overhead == {
+        "distribution": "empirical",
+        "clusters": [[0.01, 0.02], [0.1, 0.2]],
+        "sampling": "cluster_bootstrap",
+    }
 
 
 def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
@@ -501,16 +528,74 @@ def test_simulation_builder_uses_safe_aligned_demand_and_declared_call_semantics
     assert workload["request_classes"]["browse"]["calls"] == {"api": {"database": 1.2}}
     api_distribution = workload["traffic_model"]["service_times"]["api"]
     assert api_distribution["distribution"] == "deterministic"
-    assert api_distribution["mean"] == pytest.approx(0.00836 / 0.5)
+    assert api_distribution["mean"] == pytest.approx(0.0082 / 0.5)
     assert (
         workload["traffic_model"]["service_times"]["api"]["execution_model"]
         == "processor_sharing"
     )
     arrival = workload["traffic_model"]["entry_services"]["browse"]["api"]
-    assert arrival["distribution"] == "empirical_interarrival"
-    assert sum(arrival["samples"]) / len(arrival["samples"]) == pytest.approx(
-        1.0 / 20.0
+    assert arrival["distribution"] == "arrival_trace"
+    assert arrival["sampling"] == "block_bootstrap"
+    assert workload["traffic_model"]["input_uncertainty"]["sampling"] == (
+        "moving_block_bootstrap"
     )
+    epochs = workload["traffic_model"]["input_uncertainty"]["epochs"]
+    assert len(epochs) == len(characterization.aligned_input_windows)
+    assert epochs[0]["arrival_rate_multipliers"]["browse"] == pytest.approx(
+        1.0
+    )
+    assert epochs[0]["service_time_multipliers"]["api"] == pytest.approx(
+        0.0080 / 0.0082
+    )
+
+
+def test_declared_load_forecast_certifies_the_maximum_measured_load():
+    target = _loaded_yaml("workload.yaml")
+    target["load_forecast"] = {"multipliers": [1.0, 1.25, 1.5]}
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        target,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+    characterization = characterize_deployment(inputs)
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+    ((_, system),) = build_characterized_system_variants(inputs, characterization)
+
+    assert characterization.rate_source == "measured_workload_forecast_upper_bound"
+    assert characterization.service_map["api"].workload_arrival_rate_rps == (
+        pytest.approx(30.0)
+    )
+    assert characterization.service_map["database"].workload_arrival_rate_rps == (
+        pytest.approx(36.0)
+    )
+    assert system.get_external_arrival_distribution_specs()["browse"]["api"].rate == (
+        pytest.approx(30.0)
+    )
+    assert any(
+        item.kind == "forecast"
+        and item.treatment == "upper_envelope_certification"
+        and item.values == (1.0, 1.25, 1.5)
+        for item in variant.uncertainty_dimensions
+    )
+
+
+def test_portable_deployment_preserves_a_declared_service_pool_limit():
+    deployment = _loaded_yaml("deployment.yaml")
+    deployment["services"]["api"]["concurrency_limit_per_replica"] = 17
+    inputs = parse_portable_sizing_inputs(
+        deployment,
+        _loaded_yaml("workload.yaml"),
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+    characterization = characterize_deployment(inputs)
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+
+    assert inputs.deployment.services[0].concurrency_limit_per_replica == 17
+    assert variant.workload["traffic_model"]["service_times"]["api"][
+        "concurrency_limit_per_replica"
+    ] == 17
 
 
 def test_characterized_system_executes_in_mandatory_native_backend():

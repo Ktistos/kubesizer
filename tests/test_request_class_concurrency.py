@@ -80,6 +80,38 @@ def test_weighting_preserves_entry_stream_proportions_inside_each_class():
     assert system.get_service("api").get_gamma("write") == pytest.approx(5.0)
 
 
+def test_weighting_rescales_clustered_interarrivals_without_losing_clusters():
+    workload = {
+        "request_classes": {
+            "read": {"concurrency_weight": 0.75, "routing": {}},
+            "write": {"concurrency_weight": 0.25, "routing": {}},
+        },
+        "traffic_model": {
+            "entry_services": {
+                "read": {
+                    "api": {
+                        "distribution": "empirical_interarrival",
+                        "clusters": [[1.0, 2.0], [3.0, 4.0]],
+                        "sampling": "cluster_bootstrap",
+                    }
+                },
+                "write": {
+                    "api": {"distribution": "deterministic", "rate": 0.4}
+                },
+            },
+            "service_times": {
+                "api": {"distribution": "deterministic", "mean": 0.1}
+            },
+        },
+    }
+    system = System("cluster-rescaling", workload, QueueingNetworkType.OPEN)
+    read = system.get_external_arrival_distribution_specs()["read"]["api"]
+
+    assert read.rate == pytest.approx(0.6)
+    assert read.sample_clusters[0] == pytest.approx((2.0 / 3.0, 4.0 / 3.0))
+    assert read.sample_clusters[1] == pytest.approx((2.0, 8.0 / 3.0))
+
+
 def test_legacy_schema_derives_weights_without_changing_arrival_rates():
     system = System(
         "legacy",

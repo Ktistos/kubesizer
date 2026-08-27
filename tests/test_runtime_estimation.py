@@ -198,9 +198,70 @@ def test_scalable_replica_mode_caps_projected_configuration_work():
     )
 
 
+def test_ordinary_forecast_excludes_measurement_extension_failure_paths():
+    system, _ = _system_and_resources()
+    short = calculate_workflow_runtime_estimate(
+        system,
+        None,
+        _rates(),
+        options=CalibrationOptions(measurement_max_doublings=1),
+        maximum_replicas=10,
+        workers=8,
+    )
+    extended = calculate_workflow_runtime_estimate(
+        system,
+        None,
+        _rates(),
+        options=CalibrationOptions(measurement_max_doublings=4),
+        maximum_replicas=10,
+        workers=8,
+    )
+
+    assert extended.total_ordinary_planning_seconds == pytest.approx(
+        short.total_ordinary_planning_seconds
+    )
+    assert extended.total_configured_ceiling_seconds > (
+        short.total_configured_ceiling_seconds
+    )
+
+
+def test_ordinary_forecast_excludes_late_warmup_horizon_extensions():
+    system, _ = _system_and_resources()
+    ordinary = calculate_workflow_runtime_estimate(
+        system,
+        None,
+        _rates(),
+        options=CalibrationOptions(warmup_max_horizon_doublings=3),
+        maximum_replicas=10,
+        workers=8,
+    )
+    extended = calculate_workflow_runtime_estimate(
+        system,
+        None,
+        _rates(),
+        options=CalibrationOptions(warmup_max_horizon_doublings=6),
+        maximum_replicas=10,
+        workers=8,
+    )
+
+    assert extended.total_ordinary_planning_seconds == pytest.approx(
+        ordinary.total_ordinary_planning_seconds
+    )
+    assert extended.total_configured_ceiling_seconds > (
+        ordinary.total_configured_ceiling_seconds
+    )
+
+
 def test_runtime_retry_cap_must_be_nonnegative():
     with pytest.raises(ValueError, match="horizon_extensions"):
         CalibrationOptions(warmup_max_validation_horizon_extensions=-1)
+
+
+def test_warmup_bucket_memory_budget_must_retain_analysis_resolution():
+    with pytest.raises(ValueError, match="warmup_max_buckets_per_series"):
+        CalibrationOptions(warmup_max_buckets_per_series=499)
+    with pytest.raises(ValueError, match="warmup_max_total_bucket_values"):
+        CalibrationOptions(warmup_max_total_bucket_values=4_999)
 
 
 def test_duration_formatter_uses_readable_units():

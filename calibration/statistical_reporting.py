@@ -69,6 +69,12 @@ def calibration_diagnostics_summary(warmup, measurement, options):
         "warmup": {
             "global_warmup": warmup.global_warmup,
             "bucket_width": warmup.bucket_width,
+            "maximum_buckets_per_series": (
+                options.warmup_max_buckets_per_series
+            ),
+            "maximum_total_bucket_values": (
+                options.warmup_max_total_bucket_values
+            ),
             "analysis_window_length": cutoff.window_length,
             "minimum_stable_configuration": list(
                 warmup.final_parameters.minimum_replica_configuration

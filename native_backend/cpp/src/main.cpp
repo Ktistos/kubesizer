@@ -24,7 +24,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 7;
+constexpr int kProtocolVersion = 9;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 constexpr int kDeadlinePriority = 2;
@@ -36,6 +36,7 @@ enum class EventKind {
     Grant,
     Resume,
     ConcurrencyGrant,
+    CallReturn,
     FinalExit,
     RequestTimeout
 };
@@ -60,7 +61,9 @@ struct Distribution {
     double scv{};
     double shape{};
     double block_duration{};
+    bool bayesian_bootstrap{};
     std::vector<double> samples;
+    std::vector<std::vector<double>> sample_clusters;
     std::shared_ptr<void> custom_library_handle;
     kubesizer_custom_sample_fn custom_sampler{};
     std::vector<double> custom_parameters;
@@ -93,7 +96,7 @@ struct RequestClass {
     std::vector<WorkflowVisit> workflow;
     std::vector<std::vector<WorkflowVisit>> calls;
     CallExecution call_execution{CallExecution::Parallel};
-    double fixed_latency_overhead{};
+    std::optional<Distribution> latency_overhead;
     double end_to_end_timeout{};
 };
 
@@ -101,6 +104,11 @@ struct ExternalStream {
     int request_class{};
     int entry_service{};
     Distribution interarrival;
+};
+
+struct InputEpoch {
+    std::vector<double> arrival_rate_multipliers;
+    std::vector<double> service_time_multipliers;
 };
 
 struct TraceSamplerState {
@@ -114,6 +122,11 @@ struct Workload {
     std::vector<Service> services;
     std::vector<RequestClass> request_classes;
     std::vector<ExternalStream> external_streams;
+    std::vector<InputEpoch> input_epochs;
+    std::size_t input_block_length{};
+    std::vector<std::vector<int>> service_replica_counts_by_node;
+    std::vector<std::vector<double>> node_communication_latencies;
+    std::vector<double> node_execution_time_multipliers;
 };
 
 struct Request {
@@ -134,6 +147,7 @@ struct Request {
 struct Visit {
     Request* request{};
     int service{-1};
+    int node{-1};
     Visit* parent{};
     std::size_t ownership_index{};
     std::int64_t pending_children{};
@@ -447,7 +461,9 @@ class Kernel {
         request_class_response_times_(workload.request_classes.size()),
         request_class_arrival_times_(workload.request_classes.size()),
         request_class_failure_flags_(workload.request_classes.size()),
-        measured_request_counts_(workload.request_classes.size()) {}
+        measured_request_counts_(workload.request_classes.size()) {
+        initialize_input_uncertainty();
+    }
 
     KernelSummary run() {
         const auto start = std::chrono::steady_clock::now();
@@ -522,8 +538,56 @@ class Kernel {
         return tagged_requests_in_flight_;
     }
     std::int64_t seed() const { return seed_; }
+    int sampled_input_block_start() const { return sampled_input_block_start_; }
+    const std::vector<double>& input_arrival_rate_multipliers() const {
+        return input_arrival_rate_multipliers_;
+    }
+    const std::vector<double>& input_service_time_multipliers() const {
+        return input_service_time_multipliers_;
+    }
 
   private:
+    void initialize_input_uncertainty() {
+        input_arrival_rate_multipliers_.assign(
+            workload_.request_classes.size(), 1.0
+        );
+        input_service_time_multipliers_.assign(
+            workload_.services.size(), 1.0
+        );
+        if (workload_.input_epochs.empty()) return;
+        std::fill(
+            input_arrival_rate_multipliers_.begin(),
+            input_arrival_rate_multipliers_.end(),
+            0.0
+        );
+        std::fill(
+            input_service_time_multipliers_.begin(),
+            input_service_time_multipliers_.end(),
+            0.0
+        );
+        std::uniform_int_distribution<std::size_t> choose(
+            0, workload_.input_epochs.size() - 1
+        );
+        const std::size_t start = choose(random_);
+        sampled_input_block_start_ = static_cast<int>(start);
+        const double divisor = static_cast<double>(workload_.input_block_length);
+        for (std::size_t offset = 0; offset < workload_.input_block_length; ++offset) {
+            const InputEpoch& epoch = workload_.input_epochs[
+                (start + offset) % workload_.input_epochs.size()
+            ];
+            for (std::size_t index = 0;
+                 index < input_arrival_rate_multipliers_.size(); ++index) {
+                input_arrival_rate_multipliers_[index] +=
+                    epoch.arrival_rate_multipliers[index] / divisor;
+            }
+            for (std::size_t index = 0;
+                 index < input_service_time_multipliers_.size(); ++index) {
+                input_service_time_multipliers_[index] +=
+                    epoch.service_time_multipliers[index] / divisor;
+            }
+        }
+    }
+
     static std::vector<int> capacities(const Workload& workload) {
         std::vector<int> result;
         for (const Service& service : workload.services) result.push_back(service.capacity);
@@ -608,11 +672,63 @@ class Kernel {
                 break;
             }
             case DistributionKind::Empirical: {
-                std::uniform_int_distribution<std::size_t> choose(
-                    0,
-                    distribution.samples.size() - 1
-                );
-                result = distribution.samples[choose(random_)];
+                if (!distribution.sample_clusters.empty()) {
+                    auto found = cluster_empirical_samples_.find(&distribution);
+                    if (found == cluster_empirical_samples_.end()) {
+                        std::uniform_int_distribution<std::size_t> choose_cluster(
+                            0,
+                            distribution.sample_clusters.size() - 1
+                        );
+                        std::vector<double> resampled;
+                        for (std::size_t index = 0;
+                             index < distribution.sample_clusters.size();
+                             ++index) {
+                            const auto& cluster = distribution.sample_clusters[
+                                choose_cluster(random_)
+                            ];
+                            resampled.insert(
+                                resampled.end(),
+                                cluster.begin(),
+                                cluster.end()
+                            );
+                        }
+                        found = cluster_empirical_samples_.emplace(
+                            &distribution,
+                            std::move(resampled)
+                        ).first;
+                    }
+                    std::uniform_int_distribution<std::size_t> choose(
+                        0,
+                        found->second.size() - 1
+                    );
+                    result = found->second[choose(random_)];
+                } else if (distribution.bayesian_bootstrap) {
+                    auto found = bayesian_empirical_samplers_.find(&distribution);
+                    if (found == bayesian_empirical_samplers_.end()) {
+                        std::exponential_distribution<double> weight(1.0);
+                        std::vector<double> weights;
+                        weights.reserve(distribution.samples.size());
+                        for (std::size_t index = 0;
+                             index < distribution.samples.size();
+                             ++index) {
+                            weights.push_back(weight(random_));
+                        }
+                        found = bayesian_empirical_samplers_.emplace(
+                            &distribution,
+                            std::discrete_distribution<std::size_t>(
+                                weights.begin(),
+                                weights.end()
+                            )
+                        ).first;
+                    }
+                    result = distribution.samples[found->second(random_)];
+                } else {
+                    std::uniform_int_distribution<std::size_t> choose(
+                        0,
+                        distribution.samples.size() - 1
+                    );
+                    result = distribution.samples[choose(random_)];
+                }
                 break;
             }
             case DistributionKind::ArrivalTrace: {
@@ -657,11 +773,12 @@ class Kernel {
     }
 
     void schedule_next_external(int stream, double now) {
+        const int request_class = workload_.external_streams[stream].request_class;
         schedule(
             now + sample(
                 workload_.external_streams[stream].interarrival,
                 &trace_states_[stream]
-            ),
+            ) / input_arrival_rate_multipliers_[request_class],
             kNormalPriority,
             EventKind::ExternalArrival,
             nullptr,
@@ -746,6 +863,8 @@ class Kernel {
             case EventKind::Resume: resume(event.visit, event.time); break;
             case EventKind::ConcurrencyGrant:
                 concurrency_grant(event.index, event.time); break;
+            case EventKind::CallReturn:
+                complete_child_return(event.visit, event.time); break;
             case EventKind::FinalExit: final_exit(event.request, event.time); break;
             case EventKind::RequestTimeout:
                 request_timeout(event.request, event.time); break;
@@ -842,6 +961,7 @@ class Kernel {
         visits_[ownership_index] = std::make_unique<Visit>(Visit{
             request,
             service,
+            choose_node(service),
             parent,
             ownership_index,
             0,
@@ -853,6 +973,28 @@ class Kernel {
         return visits_[ownership_index].get();
     }
 
+    int choose_node(int service) {
+        if (workload_.service_replica_counts_by_node.empty()) return -1;
+        const auto& counts = workload_.service_replica_counts_by_node[service];
+        int total = 0;
+        for (int count : counts) total += count;
+        if (total <= 0) {
+            throw std::runtime_error("placed service has no replicas");
+        }
+        std::uniform_int_distribution<int> choose(0, total - 1);
+        int draw = choose(random_);
+        for (std::size_t node = 0; node < counts.size(); ++node) {
+            if (draw < counts[node]) return static_cast<int>(node);
+            draw -= counts[node];
+        }
+        throw std::runtime_error("could not select a placed service replica");
+    }
+
+    double network_delay(int source_node, int destination_node) const {
+        if (source_node < 0 || destination_node < 0) return 0.0;
+        return workload_.node_communication_latencies[source_node][destination_node];
+    }
+
     const Distribution& service_time(Request* request, int service) const {
         const auto& distributions = workload_.services[service].service_times;
         if (request->request_class < 0
@@ -861,6 +1003,18 @@ class Kernel {
             throw std::runtime_error("missing request-class service distribution");
         }
         return distributions[request->request_class];
+    }
+
+    double sample_service_time(Visit* visit) {
+        double node_multiplier = 1.0;
+        if (visit->node >= 0) {
+            node_multiplier = workload_.node_execution_time_multipliers[
+                visit->node
+            ];
+        }
+        return sample(service_time(visit->request, visit->service))
+            * input_service_time_multipliers_[visit->service]
+            * node_multiplier;
     }
 
     int total_waiting(int service) const {
@@ -904,7 +1058,7 @@ class Kernel {
             }
             record_service_state(service, now);
             schedule(
-                now + sample(service_time(visit->request, service)),
+                now + sample_service_time(visit),
                 kNormalPriority,
                 EventKind::ServiceCompletion,
                 nullptr,
@@ -966,7 +1120,7 @@ class Kernel {
         const int service = visit->service;
         update_processor_sharing_work(service, now);
         visit->remaining_work = processor_sharing_virtual_work_[service]
-            + sample(service_time(visit->request, service));
+            + sample_service_time(visit);
         processor_sharing_active_[service].push({
             visit->remaining_work,
             visit->request->id,
@@ -982,22 +1136,14 @@ class Kernel {
 
     void admit(Visit* visit, double now) {
         const int service = visit->service;
+        const int limit = workload_.services[service].concurrency_capacity;
         if (
-            workload_.services[service].execution_model
-                == ExecutionModel::ProcessorSharing
-            || (
-                active_concurrency_[service]
-                    < workload_.services[service].concurrency_capacity
-                && admission_waiting_[service].empty()
-            )
+            (limit == 0 || active_concurrency_[service] < limit)
+            && admission_waiting_[service].empty()
         ) {
             ++active_concurrency_[service];
             if (
-                workload_.services[service].execution_model
-                    == ExecutionModel::FixedSlots
-                &&
-                active_concurrency_[service]
-                > workload_.services[service].concurrency_capacity
+                limit > 0 && active_concurrency_[service] > limit
             ) {
                 throw std::runtime_error("active service concurrency exceeds capacity");
             }
@@ -1009,10 +1155,11 @@ class Kernel {
     }
 
     void finish_or_delay(Request* request, double now) {
-        const double overhead = workload_.request_classes[
+        const auto& overhead_distribution = workload_.request_classes[
             request->request_class
-        ].fixed_latency_overhead;
-        if (overhead > 0.0) {
+        ].latency_overhead;
+        if (overhead_distribution.has_value()) {
+            const double overhead = sample(overhead_distribution.value());
             schedule(
                 now + overhead,
                 kNormalPriority,
@@ -1066,8 +1213,13 @@ class Kernel {
             now
         );
         ++parent->pending_children;
+        const double arrival_time = now + network_delay(
+            parent->node,
+            child_visit->node
+        );
+        child_visit->arrival_time = arrival_time;
         schedule(
-            now,
+            arrival_time,
             kUrgentPriority,
             EventKind::Admit,
             nullptr,
@@ -1087,26 +1239,45 @@ class Kernel {
         return true;
     }
 
+    void complete_child_return(Visit* parent, double now) {
+        if (parent == nullptr || parent->pending_children <= 0) {
+            throw std::runtime_error("call-graph child count became negative");
+        }
+        --parent->pending_children;
+        if (parent->pending_children != 0) return;
+        const RequestClass& request_class = workload_.request_classes[
+            parent->request->request_class
+        ];
+        if (
+            request_class.call_execution == CallExecution::Sequential
+            && start_next_sequential_child(parent, now)
+        ) {
+            return;
+        }
+        complete_call_visit(parent, now);
+    }
+
     void complete_call_visit(Visit* visit, double now) {
         Request* request = visit->request;
         Visit* parent = visit->parent;
+        const int completed_node = visit->node;
         release_concurrency_and_destroy(visit, now);
         if (parent != nullptr) {
-            if (parent->pending_children <= 0) {
-                throw std::runtime_error("call-graph child count became negative");
-            }
-            --parent->pending_children;
-            if (parent->pending_children == 0) {
-                const RequestClass& request_class = workload_.request_classes[
-                    parent->request->request_class
-                ];
-                if (
-                    request_class.call_execution == CallExecution::Sequential
-                    && start_next_sequential_child(parent, now)
-                ) {
-                    return;
-                }
-                complete_call_visit(parent, now);
+            const double return_time = now + network_delay(
+                completed_node,
+                parent->node
+            );
+            if (return_time == now) {
+                complete_child_return(parent, now);
+            } else {
+                schedule(
+                    return_time,
+                    kUrgentPriority,
+                    EventKind::CallReturn,
+                    nullptr,
+                    parent->service,
+                    parent
+                );
             }
         } else {
             finish_or_delay(request, now);
@@ -1201,8 +1372,13 @@ class Kernel {
         const int target = choose_route(request, service);
         if (target >= 0) {
             Visit* next = create_visit(request, target, nullptr, now);
+            const double arrival_time = now + network_delay(
+                visit->node,
+                next->node
+            );
+            next->arrival_time = arrival_time;
             schedule(
-                now,
+                arrival_time,
                 kUrgentPriority,
                 EventKind::Admit,
                 nullptr,
@@ -1237,17 +1413,16 @@ class Kernel {
     }
 
     void concurrency_grant(int service, double now) {
+        const int limit = workload_.services[service].concurrency_capacity;
         if (
             !admission_waiting_[service].empty()
-            && active_concurrency_[service]
-                < workload_.services[service].concurrency_capacity
+            && (limit == 0 || active_concurrency_[service] < limit)
         ) {
             Visit* visit = admission_waiting_[service].front();
             admission_waiting_[service].pop_front();
             ++active_concurrency_[service];
             if (
-                active_concurrency_[service]
-                > workload_.services[service].concurrency_capacity
+                limit > 0 && active_concurrency_[service] > limit
             ) {
                 throw std::runtime_error("active service concurrency exceeds capacity");
             }
@@ -1268,7 +1443,7 @@ class Kernel {
         }
         record_service_state(service, now);
         schedule(
-            now + sample(service_time(visit->request, service)),
+            now + sample_service_time(visit),
             kNormalPriority,
             EventKind::ServiceCompletion,
             nullptr,
@@ -1337,6 +1512,12 @@ class Kernel {
     bool collect_service_samples_{};
     bool collect_request_class_samples_{};
     std::mt19937_64 random_;
+    std::unordered_map<
+        const Distribution*,
+        std::discrete_distribution<std::size_t>
+    > bayesian_empirical_samplers_;
+    std::unordered_map<const Distribution*, std::vector<double>>
+        cluster_empirical_samples_;
     std::priority_queue<Event, std::vector<Event>, LaterEvent> future_events_;
     std::uint64_t sequence_{};
     std::vector<std::deque<Visit*>> waiting_;
@@ -1362,6 +1543,9 @@ class Kernel {
     std::vector<std::vector<double>> request_class_arrival_times_;
     std::vector<std::vector<int>> request_class_failure_flags_;
     std::vector<std::int64_t> measured_request_counts_;
+    int sampled_input_block_start_{-1};
+    std::vector<double> input_arrival_rate_multipliers_;
+    std::vector<double> input_service_time_multipliers_;
     std::int64_t processed_event_count_{};
     std::int64_t external_arrival_count_{};
     std::int64_t completed_request_count_{};
@@ -1453,9 +1637,57 @@ Distribution parse_distribution(json_t* raw, bool allow_arrival_trace) {
         }
     } else if (name == "empirical" || name == "empirical_interarrival") {
         result.kind = DistributionKind::Empirical;
-        if (json_text(raw, "sampling") != "iid_with_replacement") {
+        const std::string sampling = json_text(raw, "sampling");
+        if (sampling == "bayesian_bootstrap") {
+            result.bayesian_bootstrap = true;
+        } else if (sampling == "cluster_bootstrap") {
+            json_t* raw_clusters = required(raw, "clusters");
+            if (!json_is_array(raw_clusters)
+                || json_array_size(raw_clusters) < 2) {
+                throw std::runtime_error(
+                    "cluster bootstrap requires at least two clusters"
+                );
+            }
+            std::size_t cluster_index;
+            json_t* raw_cluster;
+            json_array_foreach(
+                raw_clusters,
+                cluster_index,
+                raw_cluster
+            ) {
+                if (!json_is_array(raw_cluster)
+                    || json_array_size(raw_cluster) == 0) {
+                    throw std::runtime_error(
+                        "cluster bootstrap clusters must be nonempty arrays"
+                    );
+                }
+                std::vector<double> cluster;
+                std::size_t sample_index;
+                json_t* raw_sample;
+                json_array_foreach(
+                    raw_cluster,
+                    sample_index,
+                    raw_sample
+                ) {
+                    if (!json_is_number(raw_sample)) {
+                        throw std::runtime_error(
+                            "cluster bootstrap samples must be numeric"
+                        );
+                    }
+                    const double sample = json_number_value(raw_sample);
+                    if (!std::isfinite(sample) || sample <= 0.0) {
+                        throw std::runtime_error(
+                            "cluster bootstrap samples must be finite and positive"
+                        );
+                    }
+                    cluster.push_back(sample);
+                }
+                result.sample_clusters.push_back(std::move(cluster));
+            }
+        } else if (sampling != "iid_with_replacement") {
             throw std::runtime_error(
-                "empirical sampling must be iid_with_replacement"
+                "empirical sampling must be iid_with_replacement or "
+                "bayesian_bootstrap or cluster_bootstrap"
             );
         }
     } else if (name == "arrival_trace" && allow_arrival_trace) {
@@ -1643,7 +1875,7 @@ Workload parse_workload(json_t* raw) {
         );
         service.concurrency_capacity = (
             raw_concurrency_capacity == nullptr
-            ? service.capacity
+            ? 0
             : static_cast<int>(json_integer_value(raw_concurrency_capacity))
         );
         if (
@@ -1853,22 +2085,15 @@ Workload parse_workload(json_t* raw) {
             && request_class.workflow.empty()) {
             throw std::runtime_error("workflow flow_kind needs workflow visits");
         }
-        json_t* raw_overhead = json_object_get(item, "fixed_latency_overhead");
-        if (raw_overhead != nullptr) {
-            if (!json_is_number(raw_overhead)) {
-                throw std::runtime_error(
-                    "fixed_latency_overhead must be numeric"
-                );
-            }
-            request_class.fixed_latency_overhead = json_number_value(
-                raw_overhead
+        json_t* raw_overhead = json_object_get(
+            item,
+            "latency_overhead_distribution"
+        );
+        if (raw_overhead != nullptr && !json_is_null(raw_overhead)) {
+            request_class.latency_overhead = parse_distribution(
+                raw_overhead,
+                false
             );
-            if (!std::isfinite(request_class.fixed_latency_overhead)
-                || request_class.fixed_latency_overhead < 0.0) {
-                throw std::runtime_error(
-                    "fixed_latency_overhead must be finite and non-negative"
-                );
-            }
         }
         json_t* raw_timeout = json_object_get(item, "end_to_end_timeout");
         if (raw_timeout != nullptr) {
@@ -1917,6 +2142,214 @@ Workload parse_workload(json_t* raw) {
             throw std::runtime_error(
                 "workflow must begin at its external entry service"
             );
+        }
+    }
+
+    json_t* raw_input_uncertainty = json_object_get(raw, "input_uncertainty");
+    if (raw_input_uncertainty != nullptr) {
+        if (!json_is_object(raw_input_uncertainty)) {
+            throw std::runtime_error("input_uncertainty must be an object");
+        }
+        const std::string sampling = json_text(
+            raw_input_uncertainty,
+            "sampling"
+        );
+        if (sampling != "moving_block_bootstrap") {
+            throw std::runtime_error(
+                "input_uncertainty sampling must be moving_block_bootstrap"
+            );
+        }
+        const std::int64_t block_length = required_integer(
+            raw_input_uncertainty,
+            "block_length"
+        );
+        json_t* epochs = required(raw_input_uncertainty, "epochs");
+        if (!json_is_array(epochs) || json_array_size(epochs) < 2) {
+            throw std::runtime_error(
+                "input_uncertainty must contain at least two epochs"
+            );
+        }
+        if (block_length <= 0
+            || block_length > static_cast<std::int64_t>(json_array_size(epochs))) {
+            throw std::runtime_error("input_uncertainty block_length is invalid");
+        }
+        workload.input_block_length = static_cast<std::size_t>(block_length);
+        std::size_t epoch_index;
+        json_t* raw_epoch;
+        json_array_foreach(epochs, epoch_index, raw_epoch) {
+            if (!json_is_object(raw_epoch)) {
+                throw std::runtime_error("input uncertainty epoch must be an object");
+            }
+            InputEpoch epoch;
+            const auto parse_multipliers = [](
+                json_t* values,
+                std::size_t expected_size,
+                const char* label
+            ) {
+                if (!json_is_array(values)
+                    || json_array_size(values) != expected_size) {
+                    throw std::runtime_error(
+                        std::string(label) + " has the wrong length"
+                    );
+                }
+                std::vector<double> parsed;
+                parsed.reserve(expected_size);
+                std::size_t value_index;
+                json_t* raw_value;
+                json_array_foreach(values, value_index, raw_value) {
+                    if (!json_is_number(raw_value)) {
+                        throw std::runtime_error(
+                            std::string(label) + " must be numeric"
+                        );
+                    }
+                    const double value = json_number_value(raw_value);
+                    if (!std::isfinite(value) || value <= 0.0) {
+                        throw std::runtime_error(
+                            std::string(label) + " must be finite and positive"
+                        );
+                    }
+                    parsed.push_back(value);
+                }
+                return parsed;
+            };
+            epoch.arrival_rate_multipliers = parse_multipliers(
+                required(raw_epoch, "arrival_rate_multipliers"),
+                workload.request_classes.size(),
+                "arrival_rate_multipliers"
+            );
+            epoch.service_time_multipliers = parse_multipliers(
+                required(raw_epoch, "service_time_multipliers"),
+                workload.services.size(),
+                "service_time_multipliers"
+            );
+            workload.input_epochs.push_back(std::move(epoch));
+        }
+    }
+
+    json_t* raw_placement = json_object_get(raw, "placement_model");
+    if (raw_placement != nullptr) {
+        if (!json_is_object(raw_placement)) {
+            throw std::runtime_error("placement_model must be an object");
+        }
+        json_t* raw_node_names = required(raw_placement, "node_names");
+        const std::size_t node_count = json_array_size(raw_node_names);
+        if (!json_is_array(raw_node_names) || node_count == 0) {
+            throw std::runtime_error("placement_model needs at least one node");
+        }
+        std::size_t node_index;
+        json_t* raw_node_name;
+        json_array_foreach(raw_node_names, node_index, raw_node_name) {
+            if (!json_is_string(raw_node_name)
+                || std::string(json_string_value(raw_node_name)).empty()) {
+                throw std::runtime_error("placement node names must be nonempty strings");
+            }
+        }
+
+        json_t* raw_counts = required(raw_placement, "service_replica_counts");
+        if (!json_is_array(raw_counts)
+            || json_array_size(raw_counts) != workload.services.size()) {
+            throw std::runtime_error(
+                "service_replica_counts must have one row per service"
+            );
+        }
+        std::size_t service_index;
+        json_t* raw_count_row;
+        json_array_foreach(raw_counts, service_index, raw_count_row) {
+            if (!json_is_array(raw_count_row)
+                || json_array_size(raw_count_row) != node_count) {
+                throw std::runtime_error(
+                    "service replica count row has the wrong node count"
+                );
+            }
+            std::vector<int> count_row;
+            int total = 0;
+            json_t* raw_count;
+            json_array_foreach(raw_count_row, node_index, raw_count) {
+                if (!json_is_integer(raw_count)
+                    || json_integer_value(raw_count) < 0
+                    || json_integer_value(raw_count) > 1'000'000) {
+                    throw std::runtime_error(
+                        "placed replica counts must be non-negative integers"
+                    );
+                }
+                const int count = static_cast<int>(json_integer_value(raw_count));
+                count_row.push_back(count);
+                total += count;
+            }
+            if (total != workload.services[service_index].replicas) {
+                throw std::runtime_error(
+                    "placed replica total does not match service replicas"
+                );
+            }
+            workload.service_replica_counts_by_node.push_back(
+                std::move(count_row)
+            );
+        }
+
+        json_t* raw_latencies = required(
+            raw_placement,
+            "communication_latency_seconds"
+        );
+        if (!json_is_array(raw_latencies)
+            || json_array_size(raw_latencies) != node_count) {
+            throw std::runtime_error(
+                "communication latency matrix has the wrong row count"
+            );
+        }
+        json_t* raw_latency_row;
+        json_array_foreach(raw_latencies, node_index, raw_latency_row) {
+            if (!json_is_array(raw_latency_row)
+                || json_array_size(raw_latency_row) != node_count) {
+                throw std::runtime_error(
+                    "communication latency row has the wrong length"
+                );
+            }
+            std::vector<double> latency_row;
+            std::size_t destination_index;
+            json_t* raw_latency;
+            json_array_foreach(
+                raw_latency_row,
+                destination_index,
+                raw_latency
+            ) {
+                if (!json_is_number(raw_latency)) {
+                    throw std::runtime_error("node latency must be numeric");
+                }
+                const double latency = json_number_value(raw_latency);
+                if (!std::isfinite(latency) || latency < 0.0) {
+                    throw std::runtime_error(
+                        "node latency must be finite and non-negative"
+                    );
+                }
+                latency_row.push_back(latency);
+            }
+            workload.node_communication_latencies.push_back(
+                std::move(latency_row)
+            );
+        }
+
+        json_t* raw_multipliers = required(
+            raw_placement,
+            "execution_time_multipliers"
+        );
+        if (!json_is_array(raw_multipliers)
+            || json_array_size(raw_multipliers) != node_count) {
+            throw std::runtime_error(
+                "execution_time_multipliers has the wrong node count"
+            );
+        }
+        json_t* raw_multiplier;
+        json_array_foreach(raw_multipliers, node_index, raw_multiplier) {
+            if (!json_is_number(raw_multiplier)) {
+                throw std::runtime_error("node execution multiplier must be numeric");
+            }
+            const double multiplier = json_number_value(raw_multiplier);
+            if (!std::isfinite(multiplier) || multiplier <= 0.0) {
+                throw std::runtime_error(
+                    "node execution multiplier must be finite and positive"
+                );
+            }
+            workload.node_execution_time_multipliers.push_back(multiplier);
         }
     }
     return workload;
@@ -2298,6 +2731,9 @@ struct MeasurementOutput {
     std::vector<int> queue_lengths_at_end;
     std::vector<int> busy_replicas_at_end;
     std::int64_t tagged_requests_in_flight_at_end{};
+    int sampled_input_block_start{-1};
+    std::vector<double> input_arrival_rate_multipliers;
+    std::vector<double> input_service_time_multipliers;
 };
 
 json_t* run_measurement_replications(json_t* request, const Workload& workload) {
@@ -2328,6 +2764,13 @@ json_t* run_measurement_replications(json_t* request, const Workload& workload) 
         output.queue_lengths_at_end = kernel.recorder().queues();
         output.busy_replicas_at_end = kernel.recorder().busy();
         output.tagged_requests_in_flight_at_end = kernel.tagged_requests_in_flight();
+        output.sampled_input_block_start = kernel.sampled_input_block_start();
+        output.input_arrival_rate_multipliers = (
+            kernel.input_arrival_rate_multipliers()
+        );
+        output.input_service_time_multipliers = (
+            kernel.input_service_time_multipliers()
+        );
         outputs[index] = std::move(output);
     });
 
@@ -2395,6 +2838,30 @@ json_t* run_measurement_replications(json_t* request, const Workload& workload) 
         json_object_set_new(
             item, "tagged_requests_in_flight_at_end",
             json_integer(output.tagged_requests_in_flight_at_end)
+        );
+        if (output.sampled_input_block_start < 0) {
+            json_object_set_new(item, "sampled_input_block_start", json_null());
+        } else {
+            json_object_set_new(
+                item,
+                "sampled_input_block_start",
+                json_integer(output.sampled_input_block_start)
+            );
+        }
+        json_object_set_new(
+            item,
+            "input_arrival_rate_multipliers",
+            json_doubles(output.input_arrival_rate_multipliers)
+        );
+        json_object_set_new(
+            item,
+            "input_service_time_multipliers",
+            json_doubles(output.input_service_time_multipliers)
+        );
+        json_object_set_new(
+            item,
+            "placement_model_applied",
+            json_boolean(!workload.service_replica_counts_by_node.empty())
         );
         json_object_set_new(item, "processed_event_count", json_integer(output.summary.processed_event_count));
         json_object_set_new(item, "external_arrival_count", json_integer(output.summary.external_arrival_count));

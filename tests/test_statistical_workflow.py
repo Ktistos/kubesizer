@@ -96,6 +96,7 @@ def test_public_calibrate_runs_warmup_then_measurement_and_freezes_profile(monke
         "measurement",
     ]
     assert calls[1][1]["horizon_sensitivity_tolerance"] == pytest.approx(0.10)
+    assert calls[1][1]["max_buckets_per_series"] == 262_144
     assert calls[2][1]["warmup_duration"] == 7.0
     assert calls[2][1]["representative_configurations"] == ((1,), (2,))
     assert profile.warmup_duration == 7.0
@@ -110,6 +111,17 @@ def test_public_calibrate_runs_warmup_then_measurement_and_freezes_profile(monke
         10_000_000,
         10_000_001,
     )
+
+
+def test_global_warmup_bucket_budget_scales_down_for_large_topologies():
+    large_system = SimpleNamespace(
+        get_services=lambda: {str(index): object() for index in range(20)}
+    )
+
+    assert statistical_workflow._warmup_bucket_cap(
+        large_system,
+        CalibrationOptions(),
+    ) == 49_382
 
 
 def test_public_calibrate_defaults_to_workload_p95_slos(monkeypatch):

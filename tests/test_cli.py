@@ -212,7 +212,7 @@ def test_progress_reporter_combines_elapsed_progress_with_planning_eta():
     line = output.getvalue().splitlines()[-1]
     assert "[###---------] 25%" in line
     assert "elapsed 00:10" in line
-    assert "estimated overall remaining 00:50–01:30" in line
+    assert "estimated overall remaining 00:50" in line
 
 
 def test_simulation_cli_preflight_estimates_selected_modes_and_skipped_placement(
@@ -273,8 +273,24 @@ def test_simulation_cli_preflight_estimates_selected_modes_and_skipped_placement
     )
     assert [line.split(" | ", 1)[0] for line in output.getvalue().splitlines()] == [
         "Estimating runtime",
-        "Runtime estimate ready: 00:04–00:08",
+        "Runtime estimate ready: about 00:04 "
+        "(configured stress-path projection 00:08)",
     ]
+
+
+def test_progress_hides_non_actionable_astronomical_stress_projection():
+    output = io.StringIO()
+    reporter = kubesizer_cli._ConciseProgressReporter(output=output)
+    estimate = SimpleNamespace(
+        stages=(),
+        total_ordinary_planning_seconds=20.0,
+        total_configured_ceiling_seconds=1_000_000_000.0,
+    )
+
+    reporter.runtime_estimation_completed(estimate)
+
+    line = output.getvalue().split(" | ", 1)[0]
+    assert line == "Runtime estimate ready: about 00:20; no finite worst-case guarantee"
 
 
 def test_resources_are_skipped_when_not_supplied():
@@ -480,6 +496,77 @@ def test_simulation_workflow_always_runs_internal_final_validation(monkeypatch):
     assert selected_profile is profile
     assert selected_validation is validation
     assert observed["initial_configuration"] == (2,)
+
+
+def test_simulation_final_validation_runs_after_placement_is_attached(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    system = _fake_system(slo_kind="percentile")
+    attached = []
+    system.configure_simulation_placement = lambda **model: attached.append(model)
+    profile = object()
+    resources_path = tmp_path / "resources.yaml"
+    resources_path.write_text("nodes: []\n", encoding="utf-8")
+    placement = {"node-a": {"api": 1}}
+
+    class PlacementCluster:
+        def simulation_placement_model(self, selected):
+            assert selected == placement
+            return {
+                "placement": placement,
+                "communication_latency_seconds": {"node-a": {}},
+                "execution_time_multipliers": {"node-a": 1.0},
+            }
+
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "_load_system",
+        lambda path: (system, Path(path)),
+    )
+
+    def run_replica_workflow(*args):
+        assert args[1]._defer_final_validation is True
+        return _fake_replica_result(), profile, None
+
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "_run_replica_workflow",
+        run_replica_workflow,
+    )
+    monkeypatch.setattr(kubesizer_cli, "Cluster", lambda *args: PlacementCluster())
+    monkeypatch.setattr(kubesizer_cli, "NodePlacementProblem", lambda cluster: object())
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "optimize_node_placement",
+        lambda *args, **kwargs: SimpleNamespace(
+            placement=placement,
+            configuration=placement,
+        ),
+    )
+
+    def validate(*args, **kwargs):
+        assert attached
+        return SimpleNamespace(passed=True)
+
+    monkeypatch.setattr(kubesizer_cli, "validate_final_configuration", validate)
+
+    exit_code = kubesizer_cli.main(
+        [
+            "--workload",
+            "ignored.yaml",
+            "--resources",
+            str(resources_path),
+            "--replica-evaluation",
+            "simulation",
+            "--json",
+            "--quiet",
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
 
 
 @pytest.mark.parametrize(

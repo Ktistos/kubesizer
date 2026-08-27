@@ -43,7 +43,7 @@ class WarmupCalibrationError(RuntimeError):
 @dataclass(frozen=True)
 class BucketWidthAnalysis:
     bucket_width: float
-    ensemble: WarmupEnsembleSeries
+    ensemble: WarmupEnsembleSeries | None
     cutoff: WarmupCutoffResult
     horizon_adequacy: HorizonAdequacyResult
 
@@ -112,6 +112,17 @@ class WarmupCalibrationResult:
         return self.minimum_configuration_calibrations[-1].bucket_width
 
 
+def _compact_horizon_analysis(analysis):
+    """Discard large plot series while retaining every numeric decision."""
+    return replace(
+        analysis,
+        bucket_width_analyses=tuple(
+            replace(width_analysis, ensemble=None)
+            for width_analysis in analysis.bucket_width_analyses
+        ),
+    )
+
+
 def parameters_with_pilot_horizon(parameters, pilot_horizon):
     """Return an immutable parameter record for a longer, bucket-aligned H."""
     if not math.isfinite(pilot_horizon) or pilot_horizon <= 0:
@@ -127,6 +138,50 @@ def parameters_with_pilot_horizon(parameters, pilot_horizon):
         raw_pilot_horizon=float(pilot_horizon),
         pilot_horizon=float(aligned_horizon),
         bucket_counts=bucket_counts,
+    )
+
+
+def _parameters_with_bounded_bucket_count(parameters, maximum_bucket_count):
+    """Bound diagnostic memory by coarsening all three widths together.
+
+    Exact event-driven integration is retained. A power-of-two scale preserves
+    the ``delta/2, delta, 2*delta`` relationship and permits exact prefix reuse.
+    """
+    if (
+        isinstance(maximum_bucket_count, bool)
+        or not isinstance(maximum_bucket_count, int)
+        or maximum_bucket_count < 500
+    ):
+        raise ValueError("maximum_bucket_count must be an integer of at least 500.")
+    finest_count = math.floor(
+        parameters.pilot_horizon
+        / min(parameters.bucket_width_candidates)
+        + 1e-12
+    )
+    scale = 1
+    while math.ceil(finest_count / scale) > maximum_bucket_count:
+        scale *= 2
+    if scale == 1:
+        return parameters
+
+    candidates = tuple(
+        float(width * scale)
+        for width in parameters.bucket_width_candidates
+    )
+    largest_width = max(candidates)
+    aligned_horizon = (
+        math.ceil(parameters.pilot_horizon / largest_width - 1e-12)
+        * largest_width
+    )
+    return replace(
+        parameters,
+        pilot_horizon=float(aligned_horizon),
+        initial_bucket_width=float(parameters.initial_bucket_width * scale),
+        bucket_width_candidates=candidates,
+        bucket_counts=tuple(
+            math.floor(aligned_horizon / width + 1e-12)
+            for width in candidates
+        ),
     )
 
 
@@ -296,15 +351,23 @@ def calibrate_minimum_configuration(
     parameters,
     *,
     starting_horizon=None,
-    max_horizon_doublings=5,
+    max_horizon_doublings=8,
+    max_buckets_per_series=262_144,
     horizon_sensitivity_tolerance=0.10,
     progress_callback=None,
     analysis_options=None,
     workers=1,
+    retain_diagnostic_series=True,
 ):
     """Double H until two adequate estimates agree, reusing paired prefixes."""
     if not isinstance(max_horizon_doublings, int) or max_horizon_doublings < 1:
         raise ValueError("max_horizon_doublings must be at least one.")
+    if (
+        isinstance(max_buckets_per_series, bool)
+        or not isinstance(max_buckets_per_series, int)
+        or max_buckets_per_series < 500
+    ):
+        raise ValueError("max_buckets_per_series must be an integer of at least 500.")
     analysis_options = dict(analysis_options or {})
     current_horizon = (
         parameters.pilot_horizon
@@ -325,8 +388,36 @@ def calibrate_minimum_configuration(
     current_parameters = horizon_parameters[0]
 
     for batch_start in range(0, len(horizon_parameters), 2):
-        batch = horizon_parameters[batch_start : batch_start + 2]
-        simulation_parameters = batch[-1]
+        raw_batch = horizon_parameters[batch_start : batch_start + 2]
+        simulation_parameters = _parameters_with_bounded_bucket_count(
+            raw_batch[-1],
+            max_buckets_per_series,
+        )
+        largest_batch_width = max(
+            simulation_parameters.bucket_width_candidates
+        )
+
+        def align_to_batch_widths(item):
+            aligned_horizon = (
+                math.ceil(item.pilot_horizon / largest_batch_width - 1e-12)
+                * largest_batch_width
+            )
+            return replace(
+                item,
+                pilot_horizon=float(aligned_horizon),
+                initial_bucket_width=simulation_parameters.initial_bucket_width,
+                bucket_width_candidates=(
+                    simulation_parameters.bucket_width_candidates
+                ),
+                bucket_counts=tuple(
+                    math.floor(aligned_horizon / width + 1e-12)
+                    for width in simulation_parameters.bucket_width_candidates
+                ),
+            )
+
+        batch = tuple(
+            align_to_batch_widths(item) for item in raw_batch
+        )
         if progress_callback is not None:
             progress_callback(
                 "pilot_batch_started",
@@ -392,6 +483,11 @@ def calibrate_minimum_configuration(
                 )
                 previous_success = None
             else:
+                stored_analysis = (
+                    analysis
+                    if retain_diagnostic_series
+                    else _compact_horizon_analysis(analysis)
+                )
                 failure_reason = None
                 if not analysis.passed:
                     failed_widths = [
@@ -411,7 +507,7 @@ def calibrate_minimum_configuration(
                 attempts.append(
                     WarmupHorizonAttempt(
                         pilot_horizon=current_parameters.pilot_horizon,
-                        analysis=analysis,
+                        analysis=stored_analysis,
                         failure_reason=failure_reason,
                     )
                 )
@@ -447,11 +543,11 @@ def calibrate_minimum_configuration(
                                 parameters=current_parameters,
                                 shorter_horizon_parameters=previous_success[0],
                                 attempts=tuple(attempts),
-                                final_analysis=analysis,
+                                final_analysis=stored_analysis,
                                 shorter_horizon_analysis=previous_success[1],
                                 horizon_comparison=comparison,
                             )
-                    previous_success = (current_parameters, analysis)
+                    previous_success = (current_parameters, stored_analysis)
                 else:
                     previous_success = None
 
@@ -485,13 +581,15 @@ def calibrate_global_warmup(
     validation_replication_count=100,
     validation_seed_start=200_000,
     extra_validation_configurations=(),
-    max_horizon_doublings=5,
+    max_horizon_doublings=8,
+    max_buckets_per_series=262_144,
     horizon_sensitivity_tolerance=0.10,
     max_validation_rounds=1,
     max_validation_horizon_extensions=2,
     progress_callback=None,
     analysis_options=None,
     workers=1,
+    retain_diagnostic_series=True,
 ):
     """Execute milestones 4–8 and return a validated global W."""
     if (
@@ -544,10 +642,12 @@ def calibrate_global_warmup(
             parameters,
             starting_horizon=starting_horizon,
             max_horizon_doublings=max_horizon_doublings,
+            max_buckets_per_series=max_buckets_per_series,
             horizon_sensitivity_tolerance=horizon_sensitivity_tolerance,
             progress_callback=progress_callback,
             analysis_options=analysis_options,
             workers=workers,
+            retain_diagnostic_series=retain_diagnostic_series,
         )
         minimum_calibrations.append(minimum_calibration)
         validation_parameters = minimum_calibration.shorter_horizon_parameters
@@ -598,6 +698,7 @@ def calibrate_global_warmup(
                 max_validation_rounds=max_validation_rounds,
                 cutoff_options=validation_cutoff_options,
                 workers=workers,
+                retain_diagnostic_series=retain_diagnostic_series,
             )
         except WarmupValidationError as error:
             last_validation_error = error

@@ -3,10 +3,14 @@ from .edge import Edge
 from .system import System, QueueingNetworkType
 from .workload import (
     DistributionSpec,
+    JointInputEpochSpec,
+    JointInputUncertaintySpec,
     EndToEndLatencySLOSpec,
     ParsedWorkload,
     TrafficModelSpec,
+    duration_distribution_to_workload_mapping,
     normalize_workload_spec,
+    parse_duration_distribution,
     parse_workload_spec,
 )
 from .analytical import AnalyticalQueueingModel
@@ -18,9 +22,13 @@ __all__ = [
     "System",
     "QueueingNetworkType",
     "DistributionSpec",
+    "JointInputEpochSpec",
+    "JointInputUncertaintySpec",
     "EndToEndLatencySLOSpec",
     "TrafficModelSpec",
     "ParsedWorkload",
+    "parse_duration_distribution",
+    "duration_distribution_to_workload_mapping",
     "parse_workload_spec",
     "normalize_workload_spec",
     "AnalyticalQueueingModel",

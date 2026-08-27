@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+import numpy as np
 import pytest
 import yaml
 
@@ -38,7 +39,7 @@ def make_system(*, read_gamma=2.0, route_probability=0.5, api_mu=10.0):
     )
 
 
-def make_profile(system=None):
+def make_profile(system=None, *, calibration_diagnostics=None):
     system = system or make_system()
     minimum = tuple(system.get_minimum_stable_replicas())
     maximum = tuple(value + 3 for value in minimum)
@@ -51,7 +52,11 @@ def make_profile(system=None):
         measurement_duration_candidates=(50.0, 100.0, 200.0),
         warmup_bucket_width=0.5,
         representative_configurations=(minimum, maximum),
-        calibration_diagnostics={"determining_metric": "active_requests"},
+        calibration_diagnostics=(
+            calibration_diagnostics
+            if calibration_diagnostics is not None
+            else {"determining_metric": "active_requests"}
+        ),
         creation_timestamp="2026-08-11T12:00:00+00:00",
     )
 
@@ -90,6 +95,22 @@ def test_profile_round_trip_is_stable_and_immutable(tmp_path):
     assert loaded.to_dict()["confidence_level"] == pytest.approx(0.95)
     with pytest.raises(Exception):
         loaded.warmup_duration = 99.0
+
+
+def test_profile_diagnostics_accept_numerical_library_scalars():
+    profile = make_profile(
+        calibration_diagnostics={
+            "numpy_boolean": np.bool_(True),
+            "numpy_integer": np.int64(7),
+            "numpy_float": np.float64(0.25),
+        }
+    )
+
+    assert profile.diagnostics == {
+        "numpy_boolean": True,
+        "numpy_integer": 7,
+        "numpy_float": 0.25,
+    }
 
 
 def test_profile_rejects_tampered_persisted_values(tmp_path):

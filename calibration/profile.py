@@ -12,7 +12,7 @@ from native_backend import SIMULATOR_SEMANTICS_VERSION
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
 
-CALIBRATION_PROFILE_VERSION = 8
+CALIBRATION_PROFILE_VERSION = 9
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
 MEAN_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-mean-bootstrap-v1"
 
@@ -31,9 +31,11 @@ class CalibrationOptions:
     warmup_required_stable_windows: int = 3
     warmup_relative_tolerance: float = 0.05
     warmup_sensitivity_tolerance: float = 0.10
-    warmup_max_horizon_doublings: int = 5
+    warmup_max_horizon_doublings: int = 8
     warmup_max_validation_rounds: int = 1
     warmup_max_validation_horizon_extensions: int = 2
+    warmup_max_buckets_per_series: int = 262_144
+    warmup_max_total_bucket_values: int = 4_000_000
     measurement_calibration_replications: int = 30
     target_samples_per_class: int = 2_000
     minimum_eligible_samples_per_class: int = 20_000
@@ -62,6 +64,8 @@ class CalibrationOptions:
             "warmup_required_stable_windows": self.warmup_required_stable_windows,
             "warmup_max_horizon_doublings": self.warmup_max_horizon_doublings,
             "warmup_max_validation_rounds": self.warmup_max_validation_rounds,
+            "warmup_max_buckets_per_series": self.warmup_max_buckets_per_series,
+            "warmup_max_total_bucket_values": self.warmup_max_total_bucket_values,
             "measurement_calibration_replications": (
                 self.measurement_calibration_replications
             ),
@@ -93,6 +97,22 @@ class CalibrationOptions:
         ):
             raise ValueError(
                 "warmup_max_validation_horizon_extensions must be non-negative."
+            )
+        if (
+            isinstance(self.warmup_max_buckets_per_series, bool)
+            or not isinstance(self.warmup_max_buckets_per_series, int)
+            or self.warmup_max_buckets_per_series < 500
+        ):
+            raise ValueError(
+                "warmup_max_buckets_per_series must be an integer of at least 500."
+            )
+        if (
+            isinstance(self.warmup_max_total_bucket_values, bool)
+            or not isinstance(self.warmup_max_total_bucket_values, int)
+            or self.warmup_max_total_bucket_values < 5_000
+        ):
+            raise ValueError(
+                "warmup_max_total_bucket_values must be an integer of at least 5000."
             )
         if (
             self.minimum_optimization_replications
@@ -610,6 +630,22 @@ def _canonical_json(value):
         separators=(",", ":"),
         ensure_ascii=True,
         allow_nan=False,
+        default=_json_scalar,
+    )
+
+
+def _json_scalar(value):
+    """Convert scalar values returned by numerical libraries to JSON types."""
+    item = getattr(value, "item", None)
+    if callable(item):
+        converted = item()
+        if converted is not value and isinstance(
+            converted,
+            (str, bool, int, float, type(None)),
+        ):
+            return converted
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not JSON serializable"
     )
 
 
@@ -629,6 +665,9 @@ def _distribution_fingerprint(specification):
             if name not in nonsemantic_fields
         ],
         "samples": list(specification.samples),
+        "sample_clusters": [
+            list(cluster) for cluster in specification.sample_clusters
+        ],
     }
 
 
@@ -666,6 +705,11 @@ def experiment_fingerprints(system):
     fixed_latency_overheads = getattr(
         system,
         "get_request_class_fixed_latency_overheads",
+        lambda: {},
+    )()
+    latency_overhead_specs = getattr(
+        system,
+        "get_request_class_latency_overhead_distribution_specs",
         lambda: {},
     )()
     end_to_end_timeouts = getattr(
@@ -757,6 +801,16 @@ def experiment_fingerprints(system):
             }
             for request_class in request_classes
         ],
+        "request_class_latency_overhead_distributions": [
+            {
+                "request_class": request_class,
+                "specification": _distribution_fingerprint(
+                    latency_overhead_specs[request_class]
+                ),
+            }
+            for request_class in request_classes
+            if request_class in latency_overhead_specs
+        ],
         "request_class_end_to_end_timeouts": [
             {
                 "request_class": request_class,
@@ -832,6 +886,33 @@ def experiment_fingerprints(system):
             for request_class in request_classes
         ],
     }
+    joint_input_uncertainty = getattr(
+        system,
+        "get_joint_input_uncertainty",
+        lambda: None,
+    )()
+    if joint_input_uncertainty is not None:
+        workload["traffic_model"]["input_uncertainty"] = {
+            "sampling": joint_input_uncertainty.sampling,
+            "block_length": joint_input_uncertainty.block_length,
+            "epochs": [
+                {
+                    "arrival_rate_multipliers": [
+                        (name, float(value))
+                        for name, value in sorted(
+                            epoch.arrival_rate_multipliers.items()
+                        )
+                    ],
+                    "service_time_multipliers": [
+                        (name, float(value))
+                        for name, value in sorted(
+                            epoch.service_time_multipliers.items()
+                        )
+                    ],
+                }
+                for epoch in joint_input_uncertainty.epochs
+            ],
+        }
     return _fingerprint(topology), _fingerprint(workload)
 
 

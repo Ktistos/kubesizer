@@ -22,10 +22,24 @@ class DistributionSpec:
     scv: float
     parameters: tuple[tuple[str, object], ...]
     samples: tuple[float, ...] = ()
+    sample_clusters: tuple[tuple[float, ...], ...] = ()
 
     @property
     def rate(self):
         return 1.0 / self.mean
+
+
+@dataclass(frozen=True)
+class JointInputEpochSpec:
+    arrival_rate_multipliers: Mapping
+    service_time_multipliers: Mapping
+
+
+@dataclass(frozen=True)
+class JointInputUncertaintySpec:
+    sampling: str
+    block_length: int
+    epochs: tuple[JointInputEpochSpec, ...]
 
 
 @dataclass(frozen=True)
@@ -37,6 +51,7 @@ class TrafficModelSpec:
     service_execution_models: Mapping
     processing_slots_per_replica: Mapping
     concurrency_limits_per_replica: Mapping
+    input_uncertainty: JointInputUncertaintySpec | None
 
 
 @dataclass(frozen=True)
@@ -78,6 +93,7 @@ class ParsedWorkload:
     request_class_call_graphs: Mapping
     request_class_call_execution_modes: Mapping
     request_class_fixed_latency_overheads: Mapping
+    request_class_latency_overhead_specs: Mapping
     request_class_end_to_end_timeouts: Mapping
     concurrency_weights: Mapping
     request_class_latency_slos: Mapping
@@ -118,6 +134,91 @@ def _positive_integer(value, label):
     return value
 
 
+def _parse_joint_input_uncertainty(
+    value,
+    *,
+    request_classes,
+    service_names,
+    label,
+):
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {
+        "sampling",
+        "block_length",
+        "epochs",
+    }:
+        raise ValueError(
+            f"{label} must contain exactly sampling, block_length, and epochs."
+        )
+    if value["sampling"] != "moving_block_bootstrap":
+        raise ValueError(f"{label}.sampling must be moving_block_bootstrap.")
+    block_length = _positive_integer(
+        value["block_length"],
+        f"{label}.block_length",
+    )
+    raw_epochs = value["epochs"]
+    if not isinstance(raw_epochs, (list, tuple)) or len(raw_epochs) < 2:
+        raise ValueError(f"{label}.epochs must contain at least two windows.")
+    if block_length > len(raw_epochs):
+        raise ValueError(f"{label}.block_length cannot exceed its epoch count.")
+    epochs = []
+    request_class_names = set(request_classes)
+    service_name_set = set(service_names)
+    for index, raw_epoch in enumerate(raw_epochs):
+        epoch_label = f"{label}.epochs[{index}]"
+        if not isinstance(raw_epoch, Mapping) or set(raw_epoch) != {
+            "arrival_rate_multipliers",
+            "service_time_multipliers",
+        }:
+            raise ValueError(
+                f"{epoch_label} must contain exactly arrival_rate_multipliers "
+                "and service_time_multipliers."
+            )
+        arrivals = raw_epoch["arrival_rate_multipliers"]
+        service_times = raw_epoch["service_time_multipliers"]
+        if not isinstance(arrivals, Mapping) or set(arrivals) != request_class_names:
+            raise ValueError(
+                f"{epoch_label}.arrival_rate_multipliers must define every "
+                "request class exactly once."
+            )
+        if (
+            not isinstance(service_times, Mapping)
+            or set(service_times) != service_name_set
+        ):
+            raise ValueError(
+                f"{epoch_label}.service_time_multipliers must define every "
+                "service exactly once."
+            )
+        epochs.append(
+            JointInputEpochSpec(
+                arrival_rate_multipliers=_freeze_mapping(
+                    {
+                        name: _finite_positive(
+                            multiplier,
+                            f"{epoch_label}.arrival_rate_multipliers.{name}",
+                        )
+                        for name, multiplier in arrivals.items()
+                    }
+                ),
+                service_time_multipliers=_freeze_mapping(
+                    {
+                        name: _finite_positive(
+                            multiplier,
+                            f"{epoch_label}.service_time_multipliers.{name}",
+                        )
+                        for name, multiplier in service_times.items()
+                    }
+                ),
+            )
+        )
+    return JointInputUncertaintySpec(
+        sampling="moving_block_bootstrap",
+        block_length=block_length,
+        epochs=tuple(epochs),
+    )
+
+
 def _sample_moments(values, label):
     values = tuple(_finite_positive(value, label) for value in values)
     if not values:
@@ -154,6 +255,50 @@ def _csv_values(source, column, label, base_path):
         raise ValueError(
             f"{label}.source column {column!r} must contain numeric values."
         ) from error
+
+
+def _csv_cluster_values(source, column, cluster_column, label, base_path):
+    if not isinstance(cluster_column, str) or not cluster_column:
+        raise ValueError(f"{label}.cluster_column must be a nonempty string.")
+    path = _resolved_data_path(source, label, base_path)
+    try:
+        with path.open(newline="", encoding="utf-8") as stream:
+            rows = tuple(csv.DictReader(stream))
+    except OSError as error:
+        raise ValueError(f"Cannot read {label}.source at {path}.") from error
+    if not rows:
+        raise ValueError(f"{label}.source contains no data rows.")
+    missing = {column, cluster_column} - set(rows[0])
+    if missing:
+        raise ValueError(f"{label}.source has no columns {sorted(missing)}.")
+    grouped = {}
+    try:
+        for row in rows:
+            cluster = row[cluster_column]
+            if not cluster:
+                raise ValueError
+            grouped.setdefault(cluster, []).append(float(row[column]))
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{label}.source must contain nonempty cluster identities and "
+            "numeric sample values."
+        ) from error
+    if len(grouped) < 2:
+        raise ValueError(f"{label}.source must contain at least two clusters.")
+    return tuple(tuple(values) for values in grouped.values()), path
+
+
+def _resolved_data_path(source, label, base_path):
+    if not isinstance(source, str) or not source:
+        raise ValueError(f"{label}.source must be a nonempty path string.")
+    path = Path(source)
+    if not path.is_absolute():
+        if base_path is None:
+            raise ValueError(
+                f"{label}.source is relative; workload_base_path is required."
+            )
+        path = Path(base_path) / path
+    return path.resolve()
 
 
 def _resolved_file(source, label, base_path):
@@ -286,14 +431,76 @@ def _parse_distribution(specification, label, *, quantity, base_path):
     if distribution == empirical_name:
         file_fields = {"distribution", "source", "column", "sampling"}
         inline_fields = {"distribution", "samples", "sampling"}
-        if set(specification) not in (file_fields, inline_fields):
+        cluster_file_fields = {
+            "distribution",
+            "source",
+            "column",
+            "cluster_column",
+            "sampling",
+        }
+        cluster_inline_fields = {"distribution", "clusters", "sampling"}
+        if set(specification) not in (
+            file_fields,
+            inline_fields,
+            cluster_file_fields,
+            cluster_inline_fields,
+        ):
             raise ValueError(
                 f"{label} must contain distribution and sampling with either "
-                "source plus column or inline samples."
+                "source plus column, inline samples, or clustered samples."
             )
-        if specification["sampling"] != "iid_with_replacement":
-            raise ValueError(f"{label}.sampling must be 'iid_with_replacement'.")
-        if "samples" in specification:
+        if specification["sampling"] not in {
+            "iid_with_replacement",
+            "bayesian_bootstrap",
+            "cluster_bootstrap",
+        }:
+            raise ValueError(
+                f"{label}.sampling must be 'iid_with_replacement' or "
+                "'bayesian_bootstrap', or 'cluster_bootstrap'."
+            )
+        clustered = specification["sampling"] == "cluster_bootstrap"
+        if clustered != (
+            set(specification) in (cluster_file_fields, cluster_inline_fields)
+        ):
+            raise ValueError(
+                f"{label}.sampling='cluster_bootstrap' requires clusters or "
+                "source, column, and cluster_column."
+            )
+        clusters = ()
+        if "clusters" in specification:
+            raw_clusters = specification["clusters"]
+            if (
+                not isinstance(raw_clusters, (list, tuple))
+                or len(raw_clusters) < 2
+                or any(
+                    not isinstance(cluster, (list, tuple)) or not cluster
+                    for cluster in raw_clusters
+                )
+            ):
+                raise ValueError(
+                    f"{label}.clusters must contain at least two nonempty arrays."
+                )
+            clusters = tuple(tuple(cluster) for cluster in raw_clusters)
+            values = tuple(value for cluster in clusters for value in cluster)
+            normalized_specification = dict(specification)
+            normalized_specification["clusters"] = clusters
+            parameters = _parameter_items(normalized_specification)
+            sample_label = f"{label}.clusters"
+        elif "cluster_column" in specification:
+            clusters, resolved = _csv_cluster_values(
+                specification["source"],
+                specification["column"],
+                specification["cluster_column"],
+                label,
+                base_path,
+            )
+            values = tuple(value for cluster in clusters for value in cluster)
+            parameters = _parameter_items(
+                specification,
+                resolved_source=resolved,
+            )
+            sample_label = f"{label}.source values"
+        elif "samples" in specification:
             raw_values = specification["samples"]
             if not isinstance(raw_values, (list, tuple)) or not raw_values:
                 raise ValueError(f"{label}.samples must be a nonempty array.")
@@ -322,32 +529,62 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             scv,
             parameters,
             tuple(values),
+            tuple(clusters),
         )
 
     if distribution == "arrival_trace" and quantity == "interarrival":
-        expected = {
+        file_fields = {
             "distribution",
             "source",
             "timestamp_column",
             "sampling",
             "block_duration",
         }
-        if set(specification) != expected:
+        inline_fields = {
+            "distribution",
+            "timestamps",
+            "sampling",
+            "block_duration",
+        }
+        if set(specification) not in (file_fields, inline_fields):
             raise ValueError(
-                f"{label} must contain exactly distribution, source, "
-                "timestamp_column, sampling, and block_duration."
+                f"{label} must contain sampling and block_duration with either "
+                "source plus timestamp_column or inline timestamps."
             )
         if specification["sampling"] != "block_bootstrap":
             raise ValueError(f"{label}.sampling must be 'block_bootstrap'.")
         _finite_positive(specification["block_duration"], f"{label}.block_duration")
-        timestamps = _csv_values(
-            specification["source"],
-            specification["timestamp_column"],
-            label,
-            base_path,
+        if "timestamps" in specification:
+            raw_timestamps = specification["timestamps"]
+            if not isinstance(raw_timestamps, (list, tuple)):
+                raise ValueError(f"{label}.timestamps must be an array.")
+            timestamps = tuple(raw_timestamps)
+            normalized = dict(specification)
+            normalized["timestamps"] = timestamps
+            parameters = _parameter_items(normalized)
+            sample_label = f"{label}.timestamps"
+        else:
+            timestamps = _csv_values(
+                specification["source"],
+                specification["timestamp_column"],
+                label,
+                base_path,
+            )
+            source = Path(specification["source"])
+            resolved = (
+                source if source.is_absolute() else Path(base_path or ".") / source
+            )
+            parameters = _parameter_items(
+                specification,
+                resolved_source=resolved.resolve(),
+            )
+            sample_label = f"{label}.source timestamps"
+        timestamps = tuple(
+            _finite_nonnegative(value, sample_label) for value in timestamps
         )
         if len(timestamps) < 2 or any(
-            right <= left for left, right in zip(timestamps, timestamps[1:])
+            right <= left
+            for left, right in zip(timestamps, timestamps[1:])
         ):
             raise ValueError(
                 f"{label}.source timestamps must contain at least two strictly "
@@ -357,13 +594,11 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             right - left for left, right in zip(timestamps, timestamps[1:])
         )
         mean, scv = _sample_moments(interarrivals, f"{label}.source intervals")
-        source = Path(specification["source"])
-        resolved = source if source.is_absolute() else Path(base_path or ".") / source
         return DistributionSpec(
             distribution,
             mean,
             scv,
-            _parameter_items(specification, resolved_source=resolved.resolve()),
+            parameters,
             tuple(timestamps),
         )
 
@@ -434,6 +669,39 @@ def _parse_distribution(specification, label, *, quantity, base_path):
     )
 
 
+def parse_duration_distribution(specification, label, *, base_path=None):
+    """Validate a nonnegative-time distribution used outside service queues."""
+    return _parse_distribution(
+        specification,
+        label,
+        quantity="service_time",
+        base_path=base_path,
+    )
+
+
+def duration_distribution_to_workload_mapping(specification):
+    """Return a self-contained workload mapping for a validated duration."""
+    parameters = dict(specification.parameters)
+    if specification.distribution == "empirical":
+        if specification.sample_clusters:
+            return {
+                "distribution": "empirical",
+                "clusters": [
+                    list(cluster) for cluster in specification.sample_clusters
+                ],
+                "sampling": "cluster_bootstrap",
+            }
+        return {
+            "distribution": "empirical",
+            "samples": list(specification.samples),
+            "sampling": parameters["sampling"],
+        }
+    if specification.distribution == "custom":
+        parameters.pop("library_sha256", None)
+        parameters["parameters"] = list(parameters["parameters"])
+    return parameters
+
+
 def _reachable_services(entry_services, routing):
     reachable = set(entry_services)
     pending = deque(entry_services)
@@ -451,6 +719,7 @@ def _parse_request_classes(
     service_names,
     *,
     require_concurrency_weights=False,
+    base_path=None,
 ):
     parsed = {}
     visit_ratios = {}
@@ -458,6 +727,7 @@ def _parse_request_classes(
     call_graphs = {}
     call_execution_modes = {}
     fixed_latency_overheads = {}
+    latency_overhead_specs = {}
     end_to_end_timeouts = {}
     concurrency_weights = {}
     latency_slos = {}
@@ -474,6 +744,7 @@ def _parse_request_classes(
             "end_to_end_timeout_seconds",
             "maximum_terminal_failure_rate",
             "fixed_latency_overhead_seconds",
+            "latency_overhead",
             "routing",
             "visits",
             "workflow",
@@ -489,8 +760,17 @@ def _parse_request_classes(
                 "concurrency_weight, "
                 "end_to_end_latency_slos, end_to_end_timeout_seconds, "
                 "maximum_terminal_failure_rate, and "
-                "fixed_latency_overhead_seconds; "
+                "exactly one of fixed_latency_overhead_seconds or "
+                "latency_overhead; "
                 f"unknown fields={sorted(unknown_fields)}."
+            )
+        if {
+            "fixed_latency_overhead_seconds",
+            "latency_overhead",
+        }.issubset(request_class):
+            raise ValueError(
+                f"Request class {request_class_name!r} cannot define both "
+                "fixed_latency_overhead_seconds and latency_overhead."
             )
         if ("calls" in request_class) != ("call_execution" in request_class):
             raise ValueError(
@@ -555,10 +835,36 @@ def _parse_request_classes(
                         f"{label}.percentile.maximum_seconds",
                     ),
                 )
-        fixed_latency_overheads[request_class_name] = _finite_nonnegative(
-            request_class.get("fixed_latency_overhead_seconds", 0.0),
-            (f"request_classes.{request_class_name}." "fixed_latency_overhead_seconds"),
-        )
+        overhead_label = f"request_classes.{request_class_name}.latency_overhead"
+        if "latency_overhead" in request_class:
+            overhead_spec = _parse_distribution(
+                request_class["latency_overhead"],
+                overhead_label,
+                quantity="service_time",
+                base_path=base_path,
+            )
+            latency_overhead_specs[request_class_name] = overhead_spec
+            fixed_latency_overheads[request_class_name] = overhead_spec.mean
+        else:
+            fixed_overhead = _finite_nonnegative(
+                request_class.get("fixed_latency_overhead_seconds", 0.0),
+                (
+                    f"request_classes.{request_class_name}."
+                    "fixed_latency_overhead_seconds"
+                ),
+            )
+            fixed_latency_overheads[request_class_name] = fixed_overhead
+            if fixed_overhead > 0.0:
+                specification = {
+                    "distribution": "deterministic",
+                    "mean": fixed_overhead,
+                }
+                latency_overhead_specs[request_class_name] = DistributionSpec(
+                    distribution="deterministic",
+                    mean=fixed_overhead,
+                    scv=0.0,
+                    parameters=_parameter_items(specification),
+                )
         end_to_end_timeouts[request_class_name] = _finite_nonnegative(
             request_class.get("end_to_end_timeout_seconds", 0.0),
             (f"request_classes.{request_class_name}." "end_to_end_timeout_seconds"),
@@ -582,14 +888,6 @@ def _parse_request_classes(
                     "failure-rate SLO but no positive end_to_end_timeout_seconds."
                 )
             failure_rate_slos[request_class_name] = failure_rate
-        if "fixed_latency_overhead_seconds" in request_class and not (
-            {"visits", "workflow", "calls"} & set(request_class)
-        ):
-            raise ValueError(
-                f"Request class {request_class_name!r} may define "
-                "fixed_latency_overhead_seconds only with visits, workflow, or calls."
-            )
-
         if "workflow" in request_class:
             raw_workflow = request_class["workflow"]
             if not isinstance(raw_workflow, list) or not raw_workflow:
@@ -771,6 +1069,7 @@ def _parse_request_classes(
         _freeze_mapping(call_graphs),
         _freeze_mapping(call_execution_modes),
         _freeze_mapping(fixed_latency_overheads),
+        _freeze_mapping(latency_overhead_specs),
         _freeze_mapping(end_to_end_timeouts),
         _freeze_mapping(concurrency_weights),
         _freeze_mapping(latency_slos),
@@ -813,6 +1112,7 @@ def parse_workload_spec(workload, *, base_path=None):
         call_graphs,
         call_execution_modes,
         fixed_latency_overheads,
+        latency_overhead_specs,
         end_to_end_timeouts,
         concurrency_weights,
         request_class_latency_slos,
@@ -821,19 +1121,20 @@ def parse_workload_spec(workload, *, base_path=None):
         request_classes,
         service_name_set,
         require_concurrency_weights=True,
+        base_path=base_path,
     )
 
     models = {}
     for model_name, model in raw_models.items():
         if not isinstance(model_name, str) or not model_name:
             raise ValueError("Traffic-model names must be nonempty strings.")
-        if not isinstance(model, Mapping) or set(model) != {
-            "entry_services",
-            "service_times",
-        }:
+        if not isinstance(model, Mapping) or set(model) not in (
+            {"entry_services", "service_times"},
+            {"entry_services", "service_times", "input_uncertainty"},
+        ):
             raise ValueError(
-                f"Traffic model {model_name!r} must contain exactly entry_services "
-                "and service_times."
+                f"Traffic model {model_name!r} must contain entry_services and "
+                "service_times, with optional input_uncertainty."
             )
         raw_service_times = model["service_times"]
         if (
@@ -873,23 +1174,23 @@ def parse_workload_spec(workload, *, base_path=None):
                     "for processor_sharing; CPU contention is represented by "
                     "the processor-sharing kernel itself."
                 )
-            if (
-                execution_model == "processor_sharing"
-                and "concurrency_limit_per_replica" in raw_service_time
-            ):
-                raise ValueError(
-                    f"{service_path}.concurrency_limit_per_replica cannot be "
-                    "combined with processor_sharing. Portable CPU sharing does "
-                    "not invent an application worker or connection-pool limit."
-                )
-            concurrency_limit = _positive_integer(
-                raw_service_time.get(
-                    "concurrency_limit_per_replica",
-                    processing_slots,
-                ),
-                f"{service_path}.concurrency_limit_per_replica",
+            raw_concurrency_limit = raw_service_time.get(
+                "concurrency_limit_per_replica"
             )
-            if concurrency_limit < processing_slots:
+            concurrency_limit = (
+                None
+                if raw_concurrency_limit is None
+                and execution_model == "processor_sharing"
+                else _positive_integer(
+                    (
+                        processing_slots
+                        if raw_concurrency_limit is None
+                        else raw_concurrency_limit
+                    ),
+                    f"{service_path}.concurrency_limit_per_replica",
+                )
+            )
+            if concurrency_limit is not None and concurrency_limit < processing_slots:
                 raise ValueError(
                     f"{service_path}.concurrency_limit_per_replica cannot be "
                     "smaller than processing_slots_per_replica."
@@ -1056,6 +1357,12 @@ def parse_workload_spec(workload, *, base_path=None):
             concurrency_limits_per_replica=_freeze_mapping(
                 concurrency_limits_per_replica
             ),
+            input_uncertainty=_parse_joint_input_uncertainty(
+                model.get("input_uncertainty"),
+                request_classes=request_classes,
+                service_names=service_names,
+                label=f"Traffic model {model_name!r}.input_uncertainty",
+            ),
         )
 
     return ParsedWorkload(
@@ -1065,6 +1372,7 @@ def parse_workload_spec(workload, *, base_path=None):
         request_class_call_graphs=call_graphs,
         request_class_call_execution_modes=call_execution_modes,
         request_class_fixed_latency_overheads=fixed_latency_overheads,
+        request_class_latency_overhead_specs=latency_overhead_specs,
         request_class_end_to_end_timeouts=end_to_end_timeouts,
         concurrency_weights=concurrency_weights,
         request_class_latency_slos=request_class_latency_slos,

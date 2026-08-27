@@ -285,6 +285,19 @@ def _calibration_seeds(warmup, measurement):
     return tuple(dict.fromkeys(values))
 
 
+def _warmup_bucket_cap(system, options):
+    """Convert the global diagnostic-memory budget to a per-series cap."""
+    service_count = len(system.get_services())
+    derived_series_count = 1 + 4 * service_count
+    global_share = (
+        options.warmup_max_total_bucket_values // derived_series_count
+    )
+    return max(
+        500,
+        min(options.warmup_max_buckets_per_series, global_share),
+    )
+
+
 def _calibrate_one(
     system,
     *,
@@ -319,6 +332,7 @@ def _calibrate_one(
             validation_seed_start=validation_namespace.start,
             extra_validation_configurations=extra_representative_configurations,
             max_horizon_doublings=options.warmup_max_horizon_doublings,
+            max_buckets_per_series=_warmup_bucket_cap(system, options),
             horizon_sensitivity_tolerance=options.warmup_sensitivity_tolerance,
             max_validation_rounds=options.warmup_max_validation_rounds,
             max_validation_horizon_extensions=(
@@ -335,6 +349,7 @@ def _calibrate_one(
                 ),
             },
             workers=workers,
+            retain_diagnostic_series=report_directory is not None,
         )
     except WarmupCalibrationError as error:
         if report_directory is not None:

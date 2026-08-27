@@ -106,6 +106,22 @@ class FakeSystem:
         return {"default": self.get_effective_arrival_rates()}
 
 
+class FakeCallGraphSystem(FakeSystem):
+    def get_request_class_call_graphs(self):
+        return {"default": {"api": {"worker": 2.0}}}
+
+    def get_effective_arrival_rates(self):
+        return [10.0, 20.0]
+
+
+class FakeVisitRatioSystem(FakeSystem):
+    def get_request_class_visit_ratios(self):
+        return {"default": {"api": 1.0, "worker": 2.0}}
+
+    def get_effective_arrival_rates(self):
+        return [10.0, 20.0]
+
+
 class FakeNode:
     def __init__(
         self,
@@ -215,6 +231,14 @@ def build_problem(
     )
 
 
+def build_problem_for_system(system, node_latencies):
+    nodes = {
+        name: FakeNode(name, latencies)
+        for name, latencies in node_latencies.items()
+    }
+    return NodePlacementProblem(FakeCluster(system, nodes))
+
+
 def brute_force_optimum(problem):
     """Small-instance oracle kept in tests, not as a production optimizer."""
     feasible = tuple(
@@ -266,6 +290,34 @@ def test_derives_current_workload_arrival_and_edge_traffic_rates():
         },
         abs=0.0005,
     )
+
+
+def test_derives_edge_traffic_from_synchronous_call_graph():
+    system = FakeCallGraphSystem(
+        {
+            "api": {"gamma": 10.0, "replicas": 1},
+            "worker": {"gamma": 0.0, "replicas": 2},
+        }
+    )
+
+    problem = build_problem_for_system(system, CURRENT_NODE_LATENCIES)
+
+    assert problem.get_service_arrival_rates() == {"api": 10.0, "worker": 20.0}
+    assert problem.get_edge_traffic_rates() == {("api", "worker"): 20.0}
+
+
+def test_visit_only_workload_does_not_invent_placement_edges():
+    system = FakeVisitRatioSystem(
+        {
+            "api": {"gamma": 10.0, "replicas": 1},
+            "worker": {"gamma": 0.0, "replicas": 2},
+        }
+    )
+
+    problem = build_problem_for_system(system, CURRENT_NODE_LATENCIES)
+
+    assert problem.get_service_arrival_rates() == {"api": 10.0, "worker": 20.0}
+    assert problem.get_edge_traffic_rates() == {}
 
 
 def test_route_values_are_expected_call_counts_and_allow_fan_out():

@@ -120,14 +120,20 @@ def test_visit_ratios_and_routing_are_mutually_exclusive():
         parse_workload_spec(workload)
 
 
-def test_fixed_latency_overhead_requires_visits_or_an_executable_workflow():
+def test_fixed_latency_overhead_is_supported_for_routing_workloads():
     workload = _visit_workload()
     request_class = workload["request_classes"]["metadata_read"]
     request_class.pop("visits")
     request_class["routing"] = {}
 
-    with pytest.raises(ValueError, match="only with visits, workflow, or calls"):
-        parse_workload_spec(workload)
+    parsed = parse_workload_spec(workload)
+
+    assert parsed.request_class_fixed_latency_overheads == {
+        "metadata_read": 0.01
+    }
+    assert parsed.request_class_latency_overhead_specs[
+        "metadata_read"
+    ].distribution == "deterministic"
 
 
 @pytest.mark.parametrize(

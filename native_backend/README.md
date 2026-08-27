@@ -106,8 +106,14 @@ separate request-class latency clusters and arrival timestamps required for:
 
 Common random numbers use the same simulation seed for replication index `r`
 across configurations. Calibration, optimization, bootstrap and final
-validation occupy disjoint deterministic namespaces. Node placement starts only
-when every fresh final p95 upper bound meets its SLO.
+validation occupy disjoint deterministic namespaces. When resources are
+supplied, node placement runs before fresh final validation so the final p95
+bounds include directional network delay and explicitly measured node slowdown.
+
+Aligned measurement-window arrival and CPU-demand multipliers are sampled
+jointly with a moving-block bootstrap once per replication. Raw arrival
+timestamp ordering is preserved separately by the trace-block sampler. These
+input sources remain distinct from Monte Carlo error and model-form assumptions.
 
 The C++ process owns stochastic event execution, request tagging, cohort
 draining, state integration and replication parallelism. Python owns the
@@ -209,10 +215,15 @@ samplers statistically before relying on analytical optimization.
   trusted custom-plugin sampling as applicable to arrivals and service times;
 - request-class-specific service-demand distributions;
 - one independent `std::mt19937_64` stream per replication;
+- aligned arrival-rate and service-demand epochs sampled jointly with a
+  circular moving-block bootstrap once per replication;
+- trace-block external arrivals that preserve measured local burst ordering;
 - separate processing-slot and admitted-request-concurrency capacities, both of
   which scale with replica count;
 - FIFO admission and processing queues;
 - fixed probabilistic routing, exits, revisits, and loops;
+- optional fixed node placement with directional one-way transit delays and
+  measured node execution-time multipliers;
 - ordered workflows for simulation-ready sequential visit models;
 - synchronous call graphs with an explicit per-class `call_execution` mode:
   sibling calls run either in declared sequence or in parallel, while parents
@@ -223,8 +234,8 @@ samplers statistically before relying on analytical optimization.
 - queue and busy histories record post-transition values and coalesce changes at
   the same timestamp;
 - `N_i = Q_i + B_i` and `U_i = B_i / c_i` remain derived quantities;
-- fixed-horizon events at exactly the horizon are not processed, matching the
-  previous `env.run(until=H)` boundary.
+- fixed-horizon events at exactly the horizon are not processed, so the run
+  covers the half-open interval `[0, H)`.
 
 The new random generator is distributionally equivalent but does not reproduce
 the old Python `random`/SimPy trajectory bit for bit. Native seeds are stable and
@@ -252,7 +263,7 @@ from CPU demand.
 ## Protocol and failures
 
 The adapter sends one JSON request on standard input and expects one JSON
-response on standard output. Protocol version 6 supports:
+response on standard output. Protocol version 9 supports:
 
 - `simulate`;
 - `warmup_ensemble`;

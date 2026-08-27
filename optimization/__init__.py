@@ -56,6 +56,7 @@ from .simulation_evaluation import (
     ConfigurationEvaluation,
     SequentialLookResult,
     SimulationClassification,
+    SimulationUncertaintyDiagnostics,
 )
 from .replica_validation import (
     CalibratedFinalValidationResult,
@@ -136,5 +137,6 @@ __all__ = [
     "ConfigurationEvaluation",
     "SequentialLookResult",
     "SimulationClassification",
+    "SimulationUncertaintyDiagnostics",
     "zero_heuristic",
 ]

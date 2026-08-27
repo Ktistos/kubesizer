@@ -473,6 +473,23 @@ def validate_final_configuration(
                     for item in replications
                 ),
             ),
+            (
+                "sampled_input_block_count",
+                sum(
+                    getattr(item, "sampled_input_block_start", None) is not None
+                    for item in replications
+                ),
+            ),
+            (
+                "placement_model_applied",
+                int(
+                    bool(replications)
+                    and all(
+                        getattr(item, "placement_model_applied", False)
+                        for item in replications
+                    )
+                ),
+            ),
         )
         return CalibratedFinalValidationResult(
             replica_configuration=configuration,

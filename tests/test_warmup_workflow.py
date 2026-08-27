@@ -12,6 +12,7 @@ from calibration import (
     window_length_for_bucket_width,
 )
 from performance_models import QueueingNetworkType, System
+from calibration.workflow import _parameters_with_bounded_bucket_count
 
 
 def make_parameters():
@@ -46,6 +47,28 @@ def test_parameters_with_horizon_aligns_all_candidate_bucket_counts():
     assert changed.raw_pilot_horizon == 503.0
     assert changed.bucket_counts == (808, 404, 202)
     assert parameters.pilot_horizon == 1000.0
+
+
+def test_long_pilots_coarsen_all_bucket_widths_together_within_memory_budget():
+    _, parameters = make_parameters()
+
+    bounded = _parameters_with_bounded_bucket_count(parameters, 500)
+
+    assert max(bounded.bucket_counts) <= 500
+    assert bounded.bucket_width_candidates == pytest.approx((2.5, 5.0, 10.0))
+    assert bounded.initial_bucket_width == pytest.approx(5.0)
+    assert tuple(
+        bounded.bucket_width_candidates[index + 1]
+        / bounded.bucket_width_candidates[index]
+        for index in range(2)
+    ) == pytest.approx((2.0, 2.0))
+    assert all(
+        bounded.pilot_horizon / width == pytest.approx(count)
+        for width, count in zip(
+            bounded.bucket_width_candidates,
+            bounded.bucket_counts,
+        )
+    )
 
 
 def test_window_length_scales_to_preserve_physical_duration():

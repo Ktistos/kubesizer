@@ -276,10 +276,16 @@ class _ConciseProgressReporter:
             self._runtime_estimate = estimate
             self._stage_estimates = {stage.stage: stage for stage in estimate.stages}
             low = estimate.total_ordinary_planning_seconds
-            high = estimate.total_configured_ceiling_seconds
-            self._active_text = "Runtime estimate ready: " + self._duration_range(
-                low, high
-            )
+            ceiling = estimate.total_configured_ceiling_seconds
+            self._active_text = "Runtime estimate ready: about " + self._duration(low)
+            if ceiling <= max(3_600.0, low * 20.0):
+                self._active_text += (
+                    " (configured stress-path projection "
+                    + self._duration(ceiling)
+                    + ")"
+                )
+            else:
+                self._active_text += "; no finite worst-case guarantee"
             self._publish(final=True, include_eta=False)
             self._finish_stage("planning")
 
@@ -400,19 +406,15 @@ class _ConciseProgressReporter:
             current_low = current_high = 0.0
         elif fraction is None:
             current_low = max(0.0, estimate.ordinary_planning_seconds - elapsed)
-            current_high = max(
-                current_low,
-                estimate.configured_ceiling_seconds - elapsed,
-            )
+            current_high = current_low
         else:
             ordinary = estimate.ordinary_planning_seconds * (1.0 - fraction)
-            ceiling = estimate.configured_ceiling_seconds * (1.0 - fraction)
             if fraction > 0:
                 empirical = elapsed * (1.0 - fraction) / fraction
                 current_low = min(ordinary, empirical)
-                current_high = max(ceiling, empirical)
+                current_high = max(ordinary, empirical)
             else:
-                current_low, current_high = ordinary, ceiling
+                current_low = current_high = ordinary
 
         future_low = future_high = 0.0
         if stage in self._expected_stages:
@@ -425,7 +427,7 @@ class _ConciseProgressReporter:
                 if future_estimate is None:
                     return current_low, current_high, "stage"
                 future_low += future_estimate.ordinary_planning_seconds
-                future_high += future_estimate.configured_ceiling_seconds
+                future_high += future_estimate.ordinary_planning_seconds
         return current_low + future_low, current_high + future_high, "overall"
 
     def _render_text(self, *, completed=False, include_eta=True):
@@ -605,10 +607,10 @@ def _prepare_runtime_reporting(
     if evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         expected_stages.append("calibration")
     expected_stages.append("replica_sizing")
-    if evaluation_mode == ReplicaEvaluationMode.SIMULATION:
-        expected_stages.append("validation")
     if resources is not None:
         expected_stages.append("placement")
+    if evaluation_mode == ReplicaEvaluationMode.SIMULATION:
+        expected_stages.append("validation")
     reporter.configure_workflow(expected_stages)
 
     if evaluation_mode != ReplicaEvaluationMode.SIMULATION:
@@ -727,6 +729,8 @@ def _run_replica_workflow(
         initial_configuration=initial_configuration,
         progress_callback=_progress_callback(args),
     )
+    if getattr(args, "_defer_final_validation", False):
+        return result, profile, None
     validation = validate_final_configuration(
         system,
         result.configuration,
@@ -761,21 +765,25 @@ def _command_run(args):
         replica_mode=replica_mode,
         placement_mode=placement_mode,
     )
+    setattr(
+        args,
+        "_defer_final_validation",
+        resources is not None and args.replica_evaluation == "simulation",
+    )
     result, _profile, validation = _run_replica_workflow(
         system,
         args,
         replica_mode,
         initial_configuration,
     )
-    simulation_valid = validation is None or validation.passed
-    if not simulation_valid:
+    if validation is not None and not validation.passed:
         reason = getattr(validation, "failure_reason", None)
         raise RuntimeError(
             "The selected replica configuration failed final validation"
             + (f": {reason}" if reason else ".")
         )
     selected_placement = None
-    if resources is not None and simulation_valid:
+    if resources is not None:
         system.configure_system_replicas(result.configuration)
         cluster = Cluster("cli-cluster", resources, system)
         placement_result = optimize_node_placement(
@@ -788,6 +796,24 @@ def _command_run(args):
             "placement",
             placement_result.configuration,
         )
+        if _profile is not None:
+            placement_model = cluster.simulation_placement_model(selected_placement)
+            system.configure_simulation_placement(**placement_model)
+    if _profile is not None and validation is None:
+        validation = validate_final_configuration(
+            system,
+            result.configuration,
+            _profile,
+            workers=args.workers,
+            progress_callback=_progress_callback(args),
+        )
+        _notify_progress(args, "final_validation_completed")
+        if not validation.passed:
+            reason = getattr(validation, "failure_reason", None)
+            raise RuntimeError(
+                "The selected replica configuration failed final validation"
+                + (f": {reason}" if reason else ".")
+            )
     return {
         "services": _service_recommendations(
             system,

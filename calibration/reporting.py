@@ -436,6 +436,11 @@ def save_warmup_calibration(
     plot_paths = []
     final_minimum = result.minimum_configuration_calibrations[-1].final_analysis
     for width_analysis in final_minimum.bucket_width_analyses:
+        if width_analysis.ensemble is None:
+            raise ValueError(
+                "Warm-up diagnostic series were not retained. Recalibrate with "
+                "report output enabled before saving plots."
+            )
         width_label = f"{width_analysis.bucket_width:g}".replace(".", "p")
         csv_path = output_directory / f"minimum_delta_{width_label}.csv"
         write_ensemble_csv(width_analysis.ensemble, csv_path)
@@ -457,6 +462,11 @@ def save_warmup_calibration(
     for index, configuration_result in enumerate(
         final_validation_round.configurations
     ):
+        if configuration_result.ensemble is None:
+            raise ValueError(
+                "Warm-up validation series were not retained. Recalibrate with "
+                "report output enabled before saving plots."
+            )
         csv_path = output_directory / f"validation_configuration_{index}.csv"
         write_ensemble_csv(configuration_result.ensemble, csv_path)
         csv_paths.append(str(csv_path))

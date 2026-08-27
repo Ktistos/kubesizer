@@ -944,9 +944,43 @@ class NodePlacementProblem(OptimizationProblem):
 
         edge_traffic_rates = {}
         incoming_traffic = {service_name: 0.0 for service_name in self.__service_names}
+        call_graphs = (
+            self.__system.get_request_class_call_graphs()
+            if hasattr(self.__system, "get_request_class_call_graphs")
+            else {}
+        )
+        visit_ratios = (
+            self.__system.get_request_class_visit_ratios()
+            if hasattr(self.__system, "get_request_class_visit_ratios")
+            else {}
+        )
+        all_flows_decomposable = True
 
         for request_class in request_classes:
             class_rates = request_class_arrival_rates[request_class]
+            call_graph = call_graphs.get(request_class)
+            if call_graph is not None:
+                for source_name, targets in call_graph.items():
+                    source_rate = float(
+                        class_rates[self.__services[source_name].get_id()]
+                    )
+                    for target_name, mean_calls in targets.items():
+                        traffic_rate = source_rate * float(mean_calls)
+                        edge_key = (source_name, target_name)
+                        edge_traffic_rates[edge_key] = (
+                            edge_traffic_rates.get(edge_key, 0.0) + traffic_rate
+                        )
+                        incoming_traffic[target_name] += traffic_rate
+                continue
+
+            if request_class in visit_ratios:
+                # Mean visits identify per-service load but do not identify
+                # which source produced each visit. Keep placement feasible and
+                # omit an unsupported communication cost instead of inventing
+                # service edges.
+                all_flows_decomposable = False
+                continue
+
             for source_name, source_service in self.__services.items():
                 source_rate = float(class_rates[source_service.get_id()])
                 for edge in source_service.get_adjacency_list(request_class):
@@ -981,20 +1015,21 @@ class NodePlacementProblem(OptimizationProblem):
                     )
                     incoming_traffic[target_name] += traffic_rate
 
-        for service_name in self.__service_names:
-            expected_arrival_rate = (
-                external_arrivals[service_name] + incoming_traffic[service_name]
-            )
-            if not math.isclose(
-                arrival_rates[service_name],
-                expected_arrival_rate,
-                rel_tol=1e-9,
-                abs_tol=1e-9,
-            ):
-                raise ValueError(
-                    "The open-network traffic solution does not satisfy "
-                    f"the traffic equation for service '{service_name}'."
+        if all_flows_decomposable:
+            for service_name in self.__service_names:
+                expected_arrival_rate = (
+                    external_arrivals[service_name] + incoming_traffic[service_name]
                 )
+                if not math.isclose(
+                    arrival_rates[service_name],
+                    expected_arrival_rate,
+                    rel_tol=1e-9,
+                    abs_tol=1e-9,
+                ):
+                    raise ValueError(
+                        "The open-network traffic solution does not satisfy "
+                        f"the traffic equation for service '{service_name}'."
+                    )
 
         return (
             arrival_rates,

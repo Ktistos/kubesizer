@@ -53,17 +53,24 @@ def _rescale_interarrival_spec(specification, target_rate):
     if specification.distribution == "arrival_trace":
         parameters["block_duration"] = float(parameters["block_duration"]) * time_scale
     samples = specification.samples
+    sample_clusters = specification.sample_clusters
     if specification.distribution in {
         "empirical_interarrival",
         "arrival_trace",
     }:
         samples = tuple(value * time_scale for value in samples)
+    if specification.distribution == "empirical_interarrival" and sample_clusters:
+        sample_clusters = tuple(
+            tuple(value * time_scale for value in cluster)
+            for cluster in sample_clusters
+        )
     return DistributionSpec(
         distribution=specification.distribution,
         mean=target_mean,
         scv=specification.scv,
         parameters=tuple(sorted(parameters.items())),
         samples=samples,
+        sample_clusters=sample_clusters,
     )
 
 
@@ -102,11 +109,14 @@ class System:
         self.__request_class_call_graphs = {}
         self.__request_class_call_execution_modes = {}
         self.__request_class_fixed_latency_overheads = {}
+        self.__request_class_latency_overhead_specs = {}
         self.__request_class_end_to_end_timeouts = {}
         self.__service_processing_slots_per_replica = {}
         self.__service_concurrency_limits_per_replica = {}
         self.__service_execution_models = {}
         self.__class_specific_service_times = False
+        self.__joint_input_uncertainty = None
+        self.__simulation_placement_model = None
         if structured:
             parsed = parse_workload_spec(
                 workload,
@@ -139,6 +149,9 @@ class System:
             self.__request_class_fixed_latency_overheads = dict(
                 parsed.request_class_fixed_latency_overheads
             )
+            self.__request_class_latency_overhead_specs = dict(
+                parsed.request_class_latency_overhead_specs
+            )
             self.__request_class_end_to_end_timeouts = dict(
                 parsed.request_class_end_to_end_timeouts
             )
@@ -151,6 +164,7 @@ class System:
             self.__service_execution_models = dict(
                 parsed.traffic_model.service_execution_models
             )
+            self.__joint_input_uncertainty = parsed.traffic_model.input_uncertainty
             self.__class_specific_service_times = any(
                 len(
                     {
@@ -170,7 +184,7 @@ class System:
         )
         # type refers to either open or closed system
         self.__type = type
-        self.__services = {}
+        self.__services: dict[str, Service] = {}
         self.__external_traffic_services = []
 
         if not isinstance(workload, dict) or not workload:
@@ -352,9 +366,14 @@ class System:
             }
         if not self.__service_concurrency_limits_per_replica:
             self.__service_concurrency_limits_per_replica = {
-                service.get_name(): self.__service_processing_slots_per_replica[
-                    service.get_name()
-                ]
+                service.get_name(): (
+                    None
+                    if self.__service_execution_models.get(service.get_name())
+                    == "processor_sharing"
+                    else self.__service_processing_slots_per_replica[
+                        service.get_name()
+                    ]
+                )
                 for service in self.get_services().values()
             }
         if not self.__service_execution_models:
@@ -1113,8 +1132,12 @@ class System:
         return dict(self.__request_class_call_execution_modes)
 
     def get_request_class_fixed_latency_overheads(self):
-        """Return non-queueing latency added to each analytical class mean."""
+        """Return the mean non-queueing latency for each request class."""
         return dict(self.__request_class_fixed_latency_overheads)
+
+    def get_request_class_latency_overhead_distribution_specs(self):
+        """Return validated per-request non-queueing duration distributions."""
+        return dict(self.__request_class_latency_overhead_specs)
 
     def get_request_class_end_to_end_timeouts(self):
         """Return client-visible terminal deadlines; zero disables a deadline."""
@@ -1264,6 +1287,114 @@ class System:
     def get_service_execution_models(self):
         """Return the native execution semantics selected for each service."""
         return dict(self.__service_execution_models)
+
+    def get_joint_input_uncertainty(self):
+        """Return aligned input-window uncertainty sampled once per replication."""
+        return self.__joint_input_uncertainty
+
+    def configure_simulation_placement(
+        self,
+        placement,
+        communication_latency_seconds,
+        execution_time_multipliers=None,
+    ):
+        """Attach a fixed placement to subsequent native simulations.
+
+        Communication latency is directional and interpreted as one-way delay.
+        Synchronous calls pay both the request and response directions.  Node
+        execution multipliers are optional measured relative slowdowns; a
+        missing multiplier means one, not an inferred contention penalty.
+        """
+        if not isinstance(placement, dict) or not placement:
+            raise ValueError("placement must be a nonempty node mapping.")
+        node_names = tuple(placement)
+        service_names = tuple(self.__services)
+        if any(not isinstance(name, str) or not name for name in node_names):
+            raise ValueError("placement node names must be nonempty strings.")
+        normalized_placement = {}
+        totals = {name: 0 for name in service_names}
+        for node_name in node_names:
+            raw_counts = placement[node_name]
+            if not isinstance(raw_counts, dict):
+                raise ValueError("each placement node must map services to counts.")
+            unknown = set(raw_counts) - set(service_names)
+            if unknown:
+                raise ValueError(f"placement contains unknown services: {unknown}.")
+            counts = {}
+            for service_name in service_names:
+                value = raw_counts.get(service_name, 0)
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise ValueError("placement replica counts must be non-negative integers.")
+                counts[service_name] = value
+                totals[service_name] += value
+            normalized_placement[node_name] = counts
+        expected = {
+            name: service.get_replicas()
+            for name, service in self.__services.items()
+        }
+        if totals != expected:
+            raise ValueError(
+                "placement replica totals do not match the configured system replicas."
+            )
+        if not isinstance(communication_latency_seconds, dict):
+            raise ValueError("communication_latency_seconds must be a node mapping.")
+        latency_matrix = {}
+        for source in node_names:
+            raw_row = communication_latency_seconds.get(source)
+            if not isinstance(raw_row, dict):
+                raise ValueError(f"missing communication latency row for {source!r}.")
+            row = {}
+            for destination in node_names:
+                raw_value = 0.0 if source == destination else raw_row.get(destination)
+                if raw_value is None:
+                    raise ValueError(
+                        f"missing communication latency {source!r}->{destination!r}."
+                    )
+                value = float(raw_value)
+                if not math.isfinite(value) or value < 0.0:
+                    raise ValueError("communication latencies must be finite and non-negative.")
+                row[destination] = value
+            latency_matrix[source] = row
+        raw_multipliers = execution_time_multipliers or {}
+        unknown_multiplier_nodes = set(raw_multipliers) - set(node_names)
+        if unknown_multiplier_nodes:
+            raise ValueError(
+                "execution multipliers contain nodes outside the placement."
+            )
+        multipliers = {}
+        for node_name in node_names:
+            value = float(raw_multipliers.get(node_name, 1.0))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError("node execution multipliers must be finite and positive.")
+            multipliers[node_name] = value
+        self.__simulation_placement_model = {
+            "node_names": node_names,
+            "placement": normalized_placement,
+            "communication_latency_seconds": latency_matrix,
+            "execution_time_multipliers": multipliers,
+        }
+
+    def clear_simulation_placement(self):
+        self.__simulation_placement_model = None
+
+    def get_simulation_placement_model(self):
+        if self.__simulation_placement_model is None:
+            return None
+        model = self.__simulation_placement_model
+        return {
+            "node_names": tuple(model["node_names"]),
+            "placement": {
+                node: dict(counts)
+                for node, counts in model["placement"].items()
+            },
+            "communication_latency_seconds": {
+                node: dict(row)
+                for node, row in model["communication_latency_seconds"].items()
+            },
+            "execution_time_multipliers": dict(
+                model["execution_time_multipliers"]
+            ),
+        }
 
     def get_effective_service_capacities(self):
         """Return total processing slots in service-ID order."""

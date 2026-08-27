@@ -1,5 +1,4 @@
 from .edge import Edge
-import random
 
 
 class Service:
@@ -25,13 +24,6 @@ class Service:
         self.__gamma = dict(gamma or {})
         self.__mu = mu
         self.__replicas = replicas
-        self.__active_simulation_resource = None
-
-    def set_active_simulation_resource(self, resource):
-        self.__active_simulation_resource = resource
-
-    def get_active_simulation_resource(self):
-        return self.__active_simulation_resource
 
     def set_replicas(self, replicas):
         self.__replicas = replicas
@@ -85,80 +77,3 @@ class Service:
 
     def add_edge(self, request_class, edge: Edge):
         self.__adjacency_list.setdefault(request_class, []).append(edge)
-
-    def generate_external_traffic(self, env, metrics_collector, request_class):
-
-        sim_resource = self.get_active_simulation_resource()
-
-        gamma = self.get_gamma(request_class)
-
-        while True and (sim_resource is not None) and (gamma > 0):
-            successive_arrival_interval = random.expovariate(gamma)
-            yield env.timeout(successive_arrival_interval)
-
-            request_context = metrics_collector.start_external_request(
-                request_class,
-                env.now,
-            )
-            env.process(
-                self.serve_request(
-                    env,
-                    metrics_collector,
-                    request_class,
-                    request_context,
-                )
-            )
-
-    def serve_request(
-        self, env, metrics_collector, request_class, request_context=None
-    ):
-        arrival_time = env.now
-        sim_resource = self.get_active_simulation_resource()
-        with sim_resource.request() as req:
-            # The request either acquires a replica immediately or joins the queue.
-            metrics_collector.record_service_state(self.get_id(), env.now)
-            yield req
-            # A queued request may have acquired a replica after another release.
-            metrics_collector.record_service_state(self.get_id(), env.now)
-
-            # request is served
-            job_service_time = random.expovariate(self.get_mu())
-            metrics_collector.record_service_start(self.get_id(), env.now)
-
-            yield env.timeout(job_service_time)
-
-            metrics_collector.record_request_completion(
-                self.get_id(), env.now - arrival_time, env.now
-            )
-
-            possible_routes = []
-            route_probabilities = []
-
-            # request exits the service
-            for edge in self.get_adjacency_list(request_class):
-                possible_routes.append(edge.get_target())
-                route_probabilities.append(edge.get_routing_prob())
-
-            # request gets rerouted to another service, if None it leaves the system
-            route_service = random.choices(
-                possible_routes, weights=route_probabilities, k=1
-            )[0]
-
-            if route_service is not None:
-                env.process(
-                    route_service.serve_request(
-                        env,
-                        metrics_collector,
-                        request_class,
-                        request_context,
-                    )
-                )
-            elif request_context is not None:
-                metrics_collector.record_external_request_completion(
-                    request_context,
-                    env.now,
-                )
-
-        # Exiting the context releases the replica. A queued request may acquire
-        # it later at the same simulation timestamp.
-        metrics_collector.record_service_state(self.get_id(), env.now)

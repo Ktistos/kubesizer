@@ -14,6 +14,8 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+from performance_models import parse_duration_distribution
+
 from .models import (
     CapacityObservation,
     DeploymentSpec,
@@ -256,6 +258,7 @@ def parse_deployment_spec(value):
         "cpu_limit_cores",
         "memory_request_bytes",
         "memory_limit_bytes",
+        "concurrency_limit_per_replica",
     }
     for service_name, raw in raw_services.items():
         name = _name(service_name, "deployment service name")
@@ -307,6 +310,16 @@ def parse_deployment_spec(value):
                 f"deployment.services.{name}.memory_limit_bytes cannot be "
                 "smaller than memory_request_bytes."
             )
+        concurrency_limit = raw.get("concurrency_limit_per_replica")
+        if concurrency_limit is not None and (
+            isinstance(concurrency_limit, bool)
+            or not isinstance(concurrency_limit, int)
+            or concurrency_limit <= 0
+        ):
+            raise ValueError(
+                f"deployment.services.{name}.concurrency_limit_per_replica "
+                "must be a positive integer when supplied."
+            )
         services.append(
             ServiceDeployment(
                 name=name,
@@ -318,6 +331,7 @@ def parse_deployment_spec(value):
                 cpu_limit_cores=cpu_limit,
                 memory_request_bytes=memory_request,
                 memory_limit_bytes=memory_limit,
+                concurrency_limit_per_replica=concurrency_limit,
             )
         )
     return DeploymentSpec(tuple(services))
@@ -352,14 +366,16 @@ def _canonical_slo(raw, label):
     return (("percentile", (("quantile", quantile), ("maximum_seconds", maximum))),)
 
 
-def parse_workload_definition(value, deployment):
+def parse_workload_definition(value, deployment, *, base_path=None):
     """Validate request semantics and SLOs for the measured workload."""
-    expected = {"request_classes"}
-    if not isinstance(value, Mapping) or set(value) != expected:
+    allowed_top_level = {"request_classes", "load_forecast"}
+    if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
-            "workload must contain exactly request_classes; arrival rates "
-            "come from the measurement package."
+            "workload must contain request_classes and may contain load_forecast; "
+            "arrival rates come from the measurement package."
         )
+    if "request_classes" not in value:
+        raise ValueError("workload is missing request_classes.")
     raw_classes = value["request_classes"]
     if not isinstance(raw_classes, Mapping) or not raw_classes:
         raise ValueError("request_classes must be a nonempty mapping.")
@@ -372,6 +388,7 @@ def parse_workload_definition(value, deployment):
         "calls",
         "call_execution",
         "fixed_latency_overhead_seconds",
+        "latency_overhead",
         "end_to_end_timeout_seconds",
         "end_to_end_latency_slos",
         "maximum_terminal_failure_rate",
@@ -386,6 +403,14 @@ def parse_workload_definition(value, deployment):
         missing = {"concurrency_weight", "entry_services"} - set(raw)
         if missing:
             raise ValueError(f"request_classes.{name} is missing {sorted(missing)}.")
+        if {
+            "fixed_latency_overhead_seconds",
+            "latency_overhead",
+        }.issubset(raw):
+            raise ValueError(
+                f"request_classes.{name} cannot define both fixed latency "
+                "overhead fields."
+            )
         weight = _finite(
             raw["concurrency_weight"],
             f"request_classes.{name}.concurrency_weight",
@@ -503,6 +528,14 @@ def parse_workload_definition(value, deployment):
             f"request_classes.{name}.fixed_latency_overhead_seconds",
             nonnegative=True,
         )
+        overhead_distribution = None
+        if "latency_overhead" in raw:
+            overhead_distribution = parse_duration_distribution(
+                raw["latency_overhead"],
+                f"request_classes.{name}.latency_overhead",
+                base_path=base_path,
+            )
+            overhead = overhead_distribution.mean
         timeout = _finite(
             raw.get("end_to_end_timeout_seconds", 0.0),
             f"request_classes.{name}.end_to_end_timeout_seconds",
@@ -533,6 +566,7 @@ def parse_workload_definition(value, deployment):
                 calls=calls,
                 call_execution=call_execution,
                 fixed_latency_overhead_seconds=overhead,
+                latency_overhead_distribution=overhead_distribution,
                 end_to_end_timeout_seconds=timeout,
                 latency_slo=_canonical_slo(
                     raw.get("end_to_end_latency_slos"),
@@ -548,7 +582,28 @@ def parse_workload_definition(value, deployment):
         abs_tol=1e-12,
     ):
         raise ValueError("Request-class concurrency weights must sum to one.")
-    return WorkloadDefinition(tuple(classes))
+    raw_forecast = value.get("load_forecast", {"multipliers": [1.0]})
+    if not isinstance(raw_forecast, Mapping) or set(raw_forecast) != {"multipliers"}:
+        raise ValueError("load_forecast must contain exactly multipliers.")
+    raw_multipliers = raw_forecast["multipliers"]
+    if (
+        not isinstance(raw_multipliers, (list, tuple))
+        or not raw_multipliers
+    ):
+        raise ValueError("load_forecast.multipliers must be a nonempty array.")
+    multipliers = tuple(
+        _finite(
+            value,
+            f"load_forecast.multipliers[{index}]",
+            positive=True,
+        )
+        for index, value in enumerate(raw_multipliers)
+    )
+    if tuple(sorted(set(multipliers))) != multipliers:
+        raise ValueError(
+            "load_forecast.multipliers must be unique and strictly increasing."
+        )
+    return WorkloadDefinition(tuple(classes), multipliers)
 
 
 def _parse_service_intervals(path):
@@ -997,9 +1052,14 @@ def parse_portable_sizing_inputs(
     measurement_manifest,
     *,
     base_path,
+    workload_base_path=None,
 ):
     parsed_deployment = parse_deployment_spec(deployment)
-    parsed_workload = parse_workload_definition(workload, parsed_deployment)
+    parsed_workload = parse_workload_definition(
+        workload,
+        parsed_deployment,
+        base_path=(base_path if workload_base_path is None else workload_base_path),
+    )
     parsed_measurements = parse_measurement_manifest(
         measurement_manifest,
         base_path=base_path,
@@ -1026,4 +1086,5 @@ def load_portable_sizing_inputs(deployment_path, workload_path, measurements_pat
         _read_yaml(workload_path, "workload"),
         _read_yaml(measurements_path, "measurement manifest"),
         base_path=measurements_path.parent,
+        workload_base_path=workload_path.parent,
     )
