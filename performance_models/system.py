@@ -110,12 +110,16 @@ class System:
         self.__request_class_call_execution_modes = {}
         self.__request_class_fixed_latency_overheads = {}
         self.__request_class_latency_overhead_specs = {}
+        self.__request_class_latency_boundaries = {}
+        self.__request_class_latency_component_specs = {}
         self.__request_class_end_to_end_timeouts = {}
         self.__service_processing_slots_per_replica = {}
         self.__service_concurrency_limits_per_replica = {}
         self.__service_execution_models = {}
+        self.__service_replica_queue_models = {}
         self.__class_specific_service_times = False
         self.__joint_input_uncertainty = None
+        self.__communication_latency_spec = None
         self.__simulation_placement_model = None
         if structured:
             parsed = parse_workload_spec(
@@ -152,6 +156,15 @@ class System:
             self.__request_class_latency_overhead_specs = dict(
                 parsed.request_class_latency_overhead_specs
             )
+            self.__request_class_latency_boundaries = dict(
+                parsed.request_class_latency_boundaries
+            )
+            self.__request_class_latency_component_specs = {
+                request_class: dict(components)
+                for request_class, components in (
+                    parsed.request_class_latency_component_specs.items()
+                )
+            }
             self.__request_class_end_to_end_timeouts = dict(
                 parsed.request_class_end_to_end_timeouts
             )
@@ -164,7 +177,13 @@ class System:
             self.__service_execution_models = dict(
                 parsed.traffic_model.service_execution_models
             )
+            self.__service_replica_queue_models = dict(
+                parsed.traffic_model.service_replica_queue_models
+            )
             self.__joint_input_uncertainty = parsed.traffic_model.input_uncertainty
+            self.__communication_latency_spec = (
+                parsed.traffic_model.communication_latency
+            )
             self.__class_specific_service_times = any(
                 len(
                     {
@@ -379,6 +398,11 @@ class System:
         if not self.__service_execution_models:
             self.__service_execution_models = {
                 service.get_name(): "fixed_slots"
+                for service in self.get_services().values()
+            }
+        if not self.__service_replica_queue_models:
+            self.__service_replica_queue_models = {
+                service.get_name(): "pooled"
                 for service in self.get_services().values()
             }
         self.__poisson_arrival_flags = self.__calculate_poisson_arrival_flags()
@@ -1088,6 +1112,9 @@ class System:
                     self.__service_processing_slots_per_replica[service.get_name()]
                 ),
                 "execution_model": self.__service_execution_models[service.get_name()],
+                "replica_queue_model": self.__service_replica_queue_models[
+                    service.get_name()
+                ],
                 "effective_processing_slots": (
                     service.get_replicas()
                     * self.__service_processing_slots_per_replica[service.get_name()]
@@ -1138,6 +1165,23 @@ class System:
     def get_request_class_latency_overhead_distribution_specs(self):
         """Return validated per-request non-queueing duration distributions."""
         return dict(self.__request_class_latency_overhead_specs)
+
+    def get_request_class_latency_boundaries(self):
+        """Return the observation boundary represented by each class latency."""
+        return dict(self.__request_class_latency_boundaries)
+
+    def get_request_class_latency_component_distribution_specs(self):
+        """Return named, independently measured non-service latency components."""
+        return {
+            request_class: dict(components)
+            for request_class, components in (
+                self.__request_class_latency_component_specs.items()
+            )
+        }
+
+    def get_communication_latency_distribution_spec(self):
+        """Return same/cross-node one-way evidence used before placement."""
+        return self.__communication_latency_spec
 
     def get_request_class_end_to_end_timeouts(self):
         """Return client-visible terminal deadlines; zero disables a deadline."""
@@ -1288,6 +1332,10 @@ class System:
         """Return the native execution semantics selected for each service."""
         return dict(self.__service_execution_models)
 
+    def get_service_replica_queue_models(self):
+        """Return how requests are dispatched to queues across replicas."""
+        return dict(self.__service_replica_queue_models)
+
     def get_joint_input_uncertainty(self):
         """Return aligned input-window uncertainty sampled once per replication."""
         return self.__joint_input_uncertainty
@@ -1345,7 +1393,9 @@ class System:
                 raise ValueError(f"missing communication latency row for {source!r}.")
             row = {}
             for destination in node_names:
-                raw_value = 0.0 if source == destination else raw_row.get(destination)
+                raw_value = raw_row.get(destination)
+                if raw_value is None and source == destination:
+                    raw_value = 0.0
                 if raw_value is None:
                     raise ValueError(
                         f"missing communication latency {source!r}->{destination!r}."
@@ -1490,6 +1540,111 @@ class System:
             for request_class, arrival_rates in self.__calculate_request_class_arrival_rates().items()
         }
 
+    def __mean_call_round_trip_latency(self, source_name, target_name):
+        placement = self.__simulation_placement_model
+        if placement is not None:
+            source_counts = {
+                node: placement["placement"][node][source_name]
+                for node in placement["node_names"]
+            }
+            target_counts = {
+                node: placement["placement"][node][target_name]
+                for node in placement["node_names"]
+            }
+            source_total = sum(source_counts.values())
+            target_total = sum(target_counts.values())
+            if source_total <= 0 or target_total <= 0:
+                raise ValueError("Placed services must have at least one replica.")
+            expected = 0.0
+            for source_node, source_count in source_counts.items():
+                for target_node, target_count in target_counts.items():
+                    probability = (
+                        source_count
+                        * target_count
+                        / (source_total * target_total)
+                    )
+                    expected += probability * (
+                        placement["communication_latency_seconds"][source_node][
+                            target_node
+                        ]
+                        + placement["communication_latency_seconds"][target_node][
+                            source_node
+                        ]
+                    )
+            return expected
+        specification = self.__communication_latency_spec
+        if specification is None:
+            return 0.0
+        probability = specification.unplaced_cross_node_probability
+        mean_one_way = (
+            (1.0 - probability) * specification.same_node_one_way.mean
+            + probability * specification.cross_node_one_way.mean
+        )
+        return 2.0 * mean_one_way
+
+    def __mean_request_class_network_latency(
+        self,
+        request_class,
+        effective_rates,
+        external_rate,
+    ):
+        call_graph = self.__request_class_call_graphs.get(request_class)
+        if call_graph is not None:
+            result = 0.0
+            for source_name, targets in call_graph.items():
+                source = self.get_service(source_name)
+                source_visits = (
+                    float(effective_rates[source.get_id()]) / external_rate
+                )
+                for target_name, mean_calls in targets.items():
+                    result += (
+                        source_visits
+                        * mean_calls
+                        * self.__mean_call_round_trip_latency(
+                            source_name,
+                            target_name,
+                        )
+                    )
+            return result
+        workflow = self.__request_class_workflows.get(request_class)
+        if workflow is not None:
+            # A workflow has ordered blocks. Repeated visits within a block use
+            # the same service-to-service latency semantics as every other
+            # visit transition. Fractional visit counts are expectations.
+            result = 0.0
+            for visit in workflow:
+                result += max(0.0, visit.mean_visits - 1.0) * (
+                    self.__mean_call_round_trip_latency(
+                        visit.service,
+                        visit.service,
+                    )
+                )
+            for source, target in zip(workflow, workflow[1:]):
+                result += min(1.0, target.mean_visits) * (
+                    self.__mean_call_round_trip_latency(
+                        source.service,
+                        target.service,
+                    )
+                )
+            return result
+        result = 0.0
+        for source in self.get_services().values():
+            source_visits = float(effective_rates[source.get_id()]) / external_rate
+            if source_visits <= 0.0:
+                continue
+            for edge in source.get_adjacency_list(request_class):
+                target = edge.get_target()
+                probability = edge.get_routing_prob()
+                if target is None or probability <= 0.0:
+                    continue
+                result += source_visits * probability * (
+                    self.__mean_call_round_trip_latency(
+                        source.get_name(),
+                        target.get_name(),
+                    )
+                )
+        return result
+
     def get_request_class_mean_latencies(self):
         """Estimate end-to-end mean latency from visit ratios and queue means.
 
@@ -1526,10 +1681,15 @@ class System:
                 queueing_latency += visits * (
                     specification.mean + queue_waits[service_id]
                 )
-            results[request_class] = queueing_latency + (
-                self.__request_class_fixed_latency_overheads.get(
+            results[request_class] = (
+                queueing_latency
+                + self.__mean_request_class_network_latency(
                     request_class,
-                    0.0,
+                    effective_rates,
+                    external_rate,
+                )
+                + self.__request_class_fixed_latency_overheads.get(
+                    request_class, 0.0
                 )
             )
         return results

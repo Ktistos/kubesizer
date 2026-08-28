@@ -41,17 +41,21 @@ def _timestamps_from_interarrivals(interarrivals):
     return tuple(timestamps)
 
 
-def _arrival_specification(inputs, request_class, target_rate):
+def _arrival_specification(
+    inputs,
+    request_class,
+    target_rate,
+    *,
+    trace_attribution_is_unambiguous,
+):
     timestamps = tuple(
         item.timestamp
         for item in inputs.measurements.external_arrival_samples
         if item.request_class == request_class
     )
     samples = _rescaled_interarrivals(timestamps, target_rate)
-    if samples:
-        raw_interarrivals = tuple(
-            right - left for left, right in pairwise(timestamps)
-        )
+    if samples and trace_attribution_is_unambiguous:
+        raw_interarrivals = tuple(right - left for left, right in pairwise(timestamps))
         time_scale = sum(samples) / sum(raw_interarrivals)
         window_duration = min(
             row.duration for row in inputs.measurements.service_intervals
@@ -112,18 +116,12 @@ def _joint_input_uncertainty(characterization, *, block_length):
     )
     service_names = tuple(item.service for item in characterization.services)
     external_means = {
-        name: sum(
-            dict(window.request_class_arrival_rates)[name]
-            for window in windows
-        )
+        name: sum(dict(window.request_class_arrival_rates)[name] for window in windows)
         / len(windows)
         for name in request_class_names
     }
     service_means = {
-        name: sum(
-            dict(window.service_cpu_demands)[name]
-            for window in windows
-        )
+        name: sum(dict(window.service_cpu_demands)[name] for window in windows)
         / len(windows)
         for name in service_names
     }
@@ -142,8 +140,7 @@ def _joint_input_uncertainty(characterization, *, block_length):
                     for name in external_means
                 },
                 "service_time_multipliers": {
-                    name: demands[name] / service_means[name]
-                    for name in service_means
+                    name: demands[name] / service_means[name] for name in service_means
                 },
             }
         )
@@ -173,16 +170,22 @@ def _request_class_specification(request_class, calls, mode, concurrency_weight)
     specification = {"concurrency_weight": concurrency_weight}
     specification["calls"] = copy.deepcopy(calls)
     specification["call_execution"] = mode
-    if request_class.latency_overhead_distribution is not None:
-        specification["latency_overhead"] = (
-            duration_distribution_to_workload_mapping(
-                request_class.latency_overhead_distribution
-            )
+    if request_class.latency_components:
+        specification["latency_boundary"] = request_class.latency_boundary
+        specification["latency_components"] = {
+            name: duration_distribution_to_workload_mapping(component)
+            for name, component in request_class.latency_components
+        }
+    elif request_class.latency_overhead_distribution is not None:
+        specification["latency_overhead"] = duration_distribution_to_workload_mapping(
+            request_class.latency_overhead_distribution
         )
     elif request_class.fixed_latency_overhead_seconds > 0.0:
         specification["fixed_latency_overhead_seconds"] = (
             request_class.fixed_latency_overhead_seconds
         )
+    elif request_class.latency_boundary != "unspecified":
+        specification["latency_boundary"] = request_class.latency_boundary
     if request_class.end_to_end_timeout_seconds > 0.0:
         specification["end_to_end_timeout_seconds"] = (
             request_class.end_to_end_timeout_seconds
@@ -194,6 +197,22 @@ def _request_class_specification(request_class, calls, mode, concurrency_weight)
             request_class.maximum_terminal_failure_rate
         )
     return specification
+
+
+def _communication_latency_specification(specification):
+    if specification is None:
+        return None
+    return {
+        "same_node_one_way": duration_distribution_to_workload_mapping(
+            specification.same_node_one_way
+        ),
+        "cross_node_one_way": duration_distribution_to_workload_mapping(
+            specification.cross_node_one_way
+        ),
+        "unplaced_cross_node_probability": (
+            specification.unplaced_cross_node_probability
+        ),
+    }
 
 
 def build_simulation_workload_variants(
@@ -215,8 +234,7 @@ def build_simulation_workload_variants(
     visits_by_class, calls_by_class = _flow_maps(characterization)
     measured_class_rates = {
         item.request_class: (
-            item.observed_arrival_rate_rps
-            * inputs.workload.maximum_load_multiplier
+            item.observed_arrival_rate_rps * inputs.workload.maximum_load_multiplier
             if item.observed_arrival_rate_rps is not None
             else None
         )
@@ -329,6 +347,9 @@ def build_simulation_workload_variants(
                     inputs,
                     request_class.name,
                     rate,
+                    trace_attribution_is_unambiguous=(
+                        len(request_class.entry_service_weights) == 1
+                    ),
                 )
                 streams[service] = arrival
                 if assumption not in assumptions:
@@ -405,6 +426,17 @@ def build_simulation_workload_variants(
                     "traffic_model": {
                         "entry_services": entry_services,
                         "service_times": service_times,
+                        **(
+                            {
+                                "communication_latency": (
+                                    _communication_latency_specification(
+                                        inputs.workload.communication_latency
+                                    )
+                                )
+                            }
+                            if inputs.workload.communication_latency is not None
+                            else {}
+                        ),
                         **(
                             {"input_uncertainty": joint_uncertainty}
                             if joint_uncertainty is not None

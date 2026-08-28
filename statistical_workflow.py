@@ -206,6 +206,31 @@ class CalibratedOptimizationResult:
 
 
 @dataclass(frozen=True)
+class RequestClassRecommendationEvidence:
+    request_class: str
+    latency_statistic: str
+    estimate_seconds: float
+    lower_bound_seconds: float
+    upper_bound_seconds: float
+    slo_seconds: float
+    simultaneous_slo_margin_seconds: float
+    simultaneous_slo_margin_fraction: float
+    predictive_holdout_case_count: int
+    maximum_absolute_predictive_error_seconds: float | None
+    maximum_absolute_relative_predictive_error: float | None
+
+
+@dataclass(frozen=True)
+class ValidatedRecommendationEvidenceSummary:
+    status: str
+    request_classes: tuple[RequestClassRecommendationEvidence, ...]
+    predictive_validation_status: str
+    bounded_model_optimal: bool
+    unresolved_lower_cost_configurations: tuple[tuple[int, ...], ...]
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ValidatedReplicaRecommendation:
     """End-to-end recommendation evidence, including model and final holdouts."""
 
@@ -227,6 +252,86 @@ class ValidatedReplicaRecommendation:
             "VALIDATED_BOUNDED_MODEL_OPTIMUM",
             "VALIDATED_FEASIBLE_HEURISTIC",
         }
+
+    @property
+    def evidence_summary(self):
+        predictive_by_class = {}
+        for case in getattr(self.predictive_validation, "cases", ()):
+            for diagnostic in getattr(case, "diagnostics", ()):
+                predictive_by_class.setdefault(
+                    diagnostic.request_class,
+                    [],
+                ).append(diagnostic)
+
+        request_classes = []
+        warnings = []
+        for request_class, interval in getattr(
+            self.final_validation,
+            "request_class_intervals",
+            (),
+        ):
+            slo = float(interval.slo)
+            margin = slo - float(interval.upper_bound)
+            diagnostics = predictive_by_class.get(request_class, ())
+            relative_errors = tuple(
+                abs(float(item.relative_error)) for item in diagnostics
+            )
+            absolute_errors = tuple(
+                float(item.absolute_error_seconds) for item in diagnostics
+            )
+            margin_fraction = margin / slo
+            if margin_fraction < 0.05:
+                warnings.append(
+                    f"{request_class} has less than 5% simultaneous SLO margin"
+                )
+            request_classes.append(
+                RequestClassRecommendationEvidence(
+                    request_class=request_class,
+                    latency_statistic=str(interval.latency_statistic),
+                    estimate_seconds=float(interval.estimate),
+                    lower_bound_seconds=float(interval.lower_bound),
+                    upper_bound_seconds=float(interval.upper_bound),
+                    slo_seconds=slo,
+                    simultaneous_slo_margin_seconds=margin,
+                    simultaneous_slo_margin_fraction=margin_fraction,
+                    predictive_holdout_case_count=len(diagnostics),
+                    maximum_absolute_predictive_error_seconds=(
+                        max(absolute_errors) if absolute_errors else None
+                    ),
+                    maximum_absolute_relative_predictive_error=(
+                        max(relative_errors) if relative_errors else None
+                    ),
+                )
+            )
+        if not self.bounded_model_optimal:
+            warnings.append(
+                "search returned a validated heuristic; global minimum cost was not proven"
+            )
+        unresolved = self.optimization.unresolved_lower_cost_states
+        if unresolved:
+            warnings.append("lower-cost configurations remain statistically unresolved")
+        return ValidatedRecommendationEvidenceSummary(
+            status=(
+                "BLOCKED"
+                if not self.recommendable
+                else (
+                    "VALIDATED_BOUNDED_MODEL"
+                    if self.bounded_model_optimal
+                    else "VALIDATED_HEURISTIC"
+                )
+            ),
+            request_classes=tuple(request_classes),
+            predictive_validation_status=str(
+                getattr(
+                    getattr(self.predictive_validation, "status", None),
+                    "value",
+                    "UNKNOWN",
+                )
+            ),
+            bounded_model_optimal=self.bounded_model_optimal,
+            unresolved_lower_cost_configurations=unresolved,
+            warnings=tuple(warnings),
+        )
 
 
 def _declared_latency_slo_kind(system):
@@ -289,9 +394,7 @@ def _warmup_bucket_cap(system, options):
     """Convert the global diagnostic-memory budget to a per-series cap."""
     service_count = len(system.get_services())
     derived_series_count = 1 + 4 * service_count
-    global_share = (
-        options.warmup_max_total_bucket_values // derived_series_count
-    )
+    global_share = options.warmup_max_total_bucket_values // derived_series_count
     return max(
         500,
         min(options.warmup_max_buckets_per_series, global_share),

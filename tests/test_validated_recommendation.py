@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import statistical_workflow
 
 
@@ -79,3 +81,41 @@ def test_public_recommendation_withholds_failed_final_holdout(monkeypatch):
     assert result.status == "FINAL_VALIDATION_FAILED"
     assert not result.recommendable
     assert not result.bounded_model_optimal
+
+
+def test_validated_recommendation_exposes_margin_and_prediction_risk():
+    interval = SimpleNamespace(
+        slo=0.2,
+        estimate=0.17,
+        lower_bound=0.16,
+        upper_bound=0.195,
+        latency_statistic="mean",
+    )
+    diagnostic = SimpleNamespace(
+        request_class="browse",
+        relative_error=-0.08,
+        absolute_error_seconds=0.012,
+    )
+    result = statistical_workflow.ValidatedReplicaRecommendation(
+        service_replicas=(("api", 2),),
+        status="VALIDATED_FEASIBLE_HEURISTIC",
+        optimization=SimpleNamespace(unresolved_lower_cost_states=((1,),)),
+        final_validation=SimpleNamespace(
+            request_class_intervals=(("browse", interval),)
+        ),
+        predictive_validation=SimpleNamespace(
+            status=SimpleNamespace(value="VALIDATED"),
+            cases=(SimpleNamespace(diagnostics=(diagnostic,)),),
+        ),
+        bounded_model_optimal=False,
+        guarantee="validated heuristic",
+    )
+
+    summary = result.evidence_summary
+    request = summary.request_classes[0]
+
+    assert summary.status == "VALIDATED_HEURISTIC"
+    assert request.simultaneous_slo_margin_seconds == pytest.approx(0.005)
+    assert request.maximum_absolute_relative_predictive_error == pytest.approx(0.08)
+    assert any("less than 5%" in warning for warning in summary.warnings)
+    assert summary.unresolved_lower_cost_configurations == ((1,),)

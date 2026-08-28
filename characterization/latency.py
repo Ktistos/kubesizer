@@ -1,0 +1,176 @@
+"""Portable transformations for latency evidence available to DevOps teams."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+
+def _finite_nonnegative(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be numeric.")
+    value = float(value)
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{label} must be finite and non-negative.")
+    return value
+
+
+def _positive_samples(values, label):
+    samples = tuple(_finite_nonnegative(value, label) for value in values)
+    if len(samples) < 2 or any(value <= 0.0 for value in samples):
+        raise ValueError(f"{label} must contain at least two positive samples.")
+    return samples
+
+
+@dataclass(frozen=True)
+class MeanLatencyDecomposition:
+    """Mean-only decomposition across aligned observation boundaries."""
+
+    client_to_ingress_seconds: float
+    ingress_processing_seconds: float
+    application_upstream_seconds: float
+
+    def request_class_components(self, latency_boundary="external_client"):
+        """Return deterministic components suitable only for a mean SLO model."""
+        if latency_boundary not in {"external_client", "ingress"}:
+            raise ValueError("latency_boundary must be external_client or ingress.")
+        result = {}
+        if self.ingress_processing_seconds > 0.0:
+            result["ingress_processing"] = {
+                "distribution": "deterministic",
+                "mean": self.ingress_processing_seconds,
+            }
+        if (
+            latency_boundary == "external_client"
+            and self.client_to_ingress_seconds > 0.0
+        ):
+            result = {
+                "client_to_ingress": {
+                    "distribution": "deterministic",
+                    "mean": self.client_to_ingress_seconds,
+                },
+                **result,
+            }
+        return result
+
+
+def decompose_aligned_latency_means(
+    *,
+    client_mean_seconds,
+    ingress_request_mean_seconds,
+    ingress_upstream_mean_seconds,
+    difference_tolerance_seconds=0.001,
+):
+    """Separate aligned client, ingress, and application-entry mean durations.
+
+    All three inputs must describe the same route, request cohort (or completed
+    request window), and observation interval. Mean subtraction is valid by
+    linearity; independently aggregated percentiles must never be passed here.
+    Negative differences indicate incompatible boundaries and are rejected.
+    """
+    client = _finite_nonnegative(client_mean_seconds, "client_mean_seconds")
+    ingress = _finite_nonnegative(
+        ingress_request_mean_seconds,
+        "ingress_request_mean_seconds",
+    )
+    upstream = _finite_nonnegative(
+        ingress_upstream_mean_seconds,
+        "ingress_upstream_mean_seconds",
+    )
+    tolerance = _finite_nonnegative(
+        difference_tolerance_seconds,
+        "difference_tolerance_seconds",
+    )
+    if ingress > client + tolerance:
+        raise ValueError(
+            "ingress request mean exceeds client mean; observation boundaries "
+            "or windows are incompatible."
+        )
+    if upstream > ingress + tolerance:
+        raise ValueError(
+            "ingress upstream mean exceeds ingress request mean; observation "
+            "boundaries or windows are incompatible."
+        )
+    return MeanLatencyDecomposition(
+        client_to_ingress_seconds=max(0.0, client - ingress),
+        ingress_processing_seconds=max(0.0, ingress - upstream),
+        application_upstream_seconds=upstream,
+    )
+
+
+def client_to_entry_mean_component(
+    *,
+    client_mean_seconds,
+    application_entry_mean_seconds,
+    difference_tolerance_seconds=0.001,
+):
+    """Return the portable aggregate path component when ingress is unobserved.
+
+    Inputs must cover the same route and time window. The result combines the
+    client path, ingress, and the hop to the application entry. It must not be
+    combined with finer client-to-ingress or ingress-processing components.
+    """
+    client = _finite_nonnegative(client_mean_seconds, "client_mean_seconds")
+    application = _finite_nonnegative(
+        application_entry_mean_seconds,
+        "application_entry_mean_seconds",
+    )
+    tolerance = _finite_nonnegative(
+        difference_tolerance_seconds,
+        "difference_tolerance_seconds",
+    )
+    if application > client + tolerance:
+        raise ValueError(
+            "application-entry mean exceeds client mean; observation boundaries "
+            "or windows are incompatible."
+        )
+    difference = max(0.0, client - application)
+    if difference == 0.0:
+        return {}
+    return {
+        "client_to_entry": {
+            "distribution": "deterministic",
+            "mean": difference,
+        }
+    }
+
+
+def communication_latency_from_round_trip_probes(
+    *,
+    same_node_round_trip_seconds,
+    cross_node_round_trip_seconds,
+    unplaced_cross_node_probability,
+):
+    """Build the simulator input from ordinary sidecar-aware HTTP probes.
+
+    A request and its response traverse the path in opposite directions. In the
+    absence of one-way clock synchronization, half of each measured round trip
+    is the explicit approximation used for one simulated direction.
+    """
+    same = _positive_samples(
+        same_node_round_trip_seconds,
+        "same_node_round_trip_seconds",
+    )
+    cross = _positive_samples(
+        cross_node_round_trip_seconds,
+        "cross_node_round_trip_seconds",
+    )
+    probability = _finite_nonnegative(
+        unplaced_cross_node_probability,
+        "unplaced_cross_node_probability",
+    )
+    if probability > 1.0:
+        raise ValueError("unplaced_cross_node_probability cannot exceed one.")
+    return {
+        "same_node_one_way": {
+            "distribution": "empirical",
+            "samples": [value / 2.0 for value in same],
+            "sampling": "iid_with_replacement",
+        },
+        "cross_node_one_way": {
+            "distribution": "empirical",
+            "samples": [value / 2.0 for value in cross],
+            "sampling": "iid_with_replacement",
+        },
+        "unplaced_cross_node_probability": probability,
+    }

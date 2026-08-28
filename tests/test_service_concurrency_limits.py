@@ -56,6 +56,57 @@ def test_processing_and_concurrency_capacities_are_kept_distinct():
     assert serialized["services"][0]["replicas"] == 1
     assert serialized["services"][0]["capacity"] == 2
     assert serialized["services"][0]["concurrency_capacity"] == 4
+    assert serialized["services"][0]["replica_queue_model"] == (
+        "independent_round_robin"
+    )
+
+
+@pytest.mark.parametrize(
+    "queue_model",
+    ("pooled", "independent_random", "independent_round_robin"),
+)
+def test_replica_queue_model_is_parsed_and_serialized(queue_model):
+    workload = _workload()
+    workload["traffic_model"]["service_times"]["api"][
+        "replica_queue_model"
+    ] = queue_model
+
+    parsed = parse_workload_spec(workload)
+    system = System("queue-model", workload, QueueingNetworkType.OPEN)
+
+    assert parsed.traffic_model.service_replica_queue_models == {
+        "api": queue_model
+    }
+    assert system.get_service_replica_queue_models() == {"api": queue_model}
+    assert (
+        get_native_backend().serialize_system(system)["services"][0][
+            "replica_queue_model"
+        ]
+        == queue_model
+    )
+
+
+def test_unknown_replica_queue_model_is_rejected():
+    workload = _workload()
+    workload["traffic_model"]["service_times"]["api"][
+        "replica_queue_model"
+    ] = "magical"
+
+    with pytest.raises(ValueError, match="replica_queue_model must be"):
+        parse_workload_spec(workload)
+
+
+def test_processor_sharing_supports_independent_replica_queues():
+    workload = _workload(processing_slots=1, concurrency=4)
+    service = workload["traffic_model"]["service_times"]["api"]
+    service["execution_model"] = "processor_sharing"
+    service["replica_queue_model"] = "independent_round_robin"
+
+    parsed = parse_workload_spec(workload)
+
+    assert parsed.traffic_model.service_replica_queue_models == {
+        "api": "independent_round_robin"
+    }
 
 
 @pytest.mark.parametrize("value", (0, -1, 1.5, True))
@@ -152,6 +203,25 @@ def test_execution_model_changes_calibration_fingerprint():
     assert (
         experiment_fingerprints(fixed_system)[0]
         != experiment_fingerprints(shared_system)[0]
+    )
+
+
+def test_replica_queue_model_changes_calibration_fingerprint():
+    pooled = _workload(processing_slots=1, concurrency=1)
+    independent = _workload(processing_slots=1, concurrency=1)
+    pooled["traffic_model"]["service_times"]["api"][
+        "replica_queue_model"
+    ] = "pooled"
+    independent["traffic_model"]["service_times"]["api"][
+        "replica_queue_model"
+    ] = "independent_round_robin"
+
+    pooled_system = System("api", pooled, QueueingNetworkType.OPEN)
+    independent_system = System("api", independent, QueueingNetworkType.OPEN)
+
+    assert (
+        experiment_fingerprints(pooled_system)[0]
+        != experiment_fingerprints(independent_system)[0]
     )
 
 

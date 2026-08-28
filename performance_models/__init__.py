@@ -3,6 +3,7 @@ from .edge import Edge
 from .system import System, QueueingNetworkType
 from .workload import (
     DistributionSpec,
+    CommunicationLatencySpec,
     JointInputEpochSpec,
     JointInputUncertaintySpec,
     EndToEndLatencySLOSpec,
@@ -22,6 +23,7 @@ __all__ = [
     "System",
     "QueueingNetworkType",
     "DistributionSpec",
+    "CommunicationLatencySpec",
     "JointInputEpochSpec",
     "JointInputUncertaintySpec",
     "EndToEndLatencySLOSpec",

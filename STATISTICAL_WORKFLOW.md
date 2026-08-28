@@ -40,6 +40,60 @@ if not recommendation.recommendable:
     raise RuntimeError(recommendation.guarantee)
 ```
 
+Portable DevOps measurements use a separate side-effect-free preparation and
+evidence-gating interface:
+
+```python
+from characterization import (
+    evaluate_closed_loop_recommendation,
+    load_and_prepare_initial_sizing,
+)
+
+prepared = load_and_prepare_initial_sizing(
+    "deployment.yaml",
+    "workload.yaml",
+    "measurements.yaml",
+)
+prepared.risk_assessment.assert_recommendable()
+
+# Each item is one independent post-warm-up real-cluster load-test run.
+quality = evaluate_closed_loop_recommendation(
+    prepared.recommendation.configuration(service_order),
+    observed_runs,
+    {"browse": 0.25},
+    latency_statistic="mean",
+    declared_configuration_space=tested_configuration_space,
+)
+```
+
+The preparation result includes per-service measured CPU-demand and load
+ranges, an estimated CPU-utilization range, load/demand correlation,
+capacity-run coverage, and findings classified as conditional or blocking. A
+weak result remains inspectable through lower-level functions, but the public
+preparation workflow raises instead of presenting insufficient evidence as a
+defensible recommendation.
+
+The closed-loop runner receives deployment and load-generation callbacks;
+Kubesizer does not assume Helm, Argo, a particular Kubernetes API client, or
+one load generator. It applies configurations sequentially and restores the
+original deployment in a `finally` block. The analysis resamples whole load-
+test runs and adjusts its tail probability across all tested configurations
+and constraints. It reports the smallest observed passing configuration. It
+calls that minimum certified only if the caller declares the complete finite
+comparison space and every cheaper configuration is measured and conclusively
+infeasible.
+
+Existing load-test directories can be imported with
+`load_observed_experiment_replications`. The importer uses actual client-start
+time to remove warm-up and post-window trace rows, retains eligible requests
+that completed after the arrival window, verifies the declared optimizer
+service order against Kubernetes replica counts, and rejects saturated load
+generators. An incomplete request is represented by its latency lower bound at
+the recorded experiment stop and an explicit censor marker. Such lower bounds
+may establish infeasibility when even their confidence lower bound exceeds the
+SLO; a cohort containing any censoring can never establish feasibility. A
+censored request is not silently relabelled as an HTTP failure.
+
 `CalibrationOptions` controls pilot replications, tolerances, sample minima,
 `R_min`, `R_max`, batch size, alpha, bootstrap resamples, drain protection and
 all seed namespaces. Defaults are scientific starting points, not universal
@@ -168,3 +222,18 @@ classes. The kernel can represent a measured terminal deadline, but it cannot
 infer the capacity that caused a backlog or explain retries, hidden databases,
 or connection pools unless those resources and policies are explicitly measured
 and modeled; an affected holdout rejects the predictive certificate.
+
+Raw class-attributed arrival timestamps enable a moving trace-block bootstrap,
+which preserves local burst ordering. Aligned arrival-rate and CPU-demand
+windows are sampled as joint blocks, so a high-load/high-demand window is not
+recombined with an unrelated low-load window. If CPU demand changes materially
+with load and the target lies outside the measured load range, the evidence
+gate rejects the recommendation instead of extrapolating a response curve.
+Aggregate edge counters can identify repeated calls but cannot reveal sibling
+ordering; the simulator evaluates explicit sequential and parallel sensitivity
+variants.
+
+No output field is a posterior probability that an SLO will pass. Simulation
+confidence bounds quantify Monte Carlo and input-sampling uncertainty inside
+the declared model. Predictive holdouts and closed-loop deployment experiments
+provide the separate evidence that the model represents the real deployment.

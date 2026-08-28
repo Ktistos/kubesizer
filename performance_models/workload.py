@@ -43,15 +43,26 @@ class JointInputUncertaintySpec:
 
 
 @dataclass(frozen=True)
+class CommunicationLatencySpec:
+    """Measured one-way service-call latency used before placement is known."""
+
+    same_node_one_way: DistributionSpec
+    cross_node_one_way: DistributionSpec
+    unplaced_cross_node_probability: float
+
+
+@dataclass(frozen=True)
 class TrafficModelSpec:
     name: str
     entry_services: Mapping
     service_times: Mapping
     service_times_by_request_class: Mapping
     service_execution_models: Mapping
+    service_replica_queue_models: Mapping
     processing_slots_per_replica: Mapping
     concurrency_limits_per_replica: Mapping
     input_uncertainty: JointInputUncertaintySpec | None
+    communication_latency: CommunicationLatencySpec | None
 
 
 @dataclass(frozen=True)
@@ -94,6 +105,8 @@ class ParsedWorkload:
     request_class_call_execution_modes: Mapping
     request_class_fixed_latency_overheads: Mapping
     request_class_latency_overhead_specs: Mapping
+    request_class_latency_boundaries: Mapping
+    request_class_latency_component_specs: Mapping
     request_class_end_to_end_timeouts: Mapping
     concurrency_weights: Mapping
     request_class_latency_slos: Mapping
@@ -126,6 +139,13 @@ def _finite_nonnegative(value, label):
     ):
         raise ValueError(f"{label} must be finite and non-negative.")
     return float(value)
+
+
+def _finite_probability(value, label):
+    value = _finite_nonnegative(value, label)
+    if value > 1.0:
+        raise ValueError(f"{label} must be no greater than one.")
+    return value
 
 
 def _positive_integer(value, label):
@@ -702,6 +722,37 @@ def duration_distribution_to_workload_mapping(specification):
     return parameters
 
 
+def _parse_communication_latency(value, label, *, base_path=None):
+    if value is None:
+        return None
+    expected = {
+        "same_node_one_way",
+        "cross_node_one_way",
+        "unplaced_cross_node_probability",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise ValueError(
+            f"{label} must contain exactly same_node_one_way, "
+            "cross_node_one_way, and unplaced_cross_node_probability."
+        )
+    return CommunicationLatencySpec(
+        same_node_one_way=parse_duration_distribution(
+            value["same_node_one_way"],
+            f"{label}.same_node_one_way",
+            base_path=base_path,
+        ),
+        cross_node_one_way=parse_duration_distribution(
+            value["cross_node_one_way"],
+            f"{label}.cross_node_one_way",
+            base_path=base_path,
+        ),
+        unplaced_cross_node_probability=_finite_probability(
+            value["unplaced_cross_node_probability"],
+            f"{label}.unplaced_cross_node_probability",
+        ),
+    )
+
+
 def _reachable_services(entry_services, routing):
     reachable = set(entry_services)
     pending = deque(entry_services)
@@ -728,6 +779,8 @@ def _parse_request_classes(
     call_execution_modes = {}
     fixed_latency_overheads = {}
     latency_overhead_specs = {}
+    latency_boundaries = {}
+    latency_component_specs = {}
     end_to_end_timeouts = {}
     concurrency_weights = {}
     latency_slos = {}
@@ -745,6 +798,8 @@ def _parse_request_classes(
             "maximum_terminal_failure_rate",
             "fixed_latency_overhead_seconds",
             "latency_overhead",
+            "latency_boundary",
+            "latency_components",
             "routing",
             "visits",
             "workflow",
@@ -760,18 +815,32 @@ def _parse_request_classes(
                 "concurrency_weight, "
                 "end_to_end_latency_slos, end_to_end_timeout_seconds, "
                 "maximum_terminal_failure_rate, and "
-                "exactly one of fixed_latency_overhead_seconds or "
-                "latency_overhead; "
+                "exactly one of fixed_latency_overhead_seconds, "
+                "latency_overhead, or latency_components; "
                 f"unknown fields={sorted(unknown_fields)}."
             )
-        if {
+        latency_fields = {
             "fixed_latency_overhead_seconds",
             "latency_overhead",
-        }.issubset(request_class):
+            "latency_components",
+        } & set(request_class)
+        if len(latency_fields) > 1:
             raise ValueError(
-                f"Request class {request_class_name!r} cannot define both "
-                "fixed_latency_overhead_seconds and latency_overhead."
+                f"Request class {request_class_name!r} cannot define both a "
+                "legacy latency overhead and latency_components."
             )
+        boundary = request_class.get("latency_boundary", "unspecified")
+        if boundary not in {"unspecified", "ingress", "external_client"}:
+            raise ValueError(
+                f"request_classes.{request_class_name}.latency_boundary must be "
+                "ingress or external_client."
+            )
+        if "latency_components" in request_class and boundary == "unspecified":
+            raise ValueError(
+                f"Request class {request_class_name!r} must declare "
+                "latency_boundary with latency_components."
+            )
+        latency_boundaries[request_class_name] = boundary
         if ("calls" in request_class) != ("call_execution" in request_class):
             raise ValueError(
                 f"Request class {request_class_name!r} must define "
@@ -836,7 +905,56 @@ def _parse_request_classes(
                     ),
                 )
         overhead_label = f"request_classes.{request_class_name}.latency_overhead"
-        if "latency_overhead" in request_class:
+        if "latency_components" in request_class:
+            raw_components = request_class["latency_components"]
+            allowed_components = {
+                "client_to_ingress",
+                "client_to_entry",
+                "ingress_processing",
+                "unmodeled_residual",
+            }
+            if not isinstance(raw_components, Mapping) or not raw_components:
+                raise ValueError(
+                    f"request_classes.{request_class_name}.latency_components "
+                    "must be a nonempty mapping."
+                )
+            unknown_components = set(raw_components) - allowed_components
+            if unknown_components:
+                raise ValueError(
+                    f"request_classes.{request_class_name}.latency_components "
+                    f"contains unsupported components {sorted(unknown_components)}."
+                )
+            if (
+                boundary == "ingress"
+                and ({"client_to_ingress", "client_to_entry"} & set(raw_components))
+            ):
+                raise ValueError(
+                    f"Request class {request_class_name!r} cannot include "
+                    "a client path component at the ingress latency boundary."
+                )
+            if "client_to_entry" in raw_components and (
+                {"client_to_ingress", "ingress_processing"} & set(raw_components)
+            ):
+                raise ValueError(
+                    f"Request class {request_class_name!r} cannot combine "
+                    "client_to_entry with finer ingress-boundary components."
+                )
+            components = {
+                component_name: parse_duration_distribution(
+                    raw_specification,
+                    (
+                        f"request_classes.{request_class_name}.latency_components."
+                        f"{component_name}"
+                    ),
+                    base_path=base_path,
+                )
+                for component_name, raw_specification in raw_components.items()
+            }
+            latency_component_specs[request_class_name] = _freeze_mapping(components)
+            fixed_latency_overheads[request_class_name] = sum(
+                specification.mean for specification in components.values()
+            )
+        elif "latency_overhead" in request_class:
             overhead_spec = _parse_distribution(
                 request_class["latency_overhead"],
                 overhead_label,
@@ -1070,6 +1188,8 @@ def _parse_request_classes(
         _freeze_mapping(call_execution_modes),
         _freeze_mapping(fixed_latency_overheads),
         _freeze_mapping(latency_overhead_specs),
+        _freeze_mapping(latency_boundaries),
+        _freeze_mapping(latency_component_specs),
         _freeze_mapping(end_to_end_timeouts),
         _freeze_mapping(concurrency_weights),
         _freeze_mapping(latency_slos),
@@ -1113,6 +1233,8 @@ def parse_workload_spec(workload, *, base_path=None):
         call_execution_modes,
         fixed_latency_overheads,
         latency_overhead_specs,
+        latency_boundaries,
+        latency_component_specs,
         end_to_end_timeouts,
         concurrency_weights,
         request_class_latency_slos,
@@ -1128,13 +1250,17 @@ def parse_workload_spec(workload, *, base_path=None):
     for model_name, model in raw_models.items():
         if not isinstance(model_name, str) or not model_name:
             raise ValueError("Traffic-model names must be nonempty strings.")
-        if not isinstance(model, Mapping) or set(model) not in (
-            {"entry_services", "service_times"},
-            {"entry_services", "service_times", "input_uncertainty"},
+        required_model_fields = {"entry_services", "service_times"}
+        optional_model_fields = {"input_uncertainty", "communication_latency"}
+        if (
+            not isinstance(model, Mapping)
+            or not required_model_fields <= set(model)
+            or set(model) - required_model_fields - optional_model_fields
         ):
             raise ValueError(
                 f"Traffic model {model_name!r} must contain entry_services and "
-                "service_times, with optional input_uncertainty."
+                "service_times, with optional input_uncertainty and "
+                "communication_latency."
             )
         raw_service_times = model["service_times"]
         if (
@@ -1148,6 +1274,7 @@ def parse_workload_spec(workload, *, base_path=None):
         model_path = "traffic_model"
         service_times = {}
         service_execution_models = {}
+        service_replica_queue_models = {}
         processing_slots_per_replica = {}
         concurrency_limits_per_replica = {}
         service_times_by_request_class = {
@@ -1163,6 +1290,19 @@ def parse_workload_spec(workload, *, base_path=None):
                 raise ValueError(
                     f"{service_path}.execution_model must be fixed_slots or "
                     "processor_sharing."
+                )
+            replica_queue_model = raw_service_time.get(
+                "replica_queue_model",
+                "independent_round_robin",
+            )
+            if replica_queue_model not in {
+                "pooled",
+                "independent_random",
+                "independent_round_robin",
+            }:
+                raise ValueError(
+                    f"{service_path}.replica_queue_model must be pooled, "
+                    "independent_random, or independent_round_robin."
                 )
             processing_slots = _positive_integer(
                 raw_service_time.get("processing_slots_per_replica", 1),
@@ -1198,6 +1338,7 @@ def parse_workload_spec(workload, *, base_path=None):
             processing_slots_per_replica[service_name] = processing_slots
             concurrency_limits_per_replica[service_name] = concurrency_limit
             service_execution_models[service_name] = execution_model
+            service_replica_queue_models[service_name] = replica_queue_model
             distribution_specification = {
                 key: value
                 for key, value in raw_service_time.items()
@@ -1206,6 +1347,7 @@ def parse_workload_spec(workload, *, base_path=None):
                     "processing_slots_per_replica",
                     "concurrency_limit_per_replica",
                     "execution_model",
+                    "replica_queue_model",
                 }
             }
             if "distribution" in distribution_specification:
@@ -1353,6 +1495,9 @@ def parse_workload_spec(workload, *, base_path=None):
                 }
             ),
             service_execution_models=_freeze_mapping(service_execution_models),
+            service_replica_queue_models=_freeze_mapping(
+                service_replica_queue_models
+            ),
             processing_slots_per_replica=_freeze_mapping(processing_slots_per_replica),
             concurrency_limits_per_replica=_freeze_mapping(
                 concurrency_limits_per_replica
@@ -1362,6 +1507,11 @@ def parse_workload_spec(workload, *, base_path=None):
                 request_classes=request_classes,
                 service_names=service_names,
                 label=f"Traffic model {model_name!r}.input_uncertainty",
+            ),
+            communication_latency=_parse_communication_latency(
+                model.get("communication_latency"),
+                f"Traffic model {model_name!r}.communication_latency",
+                base_path=base_path,
             ),
         )
 
@@ -1373,6 +1523,8 @@ def parse_workload_spec(workload, *, base_path=None):
         request_class_call_execution_modes=call_execution_modes,
         request_class_fixed_latency_overheads=fixed_latency_overheads,
         request_class_latency_overhead_specs=latency_overhead_specs,
+        request_class_latency_boundaries=latency_boundaries,
+        request_class_latency_component_specs=latency_component_specs,
         request_class_end_to_end_timeouts=end_to_end_timeouts,
         concurrency_weights=concurrency_weights,
         request_class_latency_slos=request_class_latency_slos,

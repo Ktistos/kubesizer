@@ -3,13 +3,20 @@
 request_classes:
   interactive:
     concurrency_weight: 0.8
-    # Per-request latency outside modeled service queues: ingress, sidecars,
-    # serialization, and network transit. It is sampled independently after
-    # the final service visit and remains part of end-to-end latency.
-    latency_overhead:
-      distribution: lognormal
-      mean: 0.030
-      scv: 2.0
+    # The latency boundary says exactly what the SLO clock observes. These
+    # components are measured separately from application service demand.
+    latency_boundary: external_client
+    latency_components:
+      client_to_ingress:
+        distribution: empirical
+        source: examples/workloads/data/client-to-ingress-times.csv
+        column: latency_seconds
+        sampling: iid_with_replacement
+      ingress_processing:
+        distribution: empirical
+        source: examples/workloads/data/ingress-processing-times.csv
+        column: latency_seconds
+        sampling: iid_with_replacement
     end_to_end_latency_slos:
       percentile:
         quantile: 0.95
@@ -35,13 +42,13 @@ request_classes:
 
   batch:
     concurrency_weight: 0.2
-    latency_overhead:
-      distribution: empirical
-      source: examples/workloads/data/request-overhead-times.csv
-      column: overhead_seconds
-      cluster_column: measurement_window
-      # Resample complete observation windows across simulation replications.
-      sampling: cluster_bootstrap
+    latency_boundary: ingress
+    latency_components:
+      ingress_processing:
+        distribution: empirical
+        source: examples/workloads/data/ingress-processing-times.csv
+        column: latency_seconds
+        sampling: iid_with_replacement
     end_to_end_latency_slos:
       percentile:
         quantile: 0.95
@@ -54,6 +61,24 @@ request_classes:
         worker: 0.05
 
 traffic_model:
+  # HTTP probes between application pods provide round-trip observations.
+  # Normalize them to one-way values before exporting these two series. Before
+  # node placement is known, the probability is the observed/estimated share
+  # of service edges crossing nodes. A placement latency matrix supersedes this
+  # mixture once concrete nodes are selected.
+  communication_latency:
+    same_node_one_way:
+      distribution: empirical
+      source: examples/workloads/data/same-node-one-way-times.csv
+      column: latency_seconds
+      sampling: iid_with_replacement
+    cross_node_one_way:
+      distribution: empirical
+      source: examples/workloads/data/cross-node-one-way-times.csv
+      column: latency_seconds
+      sampling: iid_with_replacement
+    unplaced_cross_node_probability: 0.65
+
   entry_services:
     interactive:
       gateway:
@@ -94,6 +119,9 @@ traffic_model:
       distribution: exponential
       rate: 50.0
     database:
+      # Kubernetes replicas normally have separate queues. Round-robin keeps a
+      # visit on the selected replica instead of granting it pooled capacity.
+      replica_queue_model: independent_round_robin
       distribution: empirical
       source: examples/workloads/data/database-service-times.csv
       column: service_time_seconds

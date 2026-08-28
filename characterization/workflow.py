@@ -3,6 +3,7 @@
 from .analysis import characterize_deployment
 from .models import PreparedInitialSizing
 from .parser import load_portable_sizing_inputs, parse_portable_sizing_inputs
+from .readiness import assess_initial_sizing_risk
 from .sizing import recommend_initial_replicas
 
 
@@ -13,6 +14,8 @@ def prepare_initial_sizing(
     *,
     base_path,
     policy=None,
+    evidence_gate_policy=None,
+    require_recommendable=True,
 ):
     """Parse mappings, derive evidence, and return an initial recommendation."""
     inputs = parse_portable_sizing_inputs(
@@ -27,7 +30,16 @@ def prepare_initial_sizing(
         characterization,
         policy=policy,
     )
-    return PreparedInitialSizing(inputs, characterization, recommendation)
+    risk = assess_initial_sizing_risk(
+        inputs,
+        characterization,
+        recommendation,
+        sizing_policy=policy,
+        gate_policy=evidence_gate_policy,
+    )
+    if require_recommendable:
+        risk.assert_recommendable()
+    return PreparedInitialSizing(inputs, characterization, recommendation, risk)
 
 
 def load_and_prepare_initial_sizing(
@@ -36,6 +48,8 @@ def load_and_prepare_initial_sizing(
     measurements_path,
     *,
     policy=None,
+    evidence_gate_policy=None,
+    require_recommendable=True,
 ):
     """Load the three-file package and return a deterministic sizing result."""
     inputs = load_portable_sizing_inputs(
@@ -49,4 +63,13 @@ def load_and_prepare_initial_sizing(
         characterization,
         policy=policy,
     )
-    return PreparedInitialSizing(inputs, characterization, recommendation)
+    risk = assess_initial_sizing_risk(
+        inputs,
+        characterization,
+        recommendation,
+        sizing_policy=policy,
+        gate_policy=evidence_gate_policy,
+    )
+    if require_recommendable:
+        risk.assert_recommendable()
+    return PreparedInitialSizing(inputs, characterization, recommendation, risk)

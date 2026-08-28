@@ -199,3 +199,101 @@ def test_processor_sharing_state_conserves_service_population():
     assert mid_run.get_queue_length(0) == 1
     assert mid_run.get_busy_replicas(0) == 1
     assert mid_run.get_number_in_system(0) == 2
+
+
+def _class_specific_queue_workload(
+    replica_queue_model,
+    *,
+    execution_model="fixed_slots",
+):
+    return {
+        "request_classes": {
+            "slow": {"concurrency_weight": 0.5, "routing": {}},
+            "fast": {"concurrency_weight": 0.5, "routing": {}},
+        },
+        "traffic_model": {
+            "entry_services": {
+                request_class: {
+                    "service": {"distribution": "deterministic", "rate": 1.0}
+                }
+                for request_class in ("slow", "fast")
+            },
+            "service_times": {
+                "service": {
+                    "execution_model": execution_model,
+                    "replica_queue_model": replica_queue_model,
+                    "slow": {"distribution": "deterministic", "mean": 2.0},
+                    "fast": {"distribution": "deterministic", "mean": 0.1},
+                }
+            },
+        },
+    }
+
+
+def test_independent_round_robin_queues_preserve_per_replica_head_of_line_delay():
+    pooled = System(
+        "pooled",
+        _class_specific_queue_workload("pooled"),
+        QueueingNetworkType.OPEN,
+    )
+    independent = System(
+        "independent",
+        _class_specific_queue_workload("independent_round_robin"),
+        QueueingNetworkType.OPEN,
+    )
+    pooled.configure_system_replicas((3,))
+    independent.configure_system_replicas((3,))
+    arguments = {
+        "warmup_duration": 0.0,
+        "measurement_duration": 3.5,
+        "seeds": (1,),
+        "maximum_drain_time": 100.0,
+    }
+
+    pooled_result = pooled.simulate_measurement_replications(**arguments)[0]
+    independent_result = independent.simulate_measurement_replications(**arguments)[
+        0
+    ]
+
+    assert pooled_result.request_class_latencies["fast"] == pytest.approx(
+        (0.1, 0.1, 0.1)
+    )
+    assert independent_result.request_class_latencies["fast"] == pytest.approx(
+        (0.1, 1.1, 1.1)
+    )
+    assert independent_result.request_class_latencies["slow"] == pytest.approx(
+        (2.0, 2.0, 2.0)
+    )
+
+
+def test_independent_processor_sharing_is_scoped_to_the_selected_replica():
+    systems = {
+        queue_model: System(
+            queue_model,
+            _class_specific_queue_workload(
+                queue_model,
+                execution_model="processor_sharing",
+            ),
+            QueueingNetworkType.OPEN,
+        )
+        for queue_model in ("pooled", "independent_round_robin")
+    }
+    for system in systems.values():
+        system.configure_system_replicas((3,))
+
+    results = {
+        queue_model: system.simulate_measurement_replications(
+            warmup_duration=0.0,
+            measurement_duration=3.5,
+            seeds=(1,),
+            maximum_drain_time=100.0,
+        )[0]
+        for queue_model, system in systems.items()
+    }
+
+    assert results["pooled"].request_class_latencies["fast"] == pytest.approx(
+        (0.1, 0.1, 0.1)
+    )
+    assert results["independent_round_robin"].request_class_latencies[
+        "fast"
+    ] == pytest.approx((0.1, 0.2, 0.2))

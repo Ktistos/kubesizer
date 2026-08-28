@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .readiness import InitialSizingRiskAssessment
 
 
 MEASUREMENT_METHODOLOGY_VERSION = "prometheus-istio-kubernetes-v1"
@@ -57,6 +61,8 @@ class TargetRequestClass:
     call_execution: str | None
     fixed_latency_overhead_seconds: float
     latency_overhead_distribution: object | None
+    latency_boundary: str
+    latency_components: tuple[tuple[str, object], ...]
     end_to_end_timeout_seconds: float
     latency_slo: tuple[tuple[str, object], ...] | None
     maximum_terminal_failure_rate: float | None
@@ -78,6 +84,7 @@ class TargetRequestClass:
 class WorkloadDefinition:
     request_classes: tuple[TargetRequestClass, ...]
     load_forecast_multipliers: tuple[float, ...] = (1.0,)
+    communication_latency: object | None = None
 
     @property
     def maximum_load_multiplier(self):
@@ -376,3 +383,4 @@ class PreparedInitialSizing:
     inputs: PortableSizingInputs
     characterization: DeploymentCharacterization
     recommendation: InitialSizingRecommendation
+    risk_assessment: InitialSizingRiskAssessment | None = None

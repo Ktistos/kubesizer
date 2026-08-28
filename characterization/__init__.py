@@ -2,6 +2,12 @@
 
 from .analysis import characterize_deployment
 from .methodology import measurement_methodology_contract
+from .latency import (
+    MeanLatencyDecomposition,
+    client_to_entry_mean_component,
+    communication_latency_from_round_trip_probes,
+    decompose_aligned_latency_means,
+)
 from .models import (
     AlignedInputWindow,
     CapacityEnvelopePoint,
@@ -9,6 +15,7 @@ from .models import (
     DeploymentSpec,
     ExternalRequestClassCharacterization,
     InitialSizingRecommendation,
+    LatencySummary,
     MEASUREMENT_METHODOLOGY_VERSION,
     MeasurementPackage,
     PortableSizingInputs,
@@ -29,6 +36,31 @@ from .parser import (
     parse_portable_sizing_inputs,
     parse_workload_definition,
 )
+from .readiness import (
+    EvidenceFinding,
+    EvidenceGatePolicy,
+    InitialSizingRiskAssessment,
+    RecommendationReadiness,
+    ServiceSizingRisk,
+    assess_initial_sizing_risk,
+)
+from .experiment_io import (
+    ExperimentEvidenceError,
+    load_observed_experiment_replication,
+    load_observed_experiment_replications,
+)
+from .quality import (
+    ClosedLoopExperimentAdapter,
+    ClosedLoopExperimentOptions,
+    ObservedConfigurationEvidence,
+    ObservedConfigurationStatus,
+    ObservedExperimentReplication,
+    PredictionAgreement,
+    RecommendationQualityResult,
+    RecommendationQualityStatus,
+    evaluate_closed_loop_recommendation,
+    run_closed_loop_experiments,
+)
 from .simulation import (
     build_characterized_system_variants,
     build_simulation_workload_variants,
@@ -42,17 +74,33 @@ from .workflow import load_and_prepare_initial_sizing, prepare_initial_sizing
 __all__ = [
     "AlignedInputWindow",
     "CapacityEnvelopePoint",
+    "ClosedLoopExperimentAdapter",
+    "ClosedLoopExperimentOptions",
     "DeploymentCharacterization",
     "DeploymentSpec",
     "ExternalRequestClassCharacterization",
+    "EvidenceFinding",
+    "EvidenceGatePolicy",
+    "ExperimentEvidenceError",
     "InitialSizingRecommendation",
+    "InitialSizingRiskAssessment",
+    "LatencySummary",
     "MEASUREMENT_METHODOLOGY_VERSION",
     "MeasurementPackage",
+    "MeanLatencyDecomposition",
     "PortableSizingInputs",
+    "ObservedConfigurationEvidence",
+    "ObservedConfigurationStatus",
+    "ObservedExperimentReplication",
+    "PredictionAgreement",
     "PreparedInitialSizing",
+    "RecommendationReadiness",
+    "RecommendationQualityResult",
+    "RecommendationQualityStatus",
     "ServiceCharacterization",
     "ServiceDeployment",
     "ServiceSizingRecommendation",
+    "ServiceSizingRisk",
     "SimulationWorkloadVariant",
     "SizingPolicy",
     "TargetRequestClass",
@@ -61,7 +109,14 @@ __all__ = [
     "build_characterized_system_variants",
     "build_simulation_workload_variants",
     "characterize_deployment",
+    "assess_initial_sizing_risk",
+    "client_to_entry_mean_component",
+    "communication_latency_from_round_trip_probes",
+    "decompose_aligned_latency_means",
+    "evaluate_closed_loop_recommendation",
     "load_and_prepare_initial_sizing",
+    "load_observed_experiment_replication",
+    "load_observed_experiment_replications",
     "load_portable_sizing_inputs",
     "parse_deployment_spec",
     "parse_measurement_manifest",
@@ -71,4 +126,5 @@ __all__ = [
     "prepare_initial_sizing",
     "recommend_initial_replicas",
     "recommendation_initial_configuration",
+    "run_closed_loop_experiments",
 ]

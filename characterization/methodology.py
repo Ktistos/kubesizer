@@ -53,6 +53,41 @@ def measurement_methodology_contract():
             "aggregation": "sum_histogram_buckets_before_quantiles",
             "unit_after_normalization": "seconds",
         },
+        "optional_latency_boundary_components": {
+            "external_client": {
+                "client_to_ingress": (
+                    "load-generator latency minus matched ingress request latency"
+                ),
+                "ingress_processing": (
+                    "ingress request duration minus upstream response duration"
+                ),
+            },
+            "ingress": {
+                "ingress_processing": (
+                    "ingress request duration minus upstream response duration"
+                ),
+            },
+            "quantile_rule": (
+                "derive component samples or distributions; never subtract "
+                "independently aggregated percentiles"
+            ),
+            "unmodeled_residual": (
+                "allowed only as explicitly named residual evidence, never folded "
+                "into service demand"
+            ),
+        },
+        "optional_service_network_latency": {
+            "measurement": (
+                "HTTP health probe round trips between application pods with "
+                "sidecars on the same node and on different nodes"
+            ),
+            "normalization": "round_trip_seconds / 2",
+            "outputs": ["same_node_one_way", "cross_node_one_way"],
+            "unplaced_probability": (
+                "observed or placement-derived fraction of service calls crossing "
+                "nodes"
+            ),
+        },
         "optional_errors": {
             "metric": "istio_requests_total",
             "groups": ["4xx", "5xx"],
@@ -110,6 +145,54 @@ def measurement_methodology_contract():
             "sample_unit": "service_observation_window",
             "zero_throughput": "excluded",
             "per_request_distribution_identifiable": False,
+        },
+        "initial_sizing_evidence_gate": {
+            "blocking_conditions": [
+                "missing_request_class_arrival_rate",
+                "missing_declared_slo_statistic",
+                "missing_cpu_demand",
+                "material_flow_balance_mismatch",
+                "excessive_5xx_rate",
+                "excessive_cpu_throttling",
+                "load_dependent_extrapolation",
+            ],
+            "conditional_conditions": [
+                "missing_request_class_arrival_trace",
+                "unknown_multi_entry_trace_attribution",
+                "inferred_call_order",
+                "missing_communication_latency",
+                "missing_concurrency_limit",
+                "recommended_replica_count_not_load_tested",
+            ],
+            "probability_semantics": (
+                "confidence bounds and measured ranges are reported; they are "
+                "not converted to a probability of SLO compliance"
+            ),
+        },
+        "closed_loop_quality_experiment": {
+            "sample_unit": "independent_complete_load_test_run",
+            "arrival_cohort": "actual_client_start_in_half_open_measurement_window",
+            "post_window_completion": "included",
+            "latency_interval": "replication_cluster_bootstrap",
+            "right_censoring": {
+                "representation": "latency_lower_bound_at_observation_stop",
+                "feasibility": "never_certified_from_a_censored_cohort",
+                "infeasibility": (
+                    "may_be_certified_when_the_lower_bound_interval_exceeds_the_slo"
+                ),
+                "http_failure": "not_inferred_from_censoring",
+            },
+            "replica_vector_identity": (
+                "explicit_service_order_checked_against_measured_replica_counts"
+            ),
+            "multiplicity": (
+                "Bonferroni over two tails, tested configurations, and constraints"
+            ),
+            "minimum_claim": (
+                "minimum only inside an explicitly declared finite configuration "
+                "space after every cheaper state is conclusively infeasible"
+            ),
+            "cluster_state": "restore_original_configuration_in_finally",
         },
         "capability_rule": "unavailable_metrics_are_reported_not_imputed",
     }

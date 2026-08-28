@@ -18,6 +18,7 @@ from characterization import (
 )
 from native_backend import get_native_backend
 from optimization import AnalyticalReplicaSizingProblem, ScalableReplicaOptimizer
+from performance_models import QueueingNetworkType, System
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
 
@@ -76,19 +77,26 @@ def test_measurement_contract_freezes_cross_cluster_counter_semantics():
     assert contract["version"] == "prometheus-istio-kubernetes-v1"
     assert contract["service_requests"]["reporter"] == "destination"
     assert contract["replica_join"]["keys"] == ["namespace", "pod"]
-    assert contract["cpu_capacity"]["source"] == (
-        "kubernetes_container_cpu_requests"
-    )
+    assert contract["cpu_capacity"]["source"] == ("kubernetes_container_cpu_requests")
     assert (
-        contract["derived_cpu_demand"]["per_request_distribution_identifiable"]
-        is False
+        contract["derived_cpu_demand"]["per_request_distribution_identifiable"] is False
     )
     assert contract["optional_capacity_envelope"]["sample_unit"] == (
         "independent_fixed_replica_load_test_run"
     )
-    assert "no automatic linear" in contract["optional_capacity_envelope"][
-        "replica_scaling"
-    ]
+    assert (
+        "no automatic linear"
+        in contract["optional_capacity_envelope"]["replica_scaling"]
+    )
+    assert contract["initial_sizing_evidence_gate"]["probability_semantics"].startswith(
+        "confidence bounds"
+    )
+    assert contract["closed_loop_quality_experiment"]["sample_unit"] == (
+        "independent_complete_load_test_run"
+    )
+    assert contract["closed_loop_quality_experiment"]["right_censoring"][
+        "feasibility"
+    ] == "never_certified_from_a_censored_cohort"
 
 
 def test_capacity_example_produces_detailed_bounded_evidence():
@@ -139,6 +147,7 @@ def test_workload_rejects_a_separate_arrival_rate_override():
             base_path=EXAMPLE,
         )
 
+
 def test_manifest_rejects_unobservable_per_request_cpu_samples():
     manifest = _loaded_yaml("measurements.yaml")
     manifest["service_demand_samples"] = "service-intervals.csv"
@@ -175,8 +184,7 @@ def test_measurement_infers_replicas_and_requires_a_fixed_observation(tmp_path):
             row
             for row in rows
             if not (
-                row.startswith("2026-08-25T10:10:00Z,")
-                and ",api,example,api-b," in row
+                row.startswith("2026-08-25T10:10:00Z,") and ",api,example,api-b," in row
             )
         )
         + "\n",
@@ -247,9 +255,7 @@ def _capacity_manifest(tmp_path, rows):
     capacity = tmp_path / "capacity-observations.csv"
     capacity.write_text(
         "run_id,service,replicas,offered_rate_rps,completed_rate_rps,"
-        "error_rate,healthy,cpu_throttling_ratio\n"
-        + "\n".join(rows)
-        + "\n",
+        "error_rate,healthy,cpu_throttling_ratio\n" + "\n".join(rows) + "\n",
         encoding="utf-8",
     )
     manifest = _loaded_yaml("measurements.yaml")
@@ -385,9 +391,7 @@ def test_cpu_demand_is_derived_from_time_aligned_cpu_and_request_counters():
         (28.1 / 7200, 28.8 / 7200, 30.2 / 7200)
     )
     variants = build_simulation_workload_variants(inputs, characterization)
-    assert "aligned arrival-rate and U/X windows" in " ".join(
-        variants[0].assumptions
-    )
+    assert "aligned arrival-rate and U/X windows" in " ".join(variants[0].assumptions)
 
 
 def test_optional_evidence_can_be_omitted_without_blocking_initial_sizing():
@@ -479,9 +483,7 @@ def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
 
     assert result.rate_source == "measured_workload"
     assert result.service_map["api"].workload_arrival_rate_rps == pytest.approx(20)
-    assert result.service_map["database"].workload_arrival_rate_rps == pytest.approx(
-        24
-    )
+    assert result.service_map["database"].workload_arrival_rate_rps == pytest.approx(24)
 
 
 def test_recommendation_is_a_search_start_not_a_mandatory_replica_floor():
@@ -533,6 +535,14 @@ def test_simulation_builder_uses_safe_aligned_demand_and_declared_call_semantics
         workload["traffic_model"]["service_times"]["api"]["execution_model"]
         == "processor_sharing"
     )
+    system = System(
+        "measured-workload",
+        workload,
+        QueueingNetworkType.OPEN,
+    )
+    assert system.get_service_replica_queue_models()["api"] == (
+        "independent_round_robin"
+    )
     arrival = workload["traffic_model"]["entry_services"]["browse"]["api"]
     assert arrival["distribution"] == "arrival_trace"
     assert arrival["sampling"] == "block_bootstrap"
@@ -541,9 +551,7 @@ def test_simulation_builder_uses_safe_aligned_demand_and_declared_call_semantics
     )
     epochs = workload["traffic_model"]["input_uncertainty"]["epochs"]
     assert len(epochs) == len(characterization.aligned_input_windows)
-    assert epochs[0]["arrival_rate_multipliers"]["browse"] == pytest.approx(
-        1.0
-    )
+    assert epochs[0]["arrival_rate_multipliers"]["browse"] == pytest.approx(1.0)
     assert epochs[0]["service_time_multipliers"]["api"] == pytest.approx(
         0.0080 / 0.0082
     )
@@ -593,9 +601,12 @@ def test_portable_deployment_preserves_a_declared_service_pool_limit():
     (variant,) = build_simulation_workload_variants(inputs, characterization)
 
     assert inputs.deployment.services[0].concurrency_limit_per_replica == 17
-    assert variant.workload["traffic_model"]["service_times"]["api"][
-        "concurrency_limit_per_replica"
-    ] == 17
+    assert (
+        variant.workload["traffic_model"]["service_times"]["api"][
+            "concurrency_limit_per_replica"
+        ]
+        == 17
+    )
 
 
 def test_characterized_system_executes_in_mandatory_native_backend():

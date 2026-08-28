@@ -702,6 +702,11 @@ def experiment_fingerprints(system):
         "get_service_execution_models",
         lambda: {service.get_name(): "fixed_slots" for service in services},
     )()
+    replica_queue_models = getattr(
+        system,
+        "get_service_replica_queue_models",
+        lambda: {service.get_name(): "pooled" for service in services},
+    )()
     fixed_latency_overheads = getattr(
         system,
         "get_request_class_fixed_latency_overheads",
@@ -710,6 +715,16 @@ def experiment_fingerprints(system):
     latency_overhead_specs = getattr(
         system,
         "get_request_class_latency_overhead_distribution_specs",
+        lambda: {},
+    )()
+    latency_boundaries = getattr(
+        system,
+        "get_request_class_latency_boundaries",
+        lambda: {},
+    )()
+    latency_component_specs = getattr(
+        system,
+        "get_request_class_latency_component_distribution_specs",
         lambda: {},
     )()
     end_to_end_timeouts = getattr(
@@ -726,6 +741,7 @@ def experiment_fingerprints(system):
                 "concurrency_limit_per_replica": concurrency_limits[service.get_name()],
                 "processing_slots_per_replica": processing_slots[service.get_name()],
                 "execution_model": execution_models[service.get_name()],
+                "replica_queue_model": replica_queue_models[service.get_name()],
             }
             for service in services
         ],
@@ -810,6 +826,27 @@ def experiment_fingerprints(system):
             }
             for request_class in request_classes
             if request_class in latency_overhead_specs
+        ],
+        "request_class_latency_components": [
+            {
+                "request_class": request_class,
+                "latency_boundary": latency_boundaries.get(
+                    request_class,
+                    "unspecified",
+                ),
+                "components": [
+                    {
+                        "name": component_name,
+                        "specification": _distribution_fingerprint(
+                            specification
+                        ),
+                    }
+                    for component_name, specification in sorted(
+                        latency_component_specs.get(request_class, {}).items()
+                    )
+                ],
+            }
+            for request_class in request_classes
         ],
         "request_class_end_to_end_timeouts": [
             {
@@ -912,6 +949,23 @@ def experiment_fingerprints(system):
                 }
                 for epoch in joint_input_uncertainty.epochs
             ],
+        }
+    communication_latency = getattr(
+        system,
+        "get_communication_latency_distribution_spec",
+        lambda: None,
+    )()
+    if communication_latency is not None:
+        workload["traffic_model"]["communication_latency"] = {
+            "same_node_one_way": _distribution_fingerprint(
+                communication_latency.same_node_one_way
+            ),
+            "cross_node_one_way": _distribution_fingerprint(
+                communication_latency.cross_node_one_way
+            ),
+            "unplaced_cross_node_probability": (
+                communication_latency.unplaced_cross_node_probability
+            ),
         }
     return _fingerprint(topology), _fingerprint(workload)
 

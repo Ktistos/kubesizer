@@ -156,10 +156,81 @@ traffic_model:
     api: {distribution: exponential, rate: 100.0}
 ```
 
-All request classes still run concurrently and share the same FIFO queues and
-replicas. A weight controls external traffic mixture only; it does not reserve
+All request classes still run concurrently and contend for the same service
+capacity. A weight controls external traffic mixture only; it does not reserve
 capacity or give a class queueing priority. Weights must be finite, positive,
 and sum to one.
+
+## Measured latency boundaries and network transit
+
+New workloads should name non-service latency instead of fitting one anonymous
+constant. `external_client` includes the load-generator/client boundary;
+`ingress` begins at the ingress controller. `client_to_entry` is the portable
+aggregate fallback when ingress telemetry is unavailable and cannot be combined
+with the finer ingress components.
+
+```yaml
+request_classes:
+  read:
+    concurrency_weight: 1.0
+    latency_boundary: external_client
+    latency_components:
+      client_to_ingress: {distribution: deterministic, mean: 0.028}
+      ingress_processing: {distribution: deterministic, mean: 0.0004}
+      unmodeled_residual: {distribution: deterministic, mean: 0.006}
+    routing: {}
+```
+
+For service calls, HTTP round-trip probes between application pods can be
+normalized to one-way same-node and cross-node series. Before placement is
+known, the measured/estimated cross-node call fraction selects between them.
+After placement is attached, its explicit directional matrix is authoritative.
+
+```yaml
+traffic_model:
+  communication_latency:
+    same_node_one_way: {distribution: deterministic, mean: 0.0011}
+    cross_node_one_way: {distribution: deterministic, mean: 0.0015}
+    unplaced_cross_node_probability: 0.6
+```
+
+Synchronous request/response pairs reuse the same sampled unplaced probe path,
+preserving the empirical round-trip distribution. Analytical mean evaluation
+uses the component means and expected call round trips; simulation samples the
+full component distributions. Mean differences may be derived from aligned
+counter windows, but independently aggregated percentiles must never be
+subtracted to manufacture a tail distribution.
+
+## Replica queue dispatch
+
+The service-time declaration can select how a fixed-slot service dispatches a
+visit across replicas:
+
+```yaml
+traffic_model:
+  service_times:
+    api:
+      execution_model: fixed_slots
+      replica_queue_model: independent_round_robin
+      distribution: lognormal
+      mean: 0.025
+      scv: 2.0
+```
+
+`independent_round_robin` is the default and models a load balancer assigning
+successive visits to separate per-replica queues. `independent_random`
+independently selects a replica for every visit. `pooled` represents one ideal
+central queue feeding all replica capacity and must be requested explicitly.
+The selected replica owns that visit's admission queue, concurrency capacity,
+processing queue or processor-sharing scheduler, and placement node until the
+visit completes.
+
+Independent queues are often the more faithful model for Kubernetes pods. They
+can be slower than a pooled queue because an idle pod cannot take a request
+already waiting behind work at another pod. The dispatch policy must match the
+deployment's actual load-balancing behavior; it is a model input, not something
+the simulator can infer from aggregate latency measurements. Both fixed-slot
+and processor-sharing execution support pooled and independent dispatch.
 
 Let `G` be the sum of all configured external `gamma` values, `w_k` the weight
 of class `k`, and `G_k_raw` that class's configured external total. The class
@@ -220,7 +291,8 @@ samplers statistically before relying on analytical optimization.
 - trace-block external arrivals that preserve measured local burst ordering;
 - separate processing-slot and admitted-request-concurrency capacities, both of
   which scale with replica count;
-- FIFO admission and processing queues;
+- pooled or independently dispatched FIFO admission and processing queues for
+  fixed-slot services;
 - fixed probabilistic routing, exits, revisits, and loops;
 - optional fixed node placement with directional one-way transit delays and
   measured node execution-time multipliers;

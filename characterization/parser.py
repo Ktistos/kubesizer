@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-from performance_models import parse_duration_distribution
+from performance_models import CommunicationLatencySpec, parse_duration_distribution
 
 from .models import (
     CapacityObservation,
@@ -368,11 +368,16 @@ def _canonical_slo(raw, label):
 
 def parse_workload_definition(value, deployment, *, base_path=None):
     """Validate request semantics and SLOs for the measured workload."""
-    allowed_top_level = {"request_classes", "load_forecast"}
+    allowed_top_level = {
+        "request_classes",
+        "load_forecast",
+        "communication_latency",
+    }
     if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
-            "workload must contain request_classes and may contain load_forecast; "
-            "arrival rates come from the measurement package."
+            "workload must contain request_classes and may contain load_forecast "
+            "and communication_latency; arrival rates come from the measurement "
+            "package."
         )
     if "request_classes" not in value:
         raise ValueError("workload is missing request_classes.")
@@ -389,6 +394,8 @@ def parse_workload_definition(value, deployment, *, base_path=None):
         "call_execution",
         "fixed_latency_overhead_seconds",
         "latency_overhead",
+        "latency_boundary",
+        "latency_components",
         "end_to_end_timeout_seconds",
         "end_to_end_latency_slos",
         "maximum_terminal_failure_rate",
@@ -403,13 +410,15 @@ def parse_workload_definition(value, deployment, *, base_path=None):
         missing = {"concurrency_weight", "entry_services"} - set(raw)
         if missing:
             raise ValueError(f"request_classes.{name} is missing {sorted(missing)}.")
-        if {
+        latency_fields = {
             "fixed_latency_overhead_seconds",
             "latency_overhead",
-        }.issubset(raw):
+            "latency_components",
+        } & set(raw)
+        if len(latency_fields) > 1:
             raise ValueError(
-                f"request_classes.{name} cannot define both fixed latency "
-                "overhead fields."
+                f"request_classes.{name} cannot define both a legacy latency "
+                "overhead and latency_components."
             )
         weight = _finite(
             raw["concurrency_weight"],
@@ -529,6 +538,67 @@ def parse_workload_definition(value, deployment, *, base_path=None):
             nonnegative=True,
         )
         overhead_distribution = None
+        latency_boundary = raw.get("latency_boundary", "unspecified")
+        if latency_boundary not in {"unspecified", "ingress", "external_client"}:
+            raise ValueError(
+                f"request_classes.{name}.latency_boundary must be ingress or "
+                "external_client."
+            )
+        latency_components = ()
+        if "latency_components" in raw:
+            if latency_boundary == "unspecified":
+                raise ValueError(
+                    f"request_classes.{name} must declare latency_boundary with "
+                    "latency_components."
+                )
+            raw_components = raw["latency_components"]
+            allowed_components = {
+                "client_to_ingress",
+                "client_to_entry",
+                "ingress_processing",
+                "unmodeled_residual",
+            }
+            if not isinstance(raw_components, Mapping) or not raw_components:
+                raise ValueError(
+                    f"request_classes.{name}.latency_components must be a "
+                    "nonempty mapping."
+                )
+            unknown = set(raw_components) - allowed_components
+            if unknown:
+                raise ValueError(
+                    f"request_classes.{name}.latency_components contains "
+                    f"unsupported components {sorted(unknown)}."
+                )
+            if (
+                latency_boundary == "ingress"
+                and ({"client_to_ingress", "client_to_entry"} & set(raw_components))
+            ):
+                raise ValueError(
+                    f"request_classes.{name} cannot include a client path "
+                    "component at the ingress latency boundary."
+                )
+            if "client_to_entry" in raw_components and (
+                {"client_to_ingress", "ingress_processing"} & set(raw_components)
+            ):
+                raise ValueError(
+                    f"request_classes.{name} cannot combine client_to_entry "
+                    "with finer ingress-boundary components."
+                )
+            latency_components = tuple(
+                (
+                    component_name,
+                    parse_duration_distribution(
+                        component,
+                        (
+                            f"request_classes.{name}.latency_components."
+                            f"{component_name}"
+                        ),
+                        base_path=base_path,
+                    ),
+                )
+                for component_name, component in raw_components.items()
+            )
+            overhead = sum(component.mean for _, component in latency_components)
         if "latency_overhead" in raw:
             overhead_distribution = parse_duration_distribution(
                 raw["latency_overhead"],
@@ -567,6 +637,8 @@ def parse_workload_definition(value, deployment, *, base_path=None):
                 call_execution=call_execution,
                 fixed_latency_overhead_seconds=overhead,
                 latency_overhead_distribution=overhead_distribution,
+                latency_boundary=latency_boundary,
+                latency_components=latency_components,
                 end_to_end_timeout_seconds=timeout,
                 latency_slo=_canonical_slo(
                     raw.get("end_to_end_latency_slos"),
@@ -603,7 +675,46 @@ def parse_workload_definition(value, deployment, *, base_path=None):
         raise ValueError(
             "load_forecast.multipliers must be unique and strictly increasing."
         )
-    return WorkloadDefinition(tuple(classes), multipliers)
+    communication_latency = None
+    if "communication_latency" in value:
+        raw_communication = value["communication_latency"]
+        expected = {
+            "same_node_one_way",
+            "cross_node_one_way",
+            "unplaced_cross_node_probability",
+        }
+        if (
+            not isinstance(raw_communication, Mapping)
+            or set(raw_communication) != expected
+        ):
+            raise ValueError(
+                "communication_latency must contain exactly same_node_one_way, "
+                "cross_node_one_way, and unplaced_cross_node_probability."
+            )
+        probability = _finite(
+            raw_communication["unplaced_cross_node_probability"],
+            "communication_latency.unplaced_cross_node_probability",
+            nonnegative=True,
+        )
+        if probability > 1.0:
+            raise ValueError(
+                "communication_latency.unplaced_cross_node_probability cannot "
+                "exceed one."
+            )
+        communication_latency = CommunicationLatencySpec(
+            same_node_one_way=parse_duration_distribution(
+                raw_communication["same_node_one_way"],
+                "communication_latency.same_node_one_way",
+                base_path=base_path,
+            ),
+            cross_node_one_way=parse_duration_distribution(
+                raw_communication["cross_node_one_way"],
+                "communication_latency.cross_node_one_way",
+                base_path=base_path,
+            ),
+            unplaced_cross_node_probability=probability,
+        )
+    return WorkloadDefinition(tuple(classes), multipliers, communication_latency)
 
 
 def _parse_service_intervals(path):

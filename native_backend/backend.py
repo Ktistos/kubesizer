@@ -8,10 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 9
+PROTOCOL_VERSION = 11
 SIMULATOR_SEMANTICS_VERSION = (
     "native-event-kernel-joint-input-blocks-burst-traces-concurrency-"
-    "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-ps-v10"
+    "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-"
+    "ps-replica-queues-measured-latency-components-v12"
 )
 
 
@@ -204,10 +205,32 @@ class CppSimulationBackend:
         overhead_specs = (
             system.get_request_class_latency_overhead_distribution_specs()
         )
+        latency_components = getattr(
+            system,
+            "get_request_class_latency_component_distribution_specs",
+            lambda: {},
+        )()
+        latency_boundaries = getattr(
+            system,
+            "get_request_class_latency_boundaries",
+            lambda: {},
+        )()
+        communication_latency = getattr(
+            system,
+            "get_communication_latency_distribution_spec",
+            lambda: None,
+        )()
         timeouts = system.get_request_class_end_to_end_timeouts()
         concurrency_limits = system.get_service_concurrency_limits_per_replica()
         processing_slots = system.get_service_processing_slots_per_replica()
         execution_models = system.get_service_execution_models()
+        replica_queue_models = getattr(
+            system,
+            "get_service_replica_queue_models",
+            lambda: {
+                service.get_name(): "pooled" for service in services
+            },
+        )()
         joint_input_uncertainty = system.get_joint_input_uncertainty()
         placement_model = system.get_simulation_placement_model()
         for request_class in system.get_request_classes():
@@ -261,8 +284,23 @@ class CppSimulationBackend:
                     "latency_overhead_distribution": (
                         _serialize_distribution(overhead_specs[request_class])
                         if request_class in overhead_specs
+                        and request_class not in latency_components
                         else None
                     ),
+                    "latency_boundary": latency_boundaries.get(
+                        request_class,
+                        "unspecified",
+                    ),
+                    "latency_components": [
+                        {
+                            "name": name,
+                            "distribution": _serialize_distribution(specification),
+                        }
+                        for name, specification in latency_components.get(
+                            request_class,
+                            {},
+                        ).items()
+                    ],
                     "end_to_end_timeout": timeouts.get(request_class, 0.0),
                 }
             )
@@ -288,6 +326,9 @@ class CppSimulationBackend:
                 {
                     "name": service.get_name(),
                     "execution_model": execution_models[service.get_name()],
+                    "replica_queue_model": replica_queue_models[
+                        service.get_name()
+                    ],
                     "replicas": service.get_replicas(),
                     "capacity": (
                         service.get_replicas() * processing_slots[service.get_name()]
@@ -332,6 +373,18 @@ class CppSimulationBackend:
                     }
                     for epoch in joint_input_uncertainty.epochs
                 ],
+            }
+        if communication_latency is not None:
+            result["communication_latency"] = {
+                "same_node_one_way": _serialize_distribution(
+                    communication_latency.same_node_one_way
+                ),
+                "cross_node_one_way": _serialize_distribution(
+                    communication_latency.cross_node_one_way
+                ),
+                "unplaced_cross_node_probability": (
+                    communication_latency.unplaced_cross_node_probability
+                ),
             }
         if placement_model is not None:
             node_names = tuple(placement_model["node_names"])
