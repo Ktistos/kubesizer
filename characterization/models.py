@@ -85,6 +85,7 @@ class WorkloadDefinition:
     request_classes: tuple[TargetRequestClass, ...]
     load_forecast_multipliers: tuple[float, ...] = (1.0,)
     communication_latency: object | None = None
+    service_blocking_times: tuple[tuple[str, object], ...] = ()
 
     @property
     def maximum_load_multiplier(self):

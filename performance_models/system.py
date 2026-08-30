@@ -117,6 +117,8 @@ class System:
         self.__service_concurrency_limits_per_replica = {}
         self.__service_execution_models = {}
         self.__service_replica_queue_models = {}
+        self.__service_blocking_time_specs = {}
+        self.__request_class_service_blocking_time_specs = {}
         self.__class_specific_service_times = False
         self.__joint_input_uncertainty = None
         self.__communication_latency_spec = None
@@ -180,6 +182,15 @@ class System:
             self.__service_replica_queue_models = dict(
                 parsed.traffic_model.service_replica_queue_models
             )
+            self.__service_blocking_time_specs = dict(
+                parsed.traffic_model.service_blocking_times
+            )
+            self.__request_class_service_blocking_time_specs = {
+                request_class: dict(specifications)
+                for request_class, specifications in (
+                    parsed.traffic_model.service_blocking_times_by_request_class.items()
+                )
+            }
             self.__joint_input_uncertainty = parsed.traffic_model.input_uncertainty
             self.__communication_latency_spec = (
                 parsed.traffic_model.communication_latency
@@ -442,6 +453,10 @@ class System:
             self.__request_class_service_time_specs = {
                 request_class: dict(self.__service_time_specs)
                 for request_class in self.get_request_classes()
+            }
+            self.__service_blocking_time_specs = {}
+            self.__request_class_service_blocking_time_specs = {
+                request_class: {} for request_class in self.get_request_classes()
             }
         else:
             traffic_model = self.__traffic_distribution_spec
@@ -909,6 +924,9 @@ class System:
         mus = mus.tolist()
         servers = servers.tolist()
         utilizations = utilizations.tolist()
+        concurrency_utilizations = self.__concurrency_utilization_lower_bounds(
+            request_class_rates
+        )
         queueing_models = self.__current_queueing_models()
         latencies = []
         for service_id, model in enumerate(queueing_models):
@@ -937,7 +955,10 @@ class System:
         return Metrics(
             utilizations,
             latencies,
-            self.__is_stable(utilizations),
+            (
+                self.__is_stable(utilizations)
+                and self.__is_stable(concurrency_utilizations)
+            ),
         )
 
     def simulate(
@@ -1096,6 +1117,7 @@ class System:
         arrival_scvs = self.get_effective_arrival_scvs()
         service_scvs = self.get_service_time_scvs()
         models = self.__current_queueing_models()
+        concurrency_utilizations = self.get_concurrency_utilization_lower_bounds()
         return {
             service.get_name(): {
                 "model": models[service.get_id()].value,
@@ -1115,9 +1137,23 @@ class System:
                 "replica_queue_model": self.__service_replica_queue_models[
                     service.get_name()
                 ],
+                "non_cpu_blocking_time_by_request_class": {
+                    request_class: specification.mean
+                    for request_class in self.get_request_classes()
+                    if (
+                        specification := self.__request_class_service_blocking_time_specs.get(
+                            request_class,
+                            {},
+                        ).get(service.get_name())
+                    )
+                    is not None
+                },
                 "effective_processing_slots": (
                     service.get_replicas()
                     * self.__service_processing_slots_per_replica[service.get_name()]
+                ),
+                "concurrency_utilization_lower_bound": (
+                    concurrency_utilizations[service.get_id()]
                 ),
             }
             for service in self.get_services().values()
@@ -1157,6 +1193,33 @@ class System:
     def get_request_class_call_execution_modes(self):
         """Return parallel/sequential sibling-call semantics by class."""
         return dict(self.__request_class_call_execution_modes)
+
+    def get_service_blocking_time_distribution_specs(self):
+        """Return shared non-CPU blocking-time distributions by service.
+
+        A blocking interval releases the service's CPU processing capacity but
+        keeps one admitted-concurrency slot occupied. It therefore represents
+        measured I/O, lock, or external wait rather than CPU execution work.
+        """
+        return dict(self.__service_blocking_time_specs)
+
+    def get_request_class_service_blocking_time_distribution_specs(self):
+        """Return class-specific non-CPU blocking distributions by service."""
+        return {
+            request_class: dict(specifications)
+            for request_class, specifications in (
+                self.__request_class_service_blocking_time_specs.items()
+            )
+        }
+
+    def get_strict_analytical_incompatibilities(self):
+        """Return declared semantics not certified by the analytical model."""
+        if any(self.__request_class_service_blocking_time_specs.values()):
+            return (
+                "per-visit non-CPU blocking time occupies finite service "
+                "concurrency after CPU work completes",
+            )
+        return ()
 
     def get_request_class_fixed_latency_overheads(self):
         """Return the mean non-queueing latency for each request class."""
@@ -1512,6 +1575,9 @@ class System:
         ``offered_load < replicas * p``.
         """
         request_class_rates = self.__calculate_request_class_arrival_rates()
+        concurrency_offered_loads = self.__concurrency_offered_loads(
+            request_class_rates
+        )
         minimum_replicas = [0 for _ in range(len(self.get_services()))]
 
         for service in self.get_services().values():
@@ -1527,11 +1593,74 @@ class System:
             processing_slots = self.__service_processing_slots_per_replica[
                 service.get_name()
             ]
-            minimum_replicas[service_id] = (
-                math.floor(offered_load / processing_slots) + 1
+            processing_minimum = math.floor(offered_load / processing_slots) + 1
+            concurrency_limit = self.__service_concurrency_limits_per_replica[
+                service.get_name()
+            ]
+            concurrency_minimum = (
+                1
+                if concurrency_limit is None
+                else math.floor(
+                    concurrency_offered_loads[service_id] / concurrency_limit
+                )
+                + 1
+            )
+            minimum_replicas[service_id] = max(
+                processing_minimum,
+                concurrency_minimum,
             )
 
         return minimum_replicas
+
+    def __concurrency_offered_loads(self, request_class_rates):
+        """Return a necessary lower bound on admitted-concurrency occupancy.
+
+        A visit occupies concurrency for at least its own processing and
+        non-CPU blocking phases. Synchronous downstream waiting can extend the
+        holding time further, so this deliberately remains a lower bound.
+        """
+        offered = [0.0 for _ in range(len(self.get_services()))]
+        for request_class, arrival_rates in request_class_rates.items():
+            blocking_specs = self.__request_class_service_blocking_time_specs.get(
+                request_class,
+                {},
+            )
+            service_specs = self.__request_class_service_time_specs[request_class]
+            for service in self.get_services().values():
+                rate = float(arrival_rates[service.get_id()])
+                if rate <= 0.0:
+                    continue
+                blocking = blocking_specs.get(service.get_name())
+                holding_time = service_specs[service.get_name()].mean + (
+                    blocking.mean if blocking is not None else 0.0
+                )
+                offered[service.get_id()] += rate * holding_time
+        return offered
+
+    def __concurrency_utilization_lower_bounds(self, request_class_rates):
+        offered = self.__concurrency_offered_loads(request_class_rates)
+        utilizations = [0.0 for _ in range(len(self.get_services()))]
+        for service in self.get_services().values():
+            service_id = service.get_id()
+            limit = self.__service_concurrency_limits_per_replica[
+                service.get_name()
+            ]
+            if limit is None:
+                continue
+            capacity = service.get_replicas() * limit
+            utilizations[service_id] = offered[service_id] / capacity
+        return utilizations
+
+    def get_concurrency_utilization_lower_bounds(self):
+        """Return necessary per-service finite-concurrency utilizations.
+
+        Values include processing and declared non-CPU blocking, but exclude
+        queueing and synchronous child-call waiting. Therefore a value at or
+        above one proves instability; a smaller value does not prove it.
+        """
+        return self.__concurrency_utilization_lower_bounds(
+            self.__calculate_request_class_arrival_rates()
+        )
 
     def get_request_class_effective_arrival_rates(self):
         """Return analytical arrival rates by class and service-ID order."""
@@ -1681,6 +1810,12 @@ class System:
                 queueing_latency += visits * (
                     specification.mean + queue_waits[service_id]
                 )
+                blocking = self.__request_class_service_blocking_time_specs.get(
+                    request_class,
+                    {},
+                ).get(service.get_name())
+                if blocking is not None:
+                    queueing_latency += visits * blocking.mean
             results[request_class] = (
                 queueing_latency
                 + self.__mean_request_class_network_latency(

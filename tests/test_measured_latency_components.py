@@ -243,6 +243,9 @@ def test_portable_workload_preserves_measured_components_and_network_model():
     workload["communication_latency"] = copy.deepcopy(
         _call_workload()["traffic_model"]["communication_latency"]
     )
+    workload["service_blocking_times"] = {
+        "api": {"distribution": "deterministic", "mean": 0.006}
+    }
     inputs = parse_portable_sizing_inputs(
         deployment,
         workload,
@@ -260,3 +263,6 @@ def test_portable_workload_preserves_measured_components_and_network_model():
     assert variant.workload["traffic_model"]["communication_latency"] == (
         workload["communication_latency"]
     )
+    assert variant.workload["traffic_model"]["service_times"]["api"][
+        "non_cpu_blocking_time"
+    ] == {"distribution": "deterministic", "mean": 0.006}

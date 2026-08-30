@@ -4,6 +4,7 @@ from characterization import (
     client_to_entry_mean_component,
     communication_latency_from_round_trip_probes,
     decompose_aligned_latency_means,
+    estimate_low_load_service_blocking_time,
 )
 
 
@@ -107,4 +108,35 @@ def test_network_probe_model_rejects_insufficient_or_invalid_evidence():
             same_node_round_trip_seconds=(0.002, 0.003),
             cross_node_round_trip_seconds=(0.003, 0.004),
             unplaced_cross_node_probability=1.1,
+        )
+
+
+def test_low_load_service_residual_becomes_explicit_blocking_time():
+    result = estimate_low_load_service_blocking_time(
+        observed_response_mean_seconds=0.080,
+        cpu_execution_mean_seconds=0.020,
+        downstream_response_mean_seconds=0.040,
+        communication_round_trip_mean_seconds=0.004,
+        maximum_observed_cpu_utilization=0.10,
+    )
+
+    assert result == {
+        "distribution": "deterministic",
+        "mean": pytest.approx(0.016),
+    }
+
+
+def test_service_blocking_estimate_rejects_load_and_boundary_mismatch():
+    with pytest.raises(ValueError, match="not low-load enough"):
+        estimate_low_load_service_blocking_time(
+            observed_response_mean_seconds=0.080,
+            cpu_execution_mean_seconds=0.020,
+            maximum_observed_cpu_utilization=0.40,
+        )
+    with pytest.raises(ValueError, match="boundaries are incompatible"):
+        estimate_low_load_service_blocking_time(
+            observed_response_mean_seconds=0.050,
+            cpu_execution_mean_seconds=0.020,
+            downstream_response_mean_seconds=0.040,
+            maximum_observed_cpu_utilization=0.10,
         )

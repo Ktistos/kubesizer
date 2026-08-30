@@ -10,6 +10,14 @@ request_classes:
     end_to_end_latency_slos:
       mean_seconds: 0.25
 
+# Optional, inferred only from a low-load aligned observation after subtracting
+# CPU execution, modeled downstream response, and communication round trips.
+# It releases CPU but retains one configured service-concurrency slot.
+# service_blocking_times:
+#   api:
+#     distribution: deterministic
+#     mean: 0.006
+
 # Optional forecast envelope. Kubesizer sizes and certifies the largest
 # multiplier; retain 1.0 to include the measured workload as a reference.
 # load_forecast:

@@ -787,6 +787,17 @@ def optimize_with_analytical_model(
             "Request-class end-to-end deadlines require simulation; strict "
             "analytical evaluation does not model terminal timeouts."
         )
+    analytical_incompatibilities = getattr(
+        system,
+        "get_strict_analytical_incompatibilities",
+        lambda: (),
+    )()
+    if analytical_incompatibilities:
+        raise ValueError(
+            "Strict analytical evaluation cannot certify this workload: "
+            + "; ".join(analytical_incompatibilities)
+            + ". Use simulation replica evaluation."
+        )
     if declared_kind == "percentile":
         raise ValueError(
             "This workload selects percentile latency SLOs, which require "

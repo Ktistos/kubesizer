@@ -727,6 +727,11 @@ def experiment_fingerprints(system):
         "get_request_class_latency_component_distribution_specs",
         lambda: {},
     )()
+    service_blocking_specs = getattr(
+        system,
+        "get_request_class_service_blocking_time_distribution_specs",
+        lambda: {},
+    )()
     end_to_end_timeouts = getattr(
         system,
         "get_request_class_end_to_end_timeouts",
@@ -852,6 +857,21 @@ def experiment_fingerprints(system):
             {
                 "request_class": request_class,
                 "seconds": float(end_to_end_timeouts.get(request_class, 0.0)),
+            }
+            for request_class in request_classes
+        ],
+        "request_class_service_blocking_times": [
+            {
+                "request_class": request_class,
+                "services": [
+                    {
+                        "service": service_name,
+                        "specification": _distribution_fingerprint(specification),
+                    }
+                    for service_name, specification in sorted(
+                        service_blocking_specs.get(request_class, {}).items()
+                    )
+                ],
             }
             for request_class in request_classes
         ],

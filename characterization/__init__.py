@@ -7,6 +7,7 @@ from .latency import (
     client_to_entry_mean_component,
     communication_latency_from_round_trip_probes,
     decompose_aligned_latency_means,
+    estimate_low_load_service_blocking_time,
 )
 from .models import (
     AlignedInputWindow,
@@ -113,6 +114,7 @@ __all__ = [
     "client_to_entry_mean_component",
     "communication_latency_from_round_trip_probes",
     "decompose_aligned_latency_means",
+    "estimate_low_load_service_blocking_time",
     "evaluate_closed_loop_recommendation",
     "load_and_prepare_initial_sizing",
     "load_observed_experiment_replication",

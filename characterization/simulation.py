@@ -252,6 +252,7 @@ def build_simulation_workload_variants(
             f"every request class; missing {missing_rates}."
         )
     total_measured_rate = sum(measured_class_rates.values())
+    service_blocking_times = dict(inputs.workload.service_blocking_times)
     joint_uncertainty, joint_service_demand_means = _joint_input_uncertainty(
         characterization,
         block_length=input_uncertainty_block_length,
@@ -369,6 +370,17 @@ def build_simulation_workload_variants(
                         )
                     }
                     if service.concurrency_limit_per_replica is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "non_cpu_blocking_time": (
+                            duration_distribution_to_workload_mapping(
+                                service_blocking_times[service.name]
+                            )
+                        )
+                    }
+                    if service.name in service_blocking_times
                     else {}
                 ),
             }

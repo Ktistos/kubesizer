@@ -88,6 +88,27 @@ def measurement_methodology_contract():
                 "nodes"
             ),
         },
+        "optional_service_non_cpu_blocking_time": {
+            "purpose": (
+                "represent I/O, lock, or external wait that releases CPU while "
+                "retaining an admitted worker/concurrency slot"
+            ),
+            "source": (
+                "low-load aligned Istio service response mean minus CPU "
+                "execution mean, modeled downstream response, and measured "
+                "communication round trips"
+            ),
+            "low_load_gate": "maximum observed CPU utilization at most 0.20",
+            "output": "service_blocking_times.<service>",
+            "uncertainty": (
+                "the counter-derived result is an inferred mean residual; do "
+                "not claim an empirical tail distribution without paired "
+                "per-request observations"
+            ),
+            "double_counting_rule": (
+                "exclude downstream and communication latency already modeled"
+            ),
+        },
         "optional_errors": {
             "metric": "istio_requests_total",
             "groups": ["4xx", "5xx"],

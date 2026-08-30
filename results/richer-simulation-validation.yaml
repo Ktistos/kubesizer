@@ -1,0 +1,2171 @@
+method: retained-low-load-characterization-to-heldout-native-simulation
+analysis_source:
+  path: /tmp/kubesizer-analysis-0DDNoY.yaml
+  origin: ssh://experiment@46.224.93.195/home/experiment/experiments/deployment-family-sizing-validation-20260827/analysis.yaml
+  sha256: 45455eaef8cfd8f293b4a7caeea34b15beb1e1da806340708a91234305c6b2cd
+  plan_fingerprint: b3dbd887f2d4fe4d7a403d19ed69676c47b12a0d16a770c11e8b02d9ca2729c7
+simulation_design:
+  replications: 30
+  warmup_duration_seconds: 60.0
+  measurement_duration_seconds: 120.0
+  common_random_numbers_across_models: true
+  bootstrap_resample_count: 20000
+  latency_statistic: pooled mean with replication-cluster bootstrap
+model_semantics:
+  baseline_fixed_overhead: existing synthetic workload with privileged processing-occupancy
+    distribution and fitted fixed request overhead
+  telemetry_cpu_blocking: measured CPU demand as processor-sharing work plus deterministic
+    low-load Istio residual as non-CPU blocking; blocking retains the declared admission-concurrency
+    slot
+  telemetry_cpu_blocking_declared_bottleneck: the telemetry CPU-plus-blocking model
+    with the synthetic application's declared narrow processing-pool size used as
+    the blocking concurrency limit
+  telemetry_blocking_fitted_variability: declared-bottleneck telemetry model with
+    leaf blocking lognormal SCV fitted from low-load Istio mean and p50
+  oracle_occupancy_blocking: privileged synthetic processing-occupancy distribution
+    plus only the remaining low-load Istio residual as blocking
+limitations:
+- service blocking tails are not identifiable and are deterministic
+- parallel child maximum is approximated by the maximum child mean
+- predicted intervals include simulation randomness but not characterization uncertainty
+- telemetry cannot identify a hidden serial non-CPU processing semaphore
+- declared-bottleneck results require application/deployment concurrency configuration
+  which counters alone do not reveal
+- fitted blocking variability assumes a lognormal leaf residual and does not subtract
+  independently aggregated percentiles
+- oracle_occupancy_blocking uses synthetic ground truth unavailable on a general deployment
+characterization_sources:
+  fanout:
+    directory: /home/ktistos/work/STELAR_LOAD_TESTS/experiments/deployment-families-20260827-fanout-characterization
+    workload_sha256: a681fa8ba1892e2c939ca273f6ff9712ffca7c89de3451a5c30b9d089d47ab2b
+    measurement_sha256: 9a416f04e91e625d680462710d0eda4feaf5cc2e2255bf4dd5f42905d8130a07
+    request_cohort_sha256: 01bea6d0b7b98d8da6cc44117cc386403f482d8ce929f9f3ef5f36e4ab7de6db
+    config_sha256: b5fdb15b8b403c85ba0b855051d4ca08d1972b16bfba22b5010665139c5ed537
+  repeated:
+    directory: /home/ktistos/work/STELAR_LOAD_TESTS/experiments/deployment-families-20260827-repeated-characterization
+    workload_sha256: ff022f3b6aca8e48c0a1513ffcd7ea54c6ccbcf20eb1434147c9b277ef69ede1
+    measurement_sha256: bf8fee35193903ae4042f3f665d83aeef69cd415e18299ddbadf45e4026da344
+    request_cohort_sha256: e59c78f4be320846959df473491f4b77293e3e17d6e7982312603d42f3daba96
+    config_sha256: 1bcedbfe6b6736a7eb890014f9895c4077156ca5d0c8aef0f123ff69bf4c4a8e
+  shared:
+    directory: /home/ktistos/work/STELAR_LOAD_TESTS/experiments/deployment-families-20260827-shared-characterization-attempt2
+    workload_sha256: d8a4ba2c023447954d62e7add026450ba66f11a19dd94647d8c04d2ae213c4e7
+    measurement_sha256: c830a91992891f30f22e4824f69bdf2bbbcf1ed9752bfefb9dffa992db3b7b13
+    request_cohort_sha256: ddb8f43d69aece2d5e8382cc77e2ea59c02bc52f517560b2989ca1a835739cfc
+    config_sha256: c9413bfe901790deb98b68bbfccd46e50031a23c7341fa2cb2c4be804212801c
+  single:
+    directory: /home/ktistos/work/STELAR_LOAD_TESTS/experiments/deployment-families-20260827-single-characterization
+    workload_sha256: ea7a8ef8cfd63652b040ae3000fe7657a4ee1b0c9dbdcfe31161e8a9a236b114
+    measurement_sha256: 0631adedc4350582f627794eebae23330a25b8777f8b74ea6a41b8485ad5576c
+    request_cohort_sha256: ebc72f8667eb110ac173540ece72f4d182b9d1882f349c1d6d3e501ef389c8cb
+    config_sha256: 1ec61c30e2d527b8bb456f7162ff6fc3010e62a95338da51cb1554172dc2a40a
+characterization_diagnostics:
+  fanout:
+    services:
+      fan-a:
+        observed_istio_response_mean_seconds: 0.017348648648648653
+        measured_cpu_demand_seconds_per_request: 0.0009456161351351339
+        maximum_observed_cpu_utilization: 0.0038875329999999947
+        modeled_downstream_response_mean_seconds: 0.0
+        oracle_processing_response_mean_seconds: 0.01594472495349455
+        telemetry_blocking_mean_seconds: 0.016403032513513518
+        oracle_blocking_mean_seconds: 0.0014039236951541023
+        declared_processing_slots_per_replica: 1
+        declared_admission_concurrency_per_replica: 64
+        fitted_leaf_blocking_distribution:
+          distribution: lognormal
+          mean: 0.016403032513513518
+          scv: 0.8291901756835248
+      fan-b:
+        observed_istio_response_mean_seconds: 0.02896781609195402
+        measured_cpu_demand_seconds_per_request: 0.0018921542327586202
+        maximum_observed_cpu_utilization: 0.007316329699999998
+        modeled_downstream_response_mean_seconds: 0.0
+        oracle_processing_response_mean_seconds: 0.029108876560332873
+        telemetry_blocking_mean_seconds: 0.0270756618591954
+        oracle_blocking_mean_seconds: 0.0
+        declared_processing_slots_per_replica: 1
+        declared_admission_concurrency_per_replica: 64
+        fitted_leaf_blocking_distribution:
+          distribution: lognormal
+          mean: 0.0270756618591954
+          scv: 1.014154129661839
+      fan-front:
+        observed_istio_response_mean_seconds: 0.044910326086956526
+        measured_cpu_demand_seconds_per_request: 0.00230962379032258
+        maximum_observed_cpu_utilization: 0.009546444999999999
+        modeled_downstream_response_mean_seconds: 0.02896781609195402
+        oracle_processing_response_mean_seconds: 0.002
+        telemetry_blocking_mean_seconds: 0.013632886204679923
+        oracle_blocking_mean_seconds: 0.013942509995002503
+        declared_processing_slots_per_replica: 16
+        declared_admission_concurrency_per_replica: 128
+    request_classes:
+      fanout_request:
+        client_mean_seconds: 0.07226862384297174
+        entry_response_mean_seconds: 0.044910326086956526
+        client_to_entry_mean_seconds: 0.027358297756015212
+  repeated:
+    services:
+      identity:
+        observed_istio_response_mean_seconds: 0.010049364791288564
+        measured_cpu_demand_seconds_per_request: 0.0009270424999999999
+        maximum_observed_cpu_utilization: 0.011248115666666666
+        modeled_downstream_response_mean_seconds: 0.0
+        oracle_processing_response_mean_seconds: 0.009315579227696404
+        telemetry_blocking_mean_seconds: 0.009122322291288565
+        oracle_blocking_mean_seconds: 0.0
+        declared_processing_slots_per_replica: 1
+        declared_admission_concurrency_per_replica: 64
+        fitted_leaf_blocking_distribution:
+          distribution: lognormal
+          mean: 0.009122322291288565
+          scv: 1.3325554378033257
+      repeat-front:
+        observed_istio_response_mean_seconds: 0.04582122905027933
+        measured_cpu_demand_seconds_per_request: 0.005111517911290322
+        maximum_observed_cpu_utilization: 0.021127607366666665
+        modeled_downstream_response_mean_seconds: 0.030148094373865692
+        oracle_processing_response_mean_seconds: 0.002
+        telemetry_blocking_mean_seconds: 0.010561616765123315
+        oracle_blocking_mean_seconds: 0.013673134676413637
+        declared_processing_slots_per_replica: 16
+        declared_admission_concurrency_per_replica: 128
+    request_classes:
+      repeated_request:
+        client_mean_seconds: 0.07760001580242204
+        entry_response_mean_seconds: 0.04582122905027933
+        client_to_entry_mean_seconds: 0.03177878675214271
+  shared:
+    services:
+      read-front:
+        observed_istio_response_mean_seconds: 0.036859060402684565
+        measured_cpu_demand_seconds_per_request: 0.002807731540540545
+        maximum_observed_cpu_utilization: 0.009234317066666681
+        modeled_downstream_response_mean_seconds: 0.030499145299145294
+        oracle_processing_response_mean_seconds: 0.002
+        telemetry_blocking_mean_seconds: 0.0035521835629987245
+        oracle_blocking_mean_seconds: 0.004359915103539273
+        declared_processing_slots_per_replica: 16
+        declared_admission_concurrency_per_replica: 128
+      shared-db:
+        observed_istio_response_mean_seconds: 0.030499145299145294
+        measured_cpu_demand_seconds_per_request: 0.0017074164279661
+        maximum_observed_cpu_utilization: 0.00895445059999999
+        modeled_downstream_response_mean_seconds: 0.0
+        oracle_processing_response_mean_seconds: 0.030999275012083133
+        telemetry_blocking_mean_seconds: 0.028791728871179194
+        oracle_blocking_mean_seconds: 0.0
+        declared_processing_slots_per_replica: 1
+        declared_admission_concurrency_per_replica: 64
+        fitted_leaf_blocking_distribution:
+          distribution: lognormal
+          mean: 0.028791728871179194
+          scv: 1.7721435873762261
+      write-front:
+        observed_istio_response_mean_seconds: 0.0376358024691358
+        measured_cpu_demand_seconds_per_request: 0.002772688244318182
+        maximum_observed_cpu_utilization: 0.0054221459000000005
+        modeled_downstream_response_mean_seconds: 0.030499145299145294
+        oracle_processing_response_mean_seconds: 0.004
+        telemetry_blocking_mean_seconds: 0.004363968925672326
+        oracle_blocking_mean_seconds: 0.003136657169990509
+        declared_processing_slots_per_replica: 16
+        declared_admission_concurrency_per_replica: 128
+    request_classes:
+      read_request:
+        client_mean_seconds: 0.1141566579992121
+        entry_response_mean_seconds: 0.036859060402684565
+        client_to_entry_mean_seconds: 0.07729759759652753
+      write_request:
+        client_mean_seconds: 0.11718430284593927
+        entry_response_mean_seconds: 0.0376358024691358
+        client_to_entry_mean_seconds: 0.07954850037680347
+  single:
+    services:
+      single-api:
+        observed_istio_response_mean_seconds: 0.03631277056277056
+        measured_cpu_demand_seconds_per_request: 0.0018626703650442482
+        maximum_observed_cpu_utilization: 0.009354744500000001
+        modeled_downstream_response_mean_seconds: 0.0
+        oracle_processing_response_mean_seconds: 0.030479942693409742
+        telemetry_blocking_mean_seconds: 0.03445010019772631
+        oracle_blocking_mean_seconds: 0.005832827869360818
+        declared_processing_slots_per_replica: 1
+        declared_admission_concurrency_per_replica: 64
+        fitted_leaf_blocking_distribution:
+          distribution: lognormal
+          mean: 0.03445010019772631
+          scv: 2.7771354978453138
+    request_classes:
+      single_request:
+        client_mean_seconds: 0.06842295017117768
+        entry_response_mean_seconds: 0.03631277056277056
+        client_to_entry_mean_seconds: 0.03211017960840712
+results:
+- family: single
+  load_point: target_validation
+  configuration:
+  - 3
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: null
+  empirical_minimum_certified: false
+  observed_intervals:
+    single_request:
+      estimate: 0.10647601491463711
+      lower_bound: 0.1052432971069774
+      upper_bound: 0.10768744676390088
+  simulation_seeds:
+  - 1011212149
+  - 1011212150
+  - 1011212151
+  - 1011212152
+  - 1011212153
+  - 1011212154
+  - 1011212155
+  - 1011212156
+  - 1011212157
+  - 1011212158
+  - 1011212159
+  - 1011212160
+  - 1011212161
+  - 1011212162
+  - 1011212163
+  - 1011212164
+  - 1011212165
+  - 1011212166
+  - 1011212167
+  - 1011212168
+  - 1011212169
+  - 1011212170
+  - 1011212171
+  - 1011212172
+  - 1011212173
+  - 1011212174
+  - 1011212175
+  - 1011212176
+  - 1011212177
+  - 1011212178
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        single_request:
+          estimate: 0.07895793163411248
+          lower_bound: 0.07782835132015122
+          upper_bound: 0.08023826726024763
+          eligible_request_count: 179066
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        single_request:
+          estimate: 0.06842306558803597
+          lower_bound: 0.06842300840212912
+          upper_bound: 0.06842312840997522
+          eligible_request_count: 179835
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        single_request:
+          estimate: 0.07439692572176822
+          lower_bound: 0.07424875691063716
+          upper_bound: 0.07455145384559902
+          eligible_request_count: 179783
+    telemetry_blocking_fitted_variability:
+      classification: INFEASIBLE
+      intervals:
+        single_request:
+          estimate: 0.14215822524511285
+          lower_bound: 0.13472801491027547
+          upper_bound: 0.15299026668186108
+          eligible_request_count: 179771
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        single_request:
+          estimate: 0.07870689399370287
+          lower_bound: 0.07744740342570898
+          upper_bound: 0.08050344481194016
+          eligible_request_count: 178610
+- family: fanout
+  load_point: low
+  configuration:
+  - 1
+  - 1
+  - 1
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: &id001
+  - 1
+  - 1
+  - 2
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.2472379146658813
+      lower_bound: 0.21238062335991373
+      upper_bound: 0.3025585201206675
+  simulation_seeds:
+  - 1007792897
+  - 1007792898
+  - 1007792899
+  - 1007792900
+  - 1007792901
+  - 1007792902
+  - 1007792903
+  - 1007792904
+  - 1007792905
+  - 1007792906
+  - 1007792907
+  - 1007792908
+  - 1007792909
+  - 1007792910
+  - 1007792911
+  - 1007792912
+  - 1007792913
+  - 1007792914
+  - 1007792915
+  - 1007792916
+  - 1007792917
+  - 1007792918
+  - 1007792919
+  - 1007792920
+  - 1007792921
+  - 1007792922
+  - 1007792923
+  - 1007792924
+  - 1007792925
+  - 1007792926
+  models:
+    baseline_fixed_overhead:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.21396663702520408
+          lower_bound: 0.20131133489979394
+          upper_bound: 0.22794592702017244
+          eligible_request_count: 115029
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07256470967072505
+          lower_bound: 0.07255801596014624
+          upper_bound: 0.07257178918446616
+          eligible_request_count: 115229
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.2597507739617285
+          lower_bound: 0.23595332885292064
+          upper_bound: 0.2877490446269887
+          eligible_request_count: 115229
+    telemetry_blocking_fitted_variability:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.4275686388253161
+          lower_bound: 0.3769432670338007
+          upper_bound: 0.48308088522719844
+          eligible_request_count: 115418
+    oracle_occupancy_blocking:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.2168397964187907
+          lower_bound: 0.20473425760052727
+          upper_bound: 0.23038573332983095
+          eligible_request_count: 115222
+- family: fanout
+  load_point: low
+  configuration:
+  - 1
+  - 1
+  - 2
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id001
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.11500907611906269
+      lower_bound: 0.11289674417834072
+      upper_bound: 0.11699210860828126
+  simulation_seeds:
+  - 744487489
+  - 744487490
+  - 744487491
+  - 744487492
+  - 744487493
+  - 744487494
+  - 744487495
+  - 744487496
+  - 744487497
+  - 744487498
+  - 744487499
+  - 744487500
+  - 744487501
+  - 744487502
+  - 744487503
+  - 744487504
+  - 744487505
+  - 744487506
+  - 744487507
+  - 744487508
+  - 744487509
+  - 744487510
+  - 744487511
+  - 744487512
+  - 744487513
+  - 744487514
+  - 744487515
+  - 744487516
+  - 744487517
+  - 744487518
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09336029182494887
+          lower_bound: 0.09208810713249725
+          upper_bound: 0.0946719113946375
+          eligible_request_count: 115129
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07245636966320083
+          lower_bound: 0.07245105024816939
+          upper_bound: 0.07246183790876257
+          eligible_request_count: 115269
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07843930015854862
+          lower_bound: 0.07827681805532018
+          upper_bound: 0.07860720689266784
+          eligible_request_count: 115269
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09999791480869394
+          lower_bound: 0.09900441130936467
+          upper_bound: 0.10098422933964711
+          eligible_request_count: 115263
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09981148511392111
+          lower_bound: 0.09799296581804573
+          upper_bound: 0.10209544817171949
+          eligible_request_count: 115142
+- family: fanout
+  load_point: low
+  configuration:
+  - 1
+  - 1
+  - 3
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id001
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.11031055048624279
+      lower_bound: 0.10692214473158251
+      upper_bound: 0.11419024574734794
+  simulation_seeds:
+  - 206659662
+  - 206659663
+  - 206659664
+  - 206659665
+  - 206659666
+  - 206659667
+  - 206659668
+  - 206659669
+  - 206659670
+  - 206659671
+  - 206659672
+  - 206659673
+  - 206659674
+  - 206659675
+  - 206659676
+  - 206659677
+  - 206659678
+  - 206659679
+  - 206659680
+  - 206659681
+  - 206659682
+  - 206659683
+  - 206659684
+  - 206659685
+  - 206659686
+  - 206659687
+  - 206659688
+  - 206659689
+  - 206659690
+  - 206659691
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.0846646348075091
+          lower_bound: 0.08398820137277926
+          upper_bound: 0.08538364198878327
+          eligible_request_count: 115065
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07245245413238566
+          lower_bound: 0.07244791947053529
+          upper_bound: 0.07245718779388205
+          eligible_request_count: 115163
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07791889307806926
+          lower_bound: 0.07770674164926804
+          upper_bound: 0.07813735169853277
+          eligible_request_count: 115163
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09363523182932235
+          lower_bound: 0.09295854238701384
+          upper_bound: 0.09435773637103377
+          eligible_request_count: 115427
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09087319981030724
+          lower_bound: 0.08994407177038982
+          upper_bound: 0.091831287759325
+          eligible_request_count: 115649
+- family: fanout
+  load_point: target_validation
+  configuration:
+  - 1
+  - 1
+  - 2
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: null
+  empirical_minimum_certified: false
+  observed_intervals:
+    fanout_request:
+      estimate: 0.15147741379076632
+      lower_bound: 0.14948799290628167
+      upper_bound: 0.15346200901058776
+  simulation_seeds:
+  - 422417588
+  - 422417589
+  - 422417590
+  - 422417591
+  - 422417592
+  - 422417593
+  - 422417594
+  - 422417595
+  - 422417596
+  - 422417597
+  - 422417598
+  - 422417599
+  - 422417600
+  - 422417601
+  - 422417602
+  - 422417603
+  - 422417604
+  - 422417605
+  - 422417606
+  - 422417607
+  - 422417608
+  - 422417609
+  - 422417610
+  - 422417611
+  - 422417612
+  - 422417613
+  - 422417614
+  - 422417615
+  - 422417616
+  - 422417617
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.12713527693625384
+          lower_bound: 0.1248508323030966
+          upper_bound: 0.1298297351898238
+          eligible_request_count: 172945
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07256170642095978
+          lower_bound: 0.07255628976598573
+          upper_bound: 0.07256720684349274
+          eligible_request_count: 173216
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.1079534066151798
+          lower_bound: 0.10600952585813701
+          upper_bound: 0.11009022573558845
+          eligible_request_count: 173216
+    telemetry_blocking_fitted_variability:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.16142242283898026
+          lower_bound: 0.1562453147534459
+          upper_bound: 0.16696247573898546
+          eligible_request_count: 172595
+    oracle_occupancy_blocking:
+      classification: INCONCLUSIVE
+      intervals:
+        fanout_request:
+          estimate: 0.1376624076996439
+          lower_bound: 0.13454720881294202
+          upper_bound: 0.1410344091059978
+          eligible_request_count: 172429
+- family: fanout
+  load_point: high
+  configuration:
+  - 1
+  - 1
+  - 2
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: &id002
+  - 1
+  - 2
+  - 3
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.2601638140789081
+      lower_bound: 0.22494066686248973
+      upper_bound: 0.307390368820013
+  simulation_seeds:
+  - 513027455
+  - 513027456
+  - 513027457
+  - 513027458
+  - 513027459
+  - 513027460
+  - 513027461
+  - 513027462
+  - 513027463
+  - 513027464
+  - 513027465
+  - 513027466
+  - 513027467
+  - 513027468
+  - 513027469
+  - 513027470
+  - 513027471
+  - 513027472
+  - 513027473
+  - 513027474
+  - 513027475
+  - 513027476
+  - 513027477
+  - 513027478
+  - 513027479
+  - 513027480
+  - 513027481
+  - 513027482
+  - 513027483
+  - 513027484
+  models:
+    baseline_fixed_overhead:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.23837921766996834
+          lower_bound: 0.22775120671246446
+          upper_bound: 0.2491825548365973
+          eligible_request_count: 216272
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07264197946313249
+          lower_bound: 0.07263702570592817
+          upper_bound: 0.07264706764191073
+          eligible_request_count: 215731
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: ANALYTICALLY_UNSTABLE
+      intervals: {}
+    telemetry_blocking_fitted_variability:
+      classification: ANALYTICALLY_UNSTABLE
+      intervals: {}
+    oracle_occupancy_blocking:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.23046245784937858
+          lower_bound: 0.22165304256625665
+          upper_bound: 0.2389630573947423
+          eligible_request_count: 215203
+- family: fanout
+  load_point: high
+  configuration:
+  - 1
+  - 1
+  - 3
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: *id002
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.2667316356050904
+      lower_bound: 0.23694205901575846
+      upper_bound: 0.30717346845427135
+  simulation_seeds:
+  - 985354696
+  - 985354697
+  - 985354698
+  - 985354699
+  - 985354700
+  - 985354701
+  - 985354702
+  - 985354703
+  - 985354704
+  - 985354705
+  - 985354706
+  - 985354707
+  - 985354708
+  - 985354709
+  - 985354710
+  - 985354711
+  - 985354712
+  - 985354713
+  - 985354714
+  - 985354715
+  - 985354716
+  - 985354717
+  - 985354718
+  - 985354719
+  - 985354720
+  - 985354721
+  - 985354722
+  - 985354723
+  - 985354724
+  - 985354725
+  models:
+    baseline_fixed_overhead:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.20304883081214214
+          lower_bound: 0.19268599803555614
+          upper_bound: 0.2150033826137348
+          eligible_request_count: 215745
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07263969620292196
+          lower_bound: 0.07263413220899312
+          upper_bound: 0.07264544233679905
+          eligible_request_count: 215587
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: ANALYTICALLY_UNSTABLE
+      intervals: {}
+    telemetry_blocking_fitted_variability:
+      classification: ANALYTICALLY_UNSTABLE
+      intervals: {}
+    oracle_occupancy_blocking:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.20594727920270348
+          lower_bound: 0.19570160893544933
+          upper_bound: 0.21728526891137326
+          eligible_request_count: 216165
+- family: fanout
+  load_point: high
+  configuration:
+  - 1
+  - 2
+  - 2
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: *id002
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.15103205636043138
+      lower_bound: 0.14698194859627228
+      upper_bound: 0.15403073882585042
+  simulation_seeds:
+  - 515159193
+  - 515159194
+  - 515159195
+  - 515159196
+  - 515159197
+  - 515159198
+  - 515159199
+  - 515159200
+  - 515159201
+  - 515159202
+  - 515159203
+  - 515159204
+  - 515159205
+  - 515159206
+  - 515159207
+  - 515159208
+  - 515159209
+  - 515159210
+  - 515159211
+  - 515159212
+  - 515159213
+  - 515159214
+  - 515159215
+  - 515159216
+  - 515159217
+  - 515159218
+  - 515159219
+  - 515159220
+  - 515159221
+  - 515159222
+  models:
+    baseline_fixed_overhead:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.15618224575403727
+          lower_bound: 0.15018074409729926
+          upper_bound: 0.16248619089664937
+          eligible_request_count: 215730
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07264850694467193
+          lower_bound: 0.07264369277891217
+          upper_bound: 0.07265307327255455
+          eligible_request_count: 216631
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.11806252221709737
+          lower_bound: 0.11609126978234025
+          upper_bound: 0.1201954188205409
+          eligible_request_count: 216631
+    telemetry_blocking_fitted_variability:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.2142236885410513
+          lower_bound: 0.20308432052080924
+          upper_bound: 0.2257003691175655
+          eligible_request_count: 215596
+    oracle_occupancy_blocking:
+      classification: INFEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.15853244235763564
+          lower_bound: 0.1530303929451859
+          upper_bound: 0.16428276882692375
+          eligible_request_count: 215789
+- family: fanout
+  load_point: high
+  configuration:
+  - 1
+  - 2
+  - 3
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id002
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.11296367368242337
+      lower_bound: 0.11227073077081821
+      upper_bound: 0.11378488775793581
+  simulation_seeds:
+  - 673473302
+  - 673473303
+  - 673473304
+  - 673473305
+  - 673473306
+  - 673473307
+  - 673473308
+  - 673473309
+  - 673473310
+  - 673473311
+  - 673473312
+  - 673473313
+  - 673473314
+  - 673473315
+  - 673473316
+  - 673473317
+  - 673473318
+  - 673473319
+  - 673473320
+  - 673473321
+  - 673473322
+  - 673473323
+  - 673473324
+  - 673473325
+  - 673473326
+  - 673473327
+  - 673473328
+  - 673473329
+  - 673473330
+  - 673473331
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09728386564481185
+          lower_bound: 0.09503482938240664
+          upper_bound: 0.10035785204889773
+          eligible_request_count: 215506
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07264129190681011
+          lower_bound: 0.07263513889231521
+          upper_bound: 0.0726474128870993
+          eligible_request_count: 215546
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.0766878757620979
+          lower_bound: 0.07658584881677005
+          upper_bound: 0.07679527482165437
+          eligible_request_count: 215546
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.10045137235584721
+          lower_bound: 0.09973577920444673
+          upper_bound: 0.10117111768166759
+          eligible_request_count: 216038
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.10226635038888135
+          lower_bound: 0.1005351913635509
+          upper_bound: 0.10441587781990608
+          eligible_request_count: 215858
+- family: fanout
+  load_point: high
+  configuration:
+  - 1
+  - 2
+  - 4
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id002
+  empirical_minimum_certified: true
+  observed_intervals:
+    fanout_request:
+      estimate: 0.1095632634057568
+      lower_bound: 0.10815456140199149
+      upper_bound: 0.11139394373054279
+  simulation_seeds:
+  - 949677917
+  - 949677918
+  - 949677919
+  - 949677920
+  - 949677921
+  - 949677922
+  - 949677923
+  - 949677924
+  - 949677925
+  - 949677926
+  - 949677927
+  - 949677928
+  - 949677929
+  - 949677930
+  - 949677931
+  - 949677932
+  - 949677933
+  - 949677934
+  - 949677935
+  - 949677936
+  - 949677937
+  - 949677938
+  - 949677939
+  - 949677940
+  - 949677941
+  - 949677942
+  - 949677943
+  - 949677944
+  - 949677945
+  - 949677946
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.08441655086199092
+          lower_bound: 0.08381528063982643
+          upper_bound: 0.08506401144806747
+          eligible_request_count: 215567
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.07264242149885572
+          lower_bound: 0.07263691910065441
+          upper_bound: 0.07264790463605562
+          eligible_request_count: 216158
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.0737246558525926
+          lower_bound: 0.07368227267241466
+          upper_bound: 0.07376735668418985
+          eligible_request_count: 216158
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09059578859186303
+          lower_bound: 0.0901456031868186
+          upper_bound: 0.09106851894703238
+          eligible_request_count: 216394
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        fanout_request:
+          estimate: 0.09072859403988041
+          lower_bound: 0.08995936067104797
+          upper_bound: 0.09155786045224781
+          eligible_request_count: 215887
+- family: repeated
+  load_point: target_validation
+  configuration:
+  - 1
+  - 2
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration:
+  - 1
+  - 2
+  empirical_minimum_certified: false
+  observed_intervals:
+    repeated_request:
+      estimate: 0.11002831740701226
+      lower_bound: 0.10945566572094759
+      upper_bound: 0.11074336343146203
+  simulation_seeds:
+  - 609693297
+  - 609693298
+  - 609693299
+  - 609693300
+  - 609693301
+  - 609693302
+  - 609693303
+  - 609693304
+  - 609693305
+  - 609693306
+  - 609693307
+  - 609693308
+  - 609693309
+  - 609693310
+  - 609693311
+  - 609693312
+  - 609693313
+  - 609693314
+  - 609693315
+  - 609693316
+  - 609693317
+  - 609693318
+  - 609693319
+  - 609693320
+  - 609693321
+  - 609693322
+  - 609693323
+  - 609693324
+  - 609693325
+  - 609693326
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.09227226771046967
+          lower_bound: 0.09170612582497388
+          upper_bound: 0.09284694871833993
+          eligible_request_count: 126072
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.07871827372036616
+          lower_bound: 0.07870103308829293
+          upper_bound: 0.07873601458628841
+          eligible_request_count: 125630
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.08774844752162919
+          lower_bound: 0.08752487145875057
+          upper_bound: 0.0879846726394556
+          eligible_request_count: 125630
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.10250257974682779
+          lower_bound: 0.10190931363935937
+          upper_bound: 0.10313983136433319
+          eligible_request_count: 126404
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.08865059624344428
+          lower_bound: 0.08812149320250497
+          upper_bound: 0.08916942383755692
+          eligible_request_count: 126294
+- family: repeated
+  load_point: bursty_search
+  configuration:
+  - 1
+  - 1
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: &id003
+  - 1
+  - 2
+  empirical_minimum_certified: true
+  observed_intervals:
+    repeated_request:
+      estimate: 0.5690948620743603
+      lower_bound: 0.5017715216218602
+      upper_bound: 0.6226906730990462
+  simulation_seeds:
+  - 97573612
+  - 97573613
+  - 97573614
+  - 97573615
+  - 97573616
+  - 97573617
+  - 97573618
+  - 97573619
+  - 97573620
+  - 97573621
+  - 97573622
+  - 97573623
+  - 97573624
+  - 97573625
+  - 97573626
+  - 97573627
+  - 97573628
+  - 97573629
+  - 97573630
+  - 97573631
+  - 97573632
+  - 97573633
+  - 97573634
+  - 97573635
+  - 97573636
+  - 97573637
+  - 97573638
+  - 97573639
+  - 97573640
+  - 97573641
+  models:
+    baseline_fixed_overhead:
+      classification: INFEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.44998418302757465
+          lower_bound: 0.4124692033150163
+          upper_bound: 0.4970137834657537
+          eligible_request_count: 125543
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.07957627220818828
+          lower_bound: 0.0795475456190786
+          upper_bound: 0.07960583755471375
+          eligible_request_count: 126398
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: ANALYTICALLY_UNSTABLE
+      intervals: {}
+    telemetry_blocking_fitted_variability:
+      classification: ANALYTICALLY_UNSTABLE
+      intervals: {}
+    oracle_occupancy_blocking:
+      classification: INFEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.41971687457706003
+          lower_bound: 0.3918629524870328
+          upper_bound: 0.4505609889481087
+          eligible_request_count: 124625
+- family: repeated
+  load_point: bursty_search
+  configuration:
+  - 1
+  - 2
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id003
+  empirical_minimum_certified: true
+  observed_intervals:
+    repeated_request:
+      estimate: 0.11952069835558003
+      lower_bound: 0.11809258421514619
+      upper_bound: 0.12157954427725375
+  simulation_seeds:
+  - 432478929
+  - 432478930
+  - 432478931
+  - 432478932
+  - 432478933
+  - 432478934
+  - 432478935
+  - 432478936
+  - 432478937
+  - 432478938
+  - 432478939
+  - 432478940
+  - 432478941
+  - 432478942
+  - 432478943
+  - 432478944
+  - 432478945
+  - 432478946
+  - 432478947
+  - 432478948
+  - 432478949
+  - 432478950
+  - 432478951
+  - 432478952
+  - 432478953
+  - 432478954
+  - 432478955
+  - 432478956
+  - 432478957
+  - 432478958
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.1053149173992333
+          lower_bound: 0.10428540467232
+          upper_bound: 0.10640405863639403
+          eligible_request_count: 127628
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.07920283162668812
+          lower_bound: 0.0791743545019651
+          upper_bound: 0.07923536237182568
+          eligible_request_count: 127362
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.10486823679698648
+          lower_bound: 0.10413559478469987
+          upper_bound: 0.10570368858489876
+          eligible_request_count: 127362
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.12568783401748382
+          lower_bound: 0.12429916870168095
+          upper_bound: 0.12710124057028724
+          eligible_request_count: 127092
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.10193916067145029
+          lower_bound: 0.10076290280180317
+          upper_bound: 0.10319419224441458
+          eligible_request_count: 126870
+- family: repeated
+  load_point: bursty_search
+  configuration:
+  - 1
+  - 3
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id003
+  empirical_minimum_certified: true
+  observed_intervals:
+    repeated_request:
+      estimate: 0.10781786749541895
+      lower_bound: 0.10592392937037054
+      upper_bound: 0.11051117224352701
+  simulation_seeds:
+  - 762052198
+  - 762052199
+  - 762052200
+  - 762052201
+  - 762052202
+  - 762052203
+  - 762052204
+  - 762052205
+  - 762052206
+  - 762052207
+  - 762052208
+  - 762052209
+  - 762052210
+  - 762052211
+  - 762052212
+  - 762052213
+  - 762052214
+  - 762052215
+  - 762052216
+  - 762052217
+  - 762052218
+  - 762052219
+  - 762052220
+  - 762052221
+  - 762052222
+  - 762052223
+  - 762052224
+  - 762052225
+  - 762052226
+  - 762052227
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.08795943250174931
+          lower_bound: 0.08735677315336476
+          upper_bound: 0.088561641660461
+          eligible_request_count: 126068
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.07919710220790159
+          lower_bound: 0.0791682946928395
+          upper_bound: 0.07922717060497839
+          eligible_request_count: 123296
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.08314162934019328
+          lower_bound: 0.08300107495290647
+          upper_bound: 0.08327204111310899
+          eligible_request_count: 123296
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.09476830756984245
+          lower_bound: 0.0941046260440496
+          upper_bound: 0.09548923236221078
+          eligible_request_count: 126292
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        repeated_request:
+          estimate: 0.08503936928877043
+          lower_bound: 0.08417648974695006
+          upper_bound: 0.08607439380942392
+          eligible_request_count: 126845
+- family: shared
+  load_point: low
+  configuration:
+  - 1
+  - 1
+  - 1
+  evidence_gate_passed: true
+  observed_classification: INFEASIBLE
+  empirical_minimum_configuration: &id004
+  - 1
+  - 2
+  - 1
+  empirical_minimum_certified: true
+  observed_intervals:
+    read_request:
+      estimate: 0.18625088728672812
+      lower_bound: 0.17373345366767431
+      upper_bound: 0.21396597232180303
+    write_request:
+      estimate: 0.18485269185116415
+      lower_bound: 0.1726045868849259
+      upper_bound: 0.20589255816962995
+  simulation_seeds:
+  - 757936728
+  - 757936729
+  - 757936730
+  - 757936731
+  - 757936732
+  - 757936733
+  - 757936734
+  - 757936735
+  - 757936736
+  - 757936737
+  - 757936738
+  - 757936739
+  - 757936740
+  - 757936741
+  - 757936742
+  - 757936743
+  - 757936744
+  - 757936745
+  - 757936746
+  - 757936747
+  - 757936748
+  - 757936749
+  - 757936750
+  - 757936751
+  - 757936752
+  - 757936753
+  - 757936754
+  - 757936755
+  - 757936756
+  - 757936757
+  models:
+    baseline_fixed_overhead:
+      classification: INFEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.22030474568100084
+          lower_bound: 0.21351469558012284
+          upper_bound: 0.22738231270604087
+          eligible_request_count: 64469
+        write_request:
+          estimate: 0.22329471080502342
+          lower_bound: 0.2160728988552452
+          upper_bound: 0.2306930510008609
+          eligible_request_count: 43215
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11439819365463341
+          lower_bound: 0.11438523381342507
+          upper_bound: 0.11441076084456239
+          eligible_request_count: 64859
+        write_request:
+          estimate: 0.11737337639174557
+          lower_bound: 0.11736341445249932
+          upper_bound: 0.11738312079905369
+          eligible_request_count: 42776
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: INFEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.27276179063768446
+          lower_bound: 0.2574648008463787
+          upper_bound: 0.29079158763581436
+          eligible_request_count: 64859
+        write_request:
+          estimate: 0.27228976006782013
+          lower_bound: 0.25772552006386285
+          upper_bound: 0.2889976484986151
+          eligible_request_count: 42776
+    telemetry_blocking_fitted_variability:
+      classification: INFEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.5891016872002574
+          lower_bound: 0.47250371693700266
+          upper_bound: 0.7915435731308329
+          eligible_request_count: 64673
+        write_request:
+          estimate: 0.46827327802688595
+          lower_bound: 0.4271959401646827
+          upper_bound: 0.5173508725970809
+          eligible_request_count: 42690
+    oracle_occupancy_blocking:
+      classification: INFEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.2296901634589251
+          lower_bound: 0.21686008878513058
+          upper_bound: 0.2442556489339946
+          eligible_request_count: 64838
+        write_request:
+          estimate: 0.23368216974220615
+          lower_bound: 0.2198596605106451
+          upper_bound: 0.24902593068915274
+          eligible_request_count: 43371
+- family: shared
+  load_point: low
+  configuration:
+  - 1
+  - 2
+  - 1
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id004
+  empirical_minimum_certified: true
+  observed_intervals:
+    read_request:
+      estimate: 0.10218337711093936
+      lower_bound: 0.09927034805669267
+      upper_bound: 0.10583610387169658
+    write_request:
+      estimate: 0.1036635737502784
+      lower_bound: 0.10129896612292612
+      upper_bound: 0.10702233212973601
+  simulation_seeds:
+  - 879493584
+  - 879493585
+  - 879493586
+  - 879493587
+  - 879493588
+  - 879493589
+  - 879493590
+  - 879493591
+  - 879493592
+  - 879493593
+  - 879493594
+  - 879493595
+  - 879493596
+  - 879493597
+  - 879493598
+  - 879493599
+  - 879493600
+  - 879493601
+  - 879493602
+  - 879493603
+  - 879493604
+  - 879493605
+  - 879493606
+  - 879493607
+  - 879493608
+  - 879493609
+  - 879493610
+  - 879493611
+  - 879493612
+  - 879493613
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.12411623330207863
+          lower_bound: 0.12250402690527679
+          upper_bound: 0.12595685439149057
+          eligible_request_count: 64489
+        write_request:
+          estimate: 0.1272571751733838
+          lower_bound: 0.12594774759634397
+          upper_bound: 0.128726100692089
+          eligible_request_count: 42905
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11429892780733707
+          lower_bound: 0.11429197444040037
+          upper_bound: 0.11430577919918793
+          eligible_request_count: 64390
+        write_request:
+          estimate: 0.11727772786085264
+          lower_bound: 0.11727175888838459
+          upper_bound: 0.11728385792653202
+          eligible_request_count: 43213
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11854303162606136
+          lower_bound: 0.11839182317167346
+          upper_bound: 0.11869923013907523
+          eligible_request_count: 64390
+        write_request:
+          estimate: 0.12146408022866652
+          lower_bound: 0.12132291516696248
+          upper_bound: 0.12161798724918062
+          eligible_request_count: 43213
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.1377285547602254
+          lower_bound: 0.13572375614921883
+          upper_bound: 0.14014804841987175
+          eligible_request_count: 64302
+        write_request:
+          estimate: 0.1396630310898099
+          lower_bound: 0.13803207907665735
+          upper_bound: 0.14135181360789612
+          eligible_request_count: 43137
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.12366076422173307
+          lower_bound: 0.12228831792198469
+          upper_bound: 0.12520256635343827
+          eligible_request_count: 64690
+        write_request:
+          estimate: 0.12640929069975396
+          lower_bound: 0.1250454936089507
+          upper_bound: 0.12786318437946906
+          eligible_request_count: 43142
+- family: shared
+  load_point: low
+  configuration:
+  - 1
+  - 3
+  - 1
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration: *id004
+  empirical_minimum_certified: true
+  observed_intervals:
+    read_request:
+      estimate: 0.0957118791365489
+      lower_bound: 0.09451907673685102
+      upper_bound: 0.09711793676631864
+    write_request:
+      estimate: 0.09835604543853224
+      lower_bound: 0.09750629080262023
+      upper_bound: 0.09911383998501856
+  simulation_seeds:
+  - 177749368
+  - 177749369
+  - 177749370
+  - 177749371
+  - 177749372
+  - 177749373
+  - 177749374
+  - 177749375
+  - 177749376
+  - 177749377
+  - 177749378
+  - 177749379
+  - 177749380
+  - 177749381
+  - 177749382
+  - 177749383
+  - 177749384
+  - 177749385
+  - 177749386
+  - 177749387
+  - 177749388
+  - 177749389
+  - 177749390
+  - 177749391
+  - 177749392
+  - 177749393
+  - 177749394
+  - 177749395
+  - 177749396
+  - 177749397
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11560529088779312
+          lower_bound: 0.11489467797545319
+          upper_bound: 0.11647129194910617
+          eligible_request_count: 64889
+        write_request:
+          estimate: 0.11781624836142769
+          lower_bound: 0.1168823766459522
+          upper_bound: 0.11886354883107611
+          eligible_request_count: 43142
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11430572692969886
+          lower_bound: 0.11429866464710502
+          upper_bound: 0.11431295083194037
+          eligible_request_count: 65000
+        write_request:
+          estimate: 0.11728411598688397
+          lower_bound: 0.11727803153172243
+          upper_bound: 0.11729039296895608
+          eligible_request_count: 43068
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11494157418444872
+          lower_bound: 0.11490174189811632
+          upper_bound: 0.11498211296065991
+          eligible_request_count: 65000
+        write_request:
+          estimate: 0.11794768844861912
+          lower_bound: 0.11790312417391025
+          upper_bound: 0.11799089251976577
+          eligible_request_count: 43068
+    telemetry_blocking_fitted_variability:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.1229723540206182
+          lower_bound: 0.12182157160734498
+          upper_bound: 0.12427330071619161
+          eligible_request_count: 64836
+        write_request:
+          estimate: 0.12574191714125027
+          lower_bound: 0.12459447548852916
+          upper_bound: 0.12711928119823238
+          eligible_request_count: 43045
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11505189441634943
+          lower_bound: 0.11416826928209031
+          upper_bound: 0.11625436810059515
+          eligible_request_count: 64838
+        write_request:
+          estimate: 0.11821927591679701
+          lower_bound: 0.1173749550765426
+          upper_bound: 0.11913628641619181
+          eligible_request_count: 43181
+- family: shared
+  load_point: target_validation
+  configuration:
+  - 1
+  - 2
+  - 1
+  evidence_gate_passed: true
+  observed_classification: FEASIBLE
+  empirical_minimum_configuration:
+  - 1
+  - 2
+  - 1
+  empirical_minimum_certified: false
+  observed_intervals:
+    read_request:
+      estimate: 0.11396226305912568
+      lower_bound: 0.1124574406791944
+      upper_bound: 0.11552975492862591
+    write_request:
+      estimate: 0.11686212839259931
+      lower_bound: 0.11513567910567736
+      upper_bound: 0.118671197031518
+  simulation_seeds:
+  - 1002584813
+  - 1002584814
+  - 1002584815
+  - 1002584816
+  - 1002584817
+  - 1002584818
+  - 1002584819
+  - 1002584820
+  - 1002584821
+  - 1002584822
+  - 1002584823
+  - 1002584824
+  - 1002584825
+  - 1002584826
+  - 1002584827
+  - 1002584828
+  - 1002584829
+  - 1002584830
+  - 1002584831
+  - 1002584832
+  - 1002584833
+  - 1002584834
+  - 1002584835
+  - 1002584836
+  - 1002584837
+  - 1002584838
+  - 1002584839
+  - 1002584840
+  - 1002584841
+  - 1002584842
+  models:
+    baseline_fixed_overhead:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.14045307185097658
+          lower_bound: 0.13823303375876522
+          upper_bound: 0.14276887420130027
+          eligible_request_count: 90115
+        write_request:
+          estimate: 0.1432670381644052
+          lower_bound: 0.140950168261673
+          upper_bound: 0.14559660028338842
+          eligible_request_count: 61001
+    telemetry_cpu_blocking:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.11437810510640492
+          lower_bound: 0.11436997323411001
+          upper_bound: 0.11438575711086549
+          eligible_request_count: 89992
+        write_request:
+          estimate: 0.117327126985046
+          lower_bound: 0.11732115604661066
+          upper_bound: 0.11733399473539897
+          eligible_request_count: 61105
+    telemetry_cpu_blocking_declared_bottleneck:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.12541860864791335
+          lower_bound: 0.12513873259827096
+          upper_bound: 0.12569833717991666
+          eligible_request_count: 89992
+        write_request:
+          estimate: 0.12831276605734945
+          lower_bound: 0.1279651371119158
+          upper_bound: 0.12865728403110815
+          eligible_request_count: 61105
+    telemetry_blocking_fitted_variability:
+      classification: INFEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.1678019780054537
+          lower_bound: 0.1646968728641351
+          upper_bound: 0.17112520638579173
+          eligible_request_count: 90681
+        write_request:
+          estimate: 0.17086228178466528
+          lower_bound: 0.16758793997031246
+          upper_bound: 0.17431059133741797
+          eligible_request_count: 61462
+    oracle_occupancy_blocking:
+      classification: FEASIBLE
+      intervals:
+        read_request:
+          estimate: 0.13945707526346549
+          lower_bound: 0.13705469507162954
+          upper_bound: 0.14216551759658497
+          eligible_request_count: 90105
+        write_request:
+          estimate: 0.1423818216910277
+          lower_bound: 0.13968652626381275
+          upper_bound: 0.14543858849823502
+          eligible_request_count: 61288
+summaries:
+  all_selected:
+    load_point_count: 8
+    configuration_count: 18
+    models:
+      baseline_fixed_overhead:
+        improved_over_baseline_count: 0
+        decision_count: 18
+        decision_agreement_count: 16
+        unsafe_false_feasible_count: 2
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 22
+        mean_absolute_error_seconds: 0.029321496446315952
+        mean_absolute_percentage_error: 0.18500931074055427
+        decision_agreement_rate: 0.8888888888888888
+      telemetry_cpu_blocking:
+        improved_over_baseline_count: 6
+        decision_count: 18
+        decision_agreement_count: 10
+        unsafe_false_feasible_count: 8
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 22
+        mean_absolute_error_seconds: 0.07738749773029278
+        mean_absolute_percentage_error: 0.36827277331699776
+        decision_agreement_rate: 0.5555555555555556
+      telemetry_cpu_blocking_declared_bottleneck:
+        improved_over_baseline_count: 6
+        decision_count: 18
+        decision_agreement_count: 15
+        unsafe_false_feasible_count: 3
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 19
+        mean_absolute_error_seconds: 0.031242439585350702
+        mean_absolute_percentage_error: 0.23890747858405134
+        decision_agreement_rate: 0.8333333333333334
+      telemetry_blocking_fitted_variability:
+        improved_over_baseline_count: 8
+        decision_count: 18
+        decision_agreement_count: 17
+        unsafe_false_feasible_count: 0
+        conservative_false_infeasible_count: 1
+        latency_comparison_count: 19
+        mean_absolute_error_seconds: 0.06838739479354833
+        mean_absolute_percentage_error: 0.43390673649261835
+        decision_agreement_rate: 0.9444444444444444
+      oracle_occupancy_blocking:
+        improved_over_baseline_count: 12
+        decision_count: 18
+        decision_agreement_count: 16
+        unsafe_false_feasible_count: 1
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 22
+        mean_absolute_error_seconds: 0.03054366509839781
+        mean_absolute_percentage_error: 0.18317514721361902
+        decision_agreement_rate: 0.8888888888888888
+  evidence_gate_passed:
+    load_point_count: 8
+    configuration_count: 18
+    models:
+      baseline_fixed_overhead:
+        improved_over_baseline_count: 0
+        decision_count: 18
+        decision_agreement_count: 16
+        unsafe_false_feasible_count: 2
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 22
+        mean_absolute_error_seconds: 0.029321496446315952
+        mean_absolute_percentage_error: 0.18500931074055427
+        decision_agreement_rate: 0.8888888888888888
+      telemetry_cpu_blocking:
+        improved_over_baseline_count: 6
+        decision_count: 18
+        decision_agreement_count: 10
+        unsafe_false_feasible_count: 8
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 22
+        mean_absolute_error_seconds: 0.07738749773029278
+        mean_absolute_percentage_error: 0.36827277331699776
+        decision_agreement_rate: 0.5555555555555556
+      telemetry_cpu_blocking_declared_bottleneck:
+        improved_over_baseline_count: 6
+        decision_count: 18
+        decision_agreement_count: 15
+        unsafe_false_feasible_count: 3
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 19
+        mean_absolute_error_seconds: 0.031242439585350702
+        mean_absolute_percentage_error: 0.23890747858405134
+        decision_agreement_rate: 0.8333333333333334
+      telemetry_blocking_fitted_variability:
+        improved_over_baseline_count: 8
+        decision_count: 18
+        decision_agreement_count: 17
+        unsafe_false_feasible_count: 0
+        conservative_false_infeasible_count: 1
+        latency_comparison_count: 19
+        mean_absolute_error_seconds: 0.06838739479354833
+        mean_absolute_percentage_error: 0.43390673649261835
+        decision_agreement_rate: 0.9444444444444444
+      oracle_occupancy_blocking:
+        improved_over_baseline_count: 12
+        decision_count: 18
+        decision_agreement_count: 16
+        unsafe_false_feasible_count: 1
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 22
+        mean_absolute_error_seconds: 0.03054366509839781
+        mean_absolute_percentage_error: 0.18317514721361902
+        decision_agreement_rate: 0.8888888888888888
+  target_validation:
+    load_point_count: 4
+    configuration_count: 4
+    models:
+      baseline_fixed_overhead:
+        improved_over_baseline_count: 0
+        decision_count: 4
+        decision_agreement_count: 2
+        unsafe_false_feasible_count: 2
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 5
+        mean_absolute_error_seconds: 0.024502397679047293
+        mean_absolute_percentage_error: 0.20778417815508837
+        decision_agreement_rate: 0.5
+      telemetry_cpu_blocking:
+        improved_over_baseline_count: 2
+        decision_count: 4
+        decision_agreement_count: 2
+        unsafe_false_feasible_count: 2
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 5
+        mean_absolute_error_seconds: 0.02983190820455594
+        mean_absolute_percentage_error: 0.2341100178415257
+        decision_agreement_rate: 0.5
+      telemetry_cpu_blocking_declared_bottleneck:
+        improved_over_baseline_count: 2
+        decision_count: 4
+        decision_agreement_count: 2
+        unsafe_false_feasible_count: 2
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 5
+        mean_absolute_error_seconds: 0.024157989901475257
+        mean_absolute_percentage_error: 0.19792276231060987
+        decision_agreement_rate: 0.5
+      telemetry_blocking_fitted_variability:
+        improved_over_baseline_count: 2
+        decision_count: 4
+        decision_agreement_count: 3
+        unsafe_false_feasible_count: 0
+        conservative_false_infeasible_count: 1
+        latency_comparison_count: 5
+        mean_absolute_error_seconds: 0.03219856507545363
+        mean_absolute_percentage_error: 0.28073803596366365
+        decision_agreement_rate: 0.75
+      oracle_occupancy_blocking:
+        improved_over_baseline_count: 3
+        decision_count: 4
+        decision_agreement_count: 2
+        unsafe_false_feasible_count: 1
+        conservative_false_infeasible_count: 0
+        latency_comparison_count: 5
+        mean_absolute_error_seconds: 0.022795270735678563
+        mean_absolute_percentage_error: 0.19767668772421226
+        decision_agreement_rate: 0.5
+  certified_sizing:
+    certified_empirical_minimum_point_count: 4
+    models:
+      baseline_fixed_overhead:
+        recommendation_count: 4
+        exact_configuration_match_count: 4
+        replica_cost_match_count: 4
+        underprovisioned_count: 0
+        conservative_count: 0
+        no_feasible_recommendation_count: 0
+      telemetry_cpu_blocking:
+        recommendation_count: 4
+        exact_configuration_match_count: 0
+        replica_cost_match_count: 0
+        underprovisioned_count: 4
+        conservative_count: 0
+        no_feasible_recommendation_count: 0
+      telemetry_cpu_blocking_declared_bottleneck:
+        recommendation_count: 4
+        exact_configuration_match_count: 3
+        replica_cost_match_count: 3
+        underprovisioned_count: 1
+        conservative_count: 0
+        no_feasible_recommendation_count: 0
+      telemetry_blocking_fitted_variability:
+        recommendation_count: 4
+        exact_configuration_match_count: 4
+        replica_cost_match_count: 4
+        underprovisioned_count: 0
+        conservative_count: 0
+        no_feasible_recommendation_count: 0
+      oracle_occupancy_blocking:
+        recommendation_count: 4
+        exact_configuration_match_count: 4
+        replica_cost_match_count: 4
+        underprovisioned_count: 0
+        conservative_count: 0
+        no_feasible_recommendation_count: 0
+    points:
+    - family: fanout
+      load_point: high
+      empirical_minimum_configuration:
+      - 1
+      - 2
+      - 3
+      models:
+        baseline_fixed_overhead:
+        - 1
+        - 2
+        - 3
+        telemetry_cpu_blocking:
+        - 1
+        - 1
+        - 2
+        telemetry_cpu_blocking_declared_bottleneck:
+        - 1
+        - 2
+        - 2
+        telemetry_blocking_fitted_variability:
+        - 1
+        - 2
+        - 3
+        oracle_occupancy_blocking:
+        - 1
+        - 2
+        - 3
+    - family: fanout
+      load_point: low
+      empirical_minimum_configuration:
+      - 1
+      - 1
+      - 2
+      models:
+        baseline_fixed_overhead:
+        - 1
+        - 1
+        - 2
+        telemetry_cpu_blocking:
+        - 1
+        - 1
+        - 1
+        telemetry_cpu_blocking_declared_bottleneck:
+        - 1
+        - 1
+        - 2
+        telemetry_blocking_fitted_variability:
+        - 1
+        - 1
+        - 2
+        oracle_occupancy_blocking:
+        - 1
+        - 1
+        - 2
+    - family: repeated
+      load_point: bursty_search
+      empirical_minimum_configuration:
+      - 1
+      - 2
+      models:
+        baseline_fixed_overhead:
+        - 1
+        - 2
+        telemetry_cpu_blocking:
+        - 1
+        - 1
+        telemetry_cpu_blocking_declared_bottleneck:
+        - 1
+        - 2
+        telemetry_blocking_fitted_variability:
+        - 1
+        - 2
+        oracle_occupancy_blocking:
+        - 1
+        - 2
+    - family: shared
+      load_point: low
+      empirical_minimum_configuration:
+      - 1
+      - 2
+      - 1
+      models:
+        baseline_fixed_overhead:
+        - 1
+        - 2
+        - 1
+        telemetry_cpu_blocking:
+        - 1
+        - 1
+        - 1
+        telemetry_cpu_blocking_declared_bottleneck:
+        - 1
+        - 2
+        - 1
+        telemetry_blocking_fitted_variability:
+        - 1
+        - 2
+        - 1
+        oracle_occupancy_blocking:
+        - 1
+        - 2
+        - 1

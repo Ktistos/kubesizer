@@ -57,6 +57,8 @@ class TrafficModelSpec:
     entry_services: Mapping
     service_times: Mapping
     service_times_by_request_class: Mapping
+    service_blocking_times: Mapping
+    service_blocking_times_by_request_class: Mapping
     service_execution_models: Mapping
     service_replica_queue_models: Mapping
     processing_slots_per_replica: Mapping
@@ -1273,11 +1275,15 @@ def parse_workload_spec(workload, *, base_path=None):
             )
         model_path = "traffic_model"
         service_times = {}
+        service_blocking_times = {}
         service_execution_models = {}
         service_replica_queue_models = {}
         processing_slots_per_replica = {}
         concurrency_limits_per_replica = {}
         service_times_by_request_class = {
+            request_class_name: {} for request_class_name in request_classes
+        }
+        service_blocking_times_by_request_class = {
             request_class_name: {} for request_class_name in request_classes
         }
         for service_name in service_names:
@@ -1339,6 +1345,46 @@ def parse_workload_spec(workload, *, base_path=None):
             concurrency_limits_per_replica[service_name] = concurrency_limit
             service_execution_models[service_name] = execution_model
             service_replica_queue_models[service_name] = replica_queue_model
+            raw_blocking_time = raw_service_time.get("non_cpu_blocking_time")
+            if raw_blocking_time is not None:
+                blocking_path = f"{service_path}.non_cpu_blocking_time"
+                if not isinstance(raw_blocking_time, Mapping):
+                    raise ValueError(f"{blocking_path} must be a mapping.")
+                if "distribution" in raw_blocking_time:
+                    parsed_blocking_time = parse_duration_distribution(
+                        raw_blocking_time,
+                        blocking_path,
+                        base_path=base_path,
+                    )
+                    service_blocking_times[service_name] = parsed_blocking_time
+                    for request_class_name in request_classes:
+                        service_blocking_times_by_request_class[
+                            request_class_name
+                        ][service_name] = parsed_blocking_time
+                else:
+                    unknown_classes = set(raw_blocking_time) - set(request_classes)
+                    if not raw_blocking_time or unknown_classes:
+                        raise ValueError(
+                            f"{blocking_path} must be one duration distribution "
+                            "or a nonempty request-class mapping; unknown request "
+                            f"classes={sorted(unknown_classes)}."
+                        )
+                    parsed_blocking_times = {
+                        request_class_name: parse_duration_distribution(
+                            specification,
+                            f"{blocking_path}.{request_class_name}",
+                            base_path=base_path,
+                        )
+                        for request_class_name, specification in (
+                            raw_blocking_time.items()
+                        )
+                    }
+                    for request_class_name, specification in (
+                        parsed_blocking_times.items()
+                    ):
+                        service_blocking_times_by_request_class[
+                            request_class_name
+                        ][service_name] = specification
             distribution_specification = {
                 key: value
                 for key, value in raw_service_time.items()
@@ -1348,6 +1394,7 @@ def parse_workload_spec(workload, *, base_path=None):
                     "concurrency_limit_per_replica",
                     "execution_model",
                     "replica_queue_model",
+                    "non_cpu_blocking_time",
                 }
             }
             if "distribution" in distribution_specification:
@@ -1491,6 +1538,15 @@ def parse_workload_spec(workload, *, base_path=None):
                     request_class_name: _freeze_mapping(specifications)
                     for request_class_name, specifications in (
                         service_times_by_request_class.items()
+                    )
+                }
+            ),
+            service_blocking_times=_freeze_mapping(service_blocking_times),
+            service_blocking_times_by_request_class=_freeze_mapping(
+                {
+                    request_class_name: _freeze_mapping(specifications)
+                    for request_class_name, specifications in (
+                        service_blocking_times_by_request_class.items()
                     )
                 }
             ),

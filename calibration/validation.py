@@ -230,7 +230,10 @@ def validate_global_warmup(
                     required_warmup=cutoff.warmup_duration,
                     proposed_warmup=proposed_warmup,
                     post_warmup_check=post_warmup,
-                    passed=cutoff.warmup_duration <= proposed_warmup,
+                    passed=(
+                        cutoff.warmup_duration <= proposed_warmup
+                        and post_warmup.passed
+                    ),
                 )
             )
         rounds.append(

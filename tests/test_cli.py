@@ -508,7 +508,14 @@ def test_simulation_final_validation_runs_after_placement_is_attached(
     system.configure_simulation_placement = lambda **model: attached.append(model)
     profile = object()
     resources_path = tmp_path / "resources.yaml"
-    resources_path.write_text("nodes: []\n", encoding="utf-8")
+    resources_path.write_text(
+        "nodes: []\n"
+        "service_resource_requests:\n"
+        "  api:\n"
+        "    cpu_request_millicores: 250\n"
+        "    memory_request_bytes: 134217728\n",
+        encoding="utf-8",
+    )
     placement = {"node-a": {"api": 1}}
 
     class PlacementCluster:
@@ -536,7 +543,16 @@ def test_simulation_final_validation_runs_after_placement_is_attached(
         run_replica_workflow,
     )
     monkeypatch.setattr(kubesizer_cli, "Cluster", lambda *args: PlacementCluster())
-    monkeypatch.setattr(kubesizer_cli, "NodePlacementProblem", lambda cluster: object())
+    def placement_problem(cluster, **kwargs):
+        assert kwargs["service_resource_requests"] == {
+            "api": {
+                "cpu_request_millicores": 250,
+                "memory_request_bytes": 134217728,
+            }
+        }
+        return object()
+
+    monkeypatch.setattr(kubesizer_cli, "NodePlacementProblem", placement_problem)
     monkeypatch.setattr(
         kubesizer_cli,
         "optimize_node_placement",
@@ -582,7 +598,14 @@ def test_replica_and_placement_search_are_selected_independently(
 ):
     system = _fake_system()
     resources_path = tmp_path / "resources.yaml"
-    resources_path.write_text("nodes: []\n", encoding="utf-8")
+    resources_path.write_text(
+        "nodes: []\n"
+        "service_resource_requests:\n"
+        "  api:\n"
+        "    cpu_request_millicores: 250\n"
+        "    memory_request_bytes: 134217728\n",
+        encoding="utf-8",
+    )
     observed = {}
     monkeypatch.setattr(
         kubesizer_cli,
@@ -604,7 +627,11 @@ def test_replica_and_placement_search_are_selected_independently(
         optimize_replicas,
     )
     monkeypatch.setattr(kubesizer_cli, "Cluster", lambda *args: object())
-    monkeypatch.setattr(kubesizer_cli, "NodePlacementProblem", lambda *args: object())
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "NodePlacementProblem",
+        lambda *args, **kwargs: object(),
+    )
     monkeypatch.setattr(
         kubesizer_cli,
         "optimize_node_placement",
@@ -642,6 +669,43 @@ def test_replica_and_placement_search_are_selected_independently(
             }
         }
     }
+
+
+def test_native_placement_requires_per_service_resource_requests(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    system = _fake_system()
+    resources_path = tmp_path / "resources.yaml"
+    resources_path.write_text("nodes: []\n", encoding="utf-8")
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "_load_system",
+        lambda path: (system, Path(path)),
+    )
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "optimize_with_analytical_model",
+        lambda *args, **kwargs: _fake_replica_result(),
+    )
+
+    exit_code = kubesizer_cli.main(
+        [
+            "--workload",
+            "ignored.yaml",
+            "--resources",
+            str(resources_path),
+            "--replica-evaluation",
+            "analytical",
+            "--json",
+            "--quiet",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert "service_resource_requests" in output["error"]["message"]
 
 
 @pytest.mark.parametrize("mode", ("auto", "exact", "scalable"))

@@ -174,3 +174,74 @@ def communication_latency_from_round_trip_probes(
         },
         "unplaced_cross_node_probability": probability,
     }
+
+
+def estimate_low_load_service_blocking_time(
+    *,
+    observed_response_mean_seconds,
+    cpu_execution_mean_seconds,
+    downstream_response_mean_seconds=0.0,
+    communication_round_trip_mean_seconds=0.0,
+    maximum_observed_cpu_utilization,
+    maximum_allowed_cpu_utilization=0.20,
+    difference_tolerance_seconds=0.001,
+):
+    """Estimate an explicitly labelled non-CPU wait from a low-load run.
+
+    The response, CPU execution, downstream response, and communication means
+    must describe the same service, route, and observation window. The result
+    is an inferred mean residual, not a directly observed I/O distribution.
+    A low-utilization gate prevents ordinary queueing delay from being silently
+    relabelled as intrinsic blocking work.
+    """
+    observed = _finite_nonnegative(
+        observed_response_mean_seconds,
+        "observed_response_mean_seconds",
+    )
+    cpu = _finite_nonnegative(
+        cpu_execution_mean_seconds,
+        "cpu_execution_mean_seconds",
+    )
+    downstream = _finite_nonnegative(
+        downstream_response_mean_seconds,
+        "downstream_response_mean_seconds",
+    )
+    communication = _finite_nonnegative(
+        communication_round_trip_mean_seconds,
+        "communication_round_trip_mean_seconds",
+    )
+    utilization = _finite_nonnegative(
+        maximum_observed_cpu_utilization,
+        "maximum_observed_cpu_utilization",
+    )
+    utilization_limit = _finite_nonnegative(
+        maximum_allowed_cpu_utilization,
+        "maximum_allowed_cpu_utilization",
+    )
+    tolerance = _finite_nonnegative(
+        difference_tolerance_seconds,
+        "difference_tolerance_seconds",
+    )
+    if utilization > 1.0 or utilization_limit <= 0.0 or utilization_limit >= 1.0:
+        raise ValueError(
+            "CPU utilization and its low-load limit must lie in [0, 1] and "
+            "the limit must be strictly between zero and one."
+        )
+    if utilization > utilization_limit:
+        raise ValueError(
+            "The characterization run is not low-load enough to separate "
+            "non-CPU blocking from queueing delay."
+        )
+    accounted = cpu + downstream + communication
+    if accounted > observed + tolerance:
+        raise ValueError(
+            "Modeled CPU, downstream, and communication means exceed the "
+            "observed service response mean; the boundaries are incompatible."
+        )
+    residual = max(0.0, observed - accounted)
+    if residual == 0.0:
+        return None
+    return {
+        "distribution": "deterministic",
+        "mean": residual,
+    }

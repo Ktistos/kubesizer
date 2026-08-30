@@ -232,6 +232,39 @@ deployment's actual load-balancing behavior; it is a model input, not something
 the simulator can infer from aggregate latency measurements. Both fixed-slot
 and processor-sharing execution support pooled and independent dispatch.
 
+## Per-visit non-CPU blocking
+
+An optional service-time field represents a measured wait which is part of the
+service visit but does not consume CPU processing capacity:
+
+```yaml
+traffic_model:
+  service_times:
+    api:
+      execution_model: fixed_slots
+      concurrency_limit_per_replica: 32
+      non_cpu_blocking_time:
+        distribution: lognormal
+        mean: 0.006
+        scv: 1.5
+      distribution: gamma
+      mean: 0.004
+      scv: 0.8
+```
+
+The CPU phase runs first. Its processing slot is then released while the visit
+waits for `non_cpu_blocking_time`; the admitted concurrency slot is retained
+until routing or synchronous child-call processing continues. This models
+I/O, locks, connection-pool waits, or external waits without charging them as
+CPU demand. It can also be declared per request class. The values must exclude
+downstream and network latency already represented by the call graph and
+communication model.
+
+This semantic is simulation-only for certification. The analytical mean
+diagnostic includes its mean, but strict analytical optimization rejects such
+a workload because finite-concurrency blocking is not represented by the
+M/M/c, M/G/1, or variability-adjusted queueing equations.
+
 Let `G` be the sum of all configured external `gamma` values, `w_k` the weight
 of class `k`, and `G_k_raw` that class's configured external total. The class
 target and per-entry effective rates are:
@@ -335,7 +368,7 @@ from CPU demand.
 ## Protocol and failures
 
 The adapter sends one JSON request on standard input and expects one JSON
-response on standard output. Protocol version 9 supports:
+response on standard output. Protocol version 12 supports:
 
 - `simulate`;
 - `warmup_ensemble`;

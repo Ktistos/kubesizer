@@ -24,7 +24,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 11;
+constexpr int kProtocolVersion = 12;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 constexpr int kDeadlinePriority = 2;
@@ -33,6 +33,7 @@ enum class EventKind {
     ExternalArrival,
     Admit,
     ServiceCompletion,
+    BlockingCompletion,
     Grant,
     Resume,
     ConcurrencyGrant,
@@ -78,6 +79,7 @@ struct Service {
     ExecutionModel execution_model{ExecutionModel::FixedSlots};
     ReplicaQueueModel replica_queue_model{ReplicaQueueModel::Pooled};
     std::vector<Distribution> service_times;
+    std::vector<std::optional<Distribution>> blocking_times;
 };
 
 struct Route {
@@ -884,6 +886,8 @@ class Kernel {
             case EventKind::Admit: admit(event.visit, event.time); break;
             case EventKind::ServiceCompletion:
                 service_completion(event); break;
+            case EventKind::BlockingCompletion:
+                blocking_completion(event); break;
             case EventKind::Grant:
                 grant(event.index, event.queue, event.time);
                 break;
@@ -1100,6 +1104,23 @@ class Kernel {
         return sample(service_time(visit->request, visit->service))
             * input_service_time_multipliers_[visit->service]
             * node_multiplier;
+    }
+
+    std::optional<double> sample_blocking_time(Visit* visit) {
+        const auto& distributions = workload_.services[
+            visit->service
+        ].blocking_times;
+        const int request_class = visit->request->request_class;
+        if (
+            request_class < 0
+            || static_cast<std::size_t>(request_class) >= distributions.size()
+        ) {
+            throw std::runtime_error(
+                "missing request-class blocking-time distribution"
+            );
+        }
+        if (!distributions[request_class].has_value()) return std::nullopt;
+        return sample(distributions[request_class].value());
     }
 
     int total_waiting(int service) const {
@@ -1476,39 +1497,8 @@ class Kernel {
         return true;
     }
 
-    void service_completion(const Event& event) {
-        const double now = event.time;
-        const int service = event.index;
-        if (
-            workload_.services[service].execution_model
-                == ExecutionModel::ProcessorSharing
-        ) {
-            // Superseded processor-sharing completions may refer to a visit
-            // which has already completed and been destroyed. Check the
-            // service generation before dereferencing that pointer.
-            if (
-                event.queue < 0
-                || event.generation
-                    != processor_sharing_generation_[service][event.queue]
-            ) return;
-        }
-        Visit* visit = event.visit;
-        if (visit == nullptr || visit->service != service) {
-            throw std::runtime_error("service completion refers to an invalid visit");
-        }
-        if (
-            workload_.services[service].execution_model
-                == ExecutionModel::ProcessorSharing
-        ) {
-            if (!release_processor_sharing(
-                visit,
-                now,
-                event.generation,
-                event.queue
-            )) return;
-        } else {
-            release_processing(visit, now);
-        }
+    void complete_service_visit(Visit* visit, double now) {
+        const int service = visit->service;
         ++processed_event_count_;
         ++completed_visit_count_;
         Request* request = visit->request;
@@ -1561,6 +1551,64 @@ class Kernel {
         if (target < 0) {
             finish_or_delay(request, now);
         }
+    }
+
+    void service_completion(const Event& event) {
+        const double now = event.time;
+        const int service = event.index;
+        if (
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+        ) {
+            // Superseded processor-sharing completions may refer to a visit
+            // which has already completed and been destroyed. Check the
+            // service generation before dereferencing that pointer.
+            if (
+                event.queue < 0
+                || event.generation
+                    != processor_sharing_generation_[service][event.queue]
+            ) return;
+        }
+        Visit* visit = event.visit;
+        if (visit == nullptr || visit->service != service) {
+            throw std::runtime_error("service completion refers to an invalid visit");
+        }
+        if (
+            workload_.services[service].execution_model
+                == ExecutionModel::ProcessorSharing
+        ) {
+            if (!release_processor_sharing(
+                visit,
+                now,
+                event.generation,
+                event.queue
+            )) return;
+        } else {
+            release_processing(visit, now);
+        }
+        const std::optional<double> blocking_time = sample_blocking_time(visit);
+        if (blocking_time.has_value()) {
+            schedule(
+                now + blocking_time.value(),
+                kNormalPriority,
+                EventKind::BlockingCompletion,
+                nullptr,
+                service,
+                visit
+            );
+            return;
+        }
+        complete_service_visit(visit, now);
+    }
+
+    void blocking_completion(const Event& event) {
+        Visit* visit = event.visit;
+        if (visit == nullptr || visit->service != event.index) {
+            throw std::runtime_error(
+                "blocking completion refers to an invalid visit"
+            );
+        }
+        complete_service_visit(visit, event.time);
     }
 
     void grant(int service, int queue, double now) {
@@ -2158,6 +2206,32 @@ Workload parse_workload(json_t* raw) {
                 false
             );
             service.service_times.assign(request_class_count, shared);
+        }
+        json_t* blocking_distributions = json_object_get(
+            item,
+            "blocking_time_distributions"
+        );
+        if (blocking_distributions == nullptr
+            || !json_is_array(blocking_distributions)
+            || json_array_size(blocking_distributions) != request_class_count) {
+            throw std::runtime_error(
+                "blocking_time_distributions must have one item per request class"
+            );
+        }
+        std::size_t blocking_class_index;
+        json_t* raw_blocking_distribution;
+        json_array_foreach(
+            blocking_distributions,
+            blocking_class_index,
+            raw_blocking_distribution
+        ) {
+            if (json_is_null(raw_blocking_distribution)) {
+                service.blocking_times.push_back(std::nullopt);
+            } else {
+                service.blocking_times.push_back(
+                    parse_distribution(raw_blocking_distribution, false)
+                );
+            }
         }
         workload.services.push_back(std::move(service));
     }

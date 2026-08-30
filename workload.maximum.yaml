@@ -116,6 +116,12 @@ traffic_model:
     gateway:
       execution_model: processor_sharing
       concurrency_limit_per_replica: 32
+      # Low-load non-CPU wait (for example I/O or lock delay). CPU is released
+      # during this interval, but one of the 32 admitted-concurrency slots is
+      # retained. Exclude downstream calls and network delay modeled elsewhere.
+      non_cpu_blocking_time:
+        distribution: deterministic
+        mean: 0.003
       distribution: exponential
       rate: 50.0
     database:

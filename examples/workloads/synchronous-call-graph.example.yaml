@@ -37,6 +37,11 @@ traffic_model:
       # Kubernetes replica. Both capacities scale when replicas are added.
       processing_slots_per_replica: 1
       concurrency_limit_per_replica: 4
+      # Measured low-load non-CPU wait local to api. Do not include catalog or
+      # identity call latency here because those calls are modeled explicitly.
+      non_cpu_blocking_time:
+        distribution: deterministic
+        mean: 0.002
       distribution: gamma
       mean: 0.012
       scv: 0.20

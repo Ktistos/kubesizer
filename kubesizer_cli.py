@@ -116,7 +116,7 @@ def _load_workflow_system(args):
         )
     if not all(portable_paths):
         system, workload_path = _load_system(args.workload)
-        return system, workload_path, None
+        return system, workload_path, None, None
 
     workload_path = Path(args.workload).expanduser().resolve()
     plan = load_and_prepare_initial_sizing(
@@ -147,7 +147,21 @@ def _load_workflow_system(args):
         plan.recommendation,
         service_order,
     )
-    return system, workload_path, initial_configuration
+    service_resource_requests = {
+        service.name: {
+            "cpu_request_millicores": int(
+                round(service.cpu_request_cores * 1000.0)
+            ),
+            "memory_request_bytes": int(service.memory_request_bytes or 0),
+        }
+        for service in plan.inputs.deployment.services
+    }
+    return (
+        system,
+        workload_path,
+        initial_configuration,
+        service_resource_requests,
+    )
 
 
 def _resources_or_skip(
@@ -707,6 +721,19 @@ def _run_replica_workflow(
             "Request-class end-to-end deadlines require --replica-evaluation "
             "simulation."
         )
+    if evaluation_mode == ReplicaEvaluationMode.ANALYTICAL:
+        incompatibilities = getattr(
+            system,
+            "get_strict_analytical_incompatibilities",
+            lambda: (),
+        )()
+        if incompatibilities:
+            raise CliUsageError(
+                "The workload contains semantics that require "
+                "--replica-evaluation simulation: "
+                + "; ".join(incompatibilities)
+                + "."
+            )
     if kind is None and evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         raise CliUsageError("Simulation optimization requires workload latency SLOs.")
 
@@ -743,7 +770,12 @@ def _run_replica_workflow(
 
 
 def _command_run(args):
-    system, _, initial_configuration = _load_workflow_system(args)
+    (
+        system,
+        _,
+        initial_configuration,
+        measured_resource_requests,
+    ) = _load_workflow_system(args)
     if args.replica_evaluation == "simulation":
         compatibility_check = getattr(
             system,
@@ -784,10 +816,25 @@ def _command_run(args):
         )
     selected_placement = None
     if resources is not None:
+        service_resource_requests = (
+            measured_resource_requests
+            if measured_resource_requests is not None
+            else resources.get("service_resource_requests")
+        )
+        if service_resource_requests is None:
+            raise CliUsageError(
+                "Node placement requires CPU and memory requests for every "
+                "service. Supply service_resource_requests in the resources "
+                "file, use portable --deployment evidence, or pass "
+                "--skip-placement."
+            )
         system.configure_system_replicas(result.configuration)
         cluster = Cluster("cli-cluster", resources, system)
         placement_result = optimize_node_placement(
-            NodePlacementProblem(cluster),
+            NodePlacementProblem(
+                cluster,
+                service_resource_requests=service_resource_requests,
+            ),
             mode=placement_mode,
             progress_callback=_progress_callback(args),
         )

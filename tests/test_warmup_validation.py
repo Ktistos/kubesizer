@@ -129,3 +129,47 @@ def test_validation_rejects_overlap_with_calibration_seeds(monkeypatch):
             validation_seed_start=700,
             excluded_seeds=(701,),
         )
+
+
+def test_validation_requires_post_warmup_windows_to_pass(monkeypatch):
+    parameters = SimpleNamespace(
+        minimum_replica_configuration=(1,),
+        pilot_horizon=300.0,
+    )
+
+    monkeypatch.setattr(
+        "calibration.validation.run_warmup_replications_for_configuration",
+        lambda _system, _parameters, configuration, seeds, **_kwargs: (
+            SimpleNamespace(configuration=configuration, seeds=tuple(seeds)),
+        ),
+    )
+    monkeypatch.setattr(
+        "calibration.validation.average_warmup_replications",
+        lambda replications: replications[0],
+    )
+    monkeypatch.setattr(
+        "calibration.validation.detect_ensemble_warmup_cutoff",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            warmup_duration=5.0,
+            reference_tail_fraction=0.20,
+            relative_tolerance=0.05,
+        ),
+    )
+    monkeypatch.setattr(
+        "calibration.validation.check_post_warmup_stability",
+        lambda *_args, **_kwargs: SimpleNamespace(passed=False),
+    )
+
+    result = validate_global_warmup(
+        object(),
+        parameters,
+        initial_warmup=10.0,
+        maximum_configuration=(1,),
+        bucket_width=1.0,
+        validation_replication_count=2,
+        validation_seed_start=900,
+    )
+
+    assert not result.passed
+    assert not result.rounds[0].passed
+    assert not result.rounds[0].configurations[0].passed

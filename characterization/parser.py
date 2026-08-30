@@ -372,12 +372,13 @@ def parse_workload_definition(value, deployment, *, base_path=None):
         "request_classes",
         "load_forecast",
         "communication_latency",
+        "service_blocking_times",
     }
     if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
             "workload must contain request_classes and may contain load_forecast "
-            "and communication_latency; arrival rates come from the measurement "
-            "package."
+            "communication_latency, and service_blocking_times; arrival rates "
+            "come from the measurement package."
         )
     if "request_classes" not in value:
         raise ValueError("workload is missing request_classes.")
@@ -714,7 +715,34 @@ def parse_workload_definition(value, deployment, *, base_path=None):
             ),
             unplaced_cross_node_probability=probability,
         )
-    return WorkloadDefinition(tuple(classes), multipliers, communication_latency)
+    service_blocking_times = ()
+    if "service_blocking_times" in value:
+        raw_blocking_times = value["service_blocking_times"]
+        if not isinstance(raw_blocking_times, Mapping) or not raw_blocking_times:
+            raise ValueError("service_blocking_times must be a nonempty mapping.")
+        unknown_services = set(raw_blocking_times) - service_names
+        if unknown_services:
+            raise ValueError(
+                "service_blocking_times contains unknown services "
+                f"{sorted(unknown_services)}."
+            )
+        service_blocking_times = tuple(
+            (
+                service_name,
+                parse_duration_distribution(
+                    specification,
+                    f"service_blocking_times.{service_name}",
+                    base_path=base_path,
+                ),
+            )
+            for service_name, specification in raw_blocking_times.items()
+        )
+    return WorkloadDefinition(
+        request_classes=tuple(classes),
+        load_forecast_multipliers=multipliers,
+        communication_latency=communication_latency,
+        service_blocking_times=service_blocking_times,
+    )
 
 
 def _parse_service_intervals(path):

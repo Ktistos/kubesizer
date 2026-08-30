@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 11
+PROTOCOL_VERSION = 12
 SIMULATOR_SEMANTICS_VERSION = (
     "native-event-kernel-joint-input-blocks-burst-traces-concurrency-"
     "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-"
-    "ps-replica-queues-measured-latency-components-v12"
+    "ps-replica-queues-measured-latency-components-non-cpu-blocking-v13"
 )
 
 
@@ -199,6 +199,11 @@ class CppSimulationBackend:
         arrival_specs = system.get_external_arrival_distribution_specs()
         service_specs = system.get_service_time_distribution_specs()
         class_service_specs = system.get_request_class_service_time_distribution_specs()
+        class_blocking_specs = getattr(
+            system,
+            "get_request_class_service_blocking_time_distribution_specs",
+            lambda: {},
+        )()
         workflows = system.get_request_class_workflows()
         call_graphs = system.get_request_class_call_graphs()
         call_execution_modes = system.get_request_class_call_execution_modes()
@@ -347,6 +352,20 @@ class CppSimulationBackend:
                                 service.get_name(),
                                 service_specs[service.get_name()],
                             )
+                        )
+                        for request_class in system.get_request_classes()
+                    ],
+                    "blocking_time_distributions": [
+                        (
+                            _serialize_distribution(specification)
+                            if (
+                                specification := class_blocking_specs.get(
+                                    request_class,
+                                    {},
+                                ).get(service.get_name())
+                            )
+                            is not None
+                            else None
                         )
                         for request_class in system.get_request_classes()
                     ],
