@@ -9,8 +9,10 @@ from .reliability import (
 )
 from .simulation_metrics_collector import SimulationMetricsCollector
 from .replication_rate import (
+    FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD,
     IndependentReplicationRateInterval,
     independent_replication_rate_interval,
+    minimum_zero_failure_replications,
 )
 from .time_weighted_buckets import time_weighted_bucket_averages
 from .cluster_bootstrap import (
@@ -34,8 +36,10 @@ __all__ = [
     "student_t_cdf",
     "student_t_quantile",
     "SimulationMetricsCollector",
+    "FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD",
     "IndependentReplicationRateInterval",
     "independent_replication_rate_interval",
+    "minimum_zero_failure_replications",
     "time_weighted_bucket_averages",
     "ClusterBootstrapP95Interval",
     "ClusterBootstrapRateInterval",

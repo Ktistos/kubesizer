@@ -18,6 +18,7 @@ from performance_models import CommunicationLatencySpec, parse_duration_distribu
 
 from .models import (
     CapacityObservation,
+    DEFAULT_MAXIMUM_CAPACITY_UTILIZATION,
     DeploymentSpec,
     ExternalArrivalSample,
     ExternalInterval,
@@ -371,14 +372,15 @@ def parse_workload_definition(value, deployment, *, base_path=None):
     allowed_top_level = {
         "request_classes",
         "load_forecast",
+        "sizing_policy",
         "communication_latency",
         "service_blocking_times",
     }
     if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
-            "workload must contain request_classes and may contain load_forecast "
-            "communication_latency, and service_blocking_times; arrival rates "
-            "come from the measurement package."
+            "workload must contain request_classes and may contain load_forecast, "
+            "sizing_policy, communication_latency, and service_blocking_times; "
+            "arrival rates come from the measurement package."
         )
     if "request_classes" not in value:
         raise ValueError("workload is missing request_classes.")
@@ -676,6 +678,29 @@ def parse_workload_definition(value, deployment, *, base_path=None):
         raise ValueError(
             "load_forecast.multipliers must be unique and strictly increasing."
         )
+    raw_sizing_policy = value.get(
+        "sizing_policy",
+        {
+            "maximum_capacity_utilization": (
+                DEFAULT_MAXIMUM_CAPACITY_UTILIZATION
+            )
+        },
+    )
+    if not isinstance(raw_sizing_policy, Mapping) or set(raw_sizing_policy) != {
+        "maximum_capacity_utilization"
+    }:
+        raise ValueError(
+            "sizing_policy must contain exactly maximum_capacity_utilization."
+        )
+    maximum_capacity_utilization = _finite(
+        raw_sizing_policy["maximum_capacity_utilization"],
+        "sizing_policy.maximum_capacity_utilization",
+        positive=True,
+    )
+    if maximum_capacity_utilization >= 1.0:
+        raise ValueError(
+            "sizing_policy.maximum_capacity_utilization must be less than one."
+        )
     communication_latency = None
     if "communication_latency" in value:
         raw_communication = value["communication_latency"]
@@ -742,6 +767,7 @@ def parse_workload_definition(value, deployment, *, base_path=None):
         load_forecast_multipliers=multipliers,
         communication_latency=communication_latency,
         service_blocking_times=service_blocking_times,
+        maximum_capacity_utilization=maximum_capacity_utilization,
     )
 
 

@@ -5,14 +5,18 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
+from metrics import (
+    FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD,
+    minimum_zero_failure_replications,
+)
 from native_backend import SIMULATOR_SEMANTICS_VERSION
 
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
 
-CALIBRATION_PROFILE_VERSION = 9
+CALIBRATION_PROFILE_VERSION = 10
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
 MEAN_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-mean-bootstrap-v1"
 
@@ -31,7 +35,7 @@ class CalibrationOptions:
     warmup_required_stable_windows: int = 3
     warmup_relative_tolerance: float = 0.05
     warmup_sensitivity_tolerance: float = 0.10
-    warmup_max_horizon_doublings: int = 8
+    warmup_max_horizon_doublings: int = 10
     warmup_max_validation_rounds: int = 1
     warmup_max_validation_horizon_extensions: int = 2
     warmup_max_buckets_per_series: int = 262_144
@@ -41,7 +45,7 @@ class CalibrationOptions:
     minimum_eligible_samples_per_class: int = 20_000
     minimum_nonempty_replications_per_class: int = 20
     measurement_duration_safety_factor: float = 1.20
-    measurement_max_doublings: int = 3
+    measurement_max_doublings: int = 6
     relative_ci_half_width_target: float = 0.05
     absolute_ci_half_width_target: float = 0.01
     measurement_stability_tolerance: float = 0.05
@@ -215,7 +219,7 @@ class CalibrationProfile:
     latency_slo_kind: str = "percentile"
     request_class_failure_rate_slos: tuple[tuple[str, float], ...] = ()
     failure_rate_confidence_interval_method: str = (
-        "independent-replication-empirical-bernstein-v1"
+        FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD
     )
 
     @property
@@ -432,7 +436,7 @@ class CalibrationProfile:
             len({name for name, _ in self.request_class_failure_rate_slos})
             != failure_class_count
             or any(
-                not name or not math.isfinite(slo) or not 0.0 <= slo < 1.0
+                not name or not math.isfinite(slo) or not 0.0 < slo < 1.0
                 for name, slo in self.request_class_failure_rate_slos
             )
             or not {name for name, _ in self.request_class_failure_rate_slos}.issubset(
@@ -442,14 +446,40 @@ class CalibrationProfile:
             raise CalibrationProfileMismatchError(
                 "Profile request-class terminal-failure-rate SLOs are invalid."
             )
-        if self.failure_rate_confidence_interval_method != (
-            "independent-replication-empirical-bernstein-v1"
+        if not 0 < self.overall_alpha < 1:
+            raise CalibrationProfileMismatchError("Profile overall alpha is invalid.")
+        if (
+            self.failure_rate_confidence_interval_method
+            != FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD
         ):
             raise CalibrationProfileMismatchError(
                 "Unsupported terminal-failure-rate confidence-interval method."
             )
-        if not 0 < self.overall_alpha < 1:
-            raise CalibrationProfileMismatchError("Profile overall alpha is invalid.")
+        constraint_count = class_count + failure_class_count
+        sequential_tail_alpha = self.overall_alpha / (
+            2 * self.maximum_sequential_looks * constraint_count
+        )
+        final_tail_alpha = self.overall_alpha / (2 * constraint_count)
+        for request_class, slo in self.request_class_failure_rate_slos:
+            try:
+                required_optimization = minimum_zero_failure_replications(
+                    slo,
+                    sequential_tail_alpha,
+                )
+                required_final = minimum_zero_failure_replications(
+                    slo,
+                    final_tail_alpha,
+                )
+            except ValueError as error:
+                raise CalibrationProfileMismatchError(str(error)) from error
+            if (
+                self.maximum_optimization_replications < required_optimization
+                or self.final_validation_replication_count < required_final
+            ):
+                raise CalibrationProfileMismatchError(
+                    "Replication policy cannot certify the terminal-failure-rate "
+                    f"SLO for {request_class!r}, even with zero observed failures."
+                )
         constraint_count = class_count + failure_class_count
         tail_alpha = self.overall_alpha / (
             2 * self.maximum_sequential_looks * constraint_count
@@ -616,7 +646,7 @@ class CalibrationProfile:
             failure_rate_confidence_interval_method=str(
                 value.get(
                     "failure_rate_confidence_interval_method",
-                    "independent-replication-empirical-bernstein-v1",
+                    FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD,
                 )
             ),
         )
@@ -987,6 +1017,52 @@ def experiment_fingerprints(system):
                 communication_latency.unplaced_cross_node_probability
             ),
         }
+    placement_model = getattr(
+        system,
+        "get_simulation_placement_model",
+        lambda: None,
+    )()
+    if placement_model is not None:
+        node_names = tuple(sorted(placement_model["placement"]))
+        topology["simulation_placement_model"] = {
+            "nodes": [
+                {
+                    "name": node_name,
+                    "service_replica_counts": [
+                        {
+                            "service": service.get_name(),
+                            "replicas": int(
+                                placement_model["placement"][node_name][
+                                    service.get_name()
+                                ]
+                            ),
+                        }
+                        for service in services
+                    ],
+                    "execution_time_multiplier": float(
+                        placement_model["execution_time_multipliers"][node_name]
+                    ),
+                }
+                for node_name in node_names
+            ],
+            "communication_latency_seconds": [
+                {
+                    "source": source,
+                    "destinations": [
+                        {
+                            "destination": destination,
+                            "seconds": float(
+                                placement_model["communication_latency_seconds"][
+                                    source
+                                ][destination]
+                            ),
+                        }
+                        for destination in node_names
+                    ],
+                }
+                for source in node_names
+            ],
+        }
     return _fingerprint(topology), _fingerprint(workload)
 
 
@@ -1009,10 +1085,94 @@ def _normalize_configuration(configuration, service_count, label):
     return configuration
 
 
+def validate_timeout_failure_rate_constraints(
+    system,
+    latency_slo_classes,
+    failure_rate_slos=None,
+):
+    """Require an explicit failure policy when a sizing SLO has a deadline."""
+    latency_slo_classes = {str(name) for name in latency_slo_classes}
+    if failure_rate_slos is None:
+        failure_rate_slos = getattr(
+            system,
+            "get_request_class_failure_rate_slos",
+            lambda: {},
+        )()
+    failure_rate_classes = {str(name) for name in failure_rate_slos}
+    timeouts = getattr(
+        system,
+        "get_request_class_end_to_end_timeouts",
+        lambda: {},
+    )()
+    missing = tuple(
+        sorted(
+            request_class
+            for request_class in latency_slo_classes
+            if float(timeouts.get(request_class, 0.0)) > 0.0
+            and request_class not in failure_rate_classes
+        )
+    )
+    if missing:
+        raise ValueError(
+            "Latency-SLO request classes with an end-to-end timeout must "
+            "declare maximum_terminal_failure_rate; missing: "
+            + ", ".join(missing)
+            + "."
+        )
+    return None
+
+
+def validate_failure_rate_replication_policy(
+    options,
+    latency_slo_classes,
+    failure_rate_slos,
+):
+    """Fail before simulation when the configured run cap cannot prove an SLO."""
+    latency_slo_classes = tuple(str(name) for name in latency_slo_classes)
+    failure_rate_slos = {
+        str(name): float(slo) for name, slo in failure_rate_slos.items()
+    }
+    if not failure_rate_slos:
+        return None
+    constraint_count = len(latency_slo_classes) + len(failure_rate_slos)
+    sequential_tail_alpha = options.overall_alpha / (
+        2 * options.maximum_sequential_looks * constraint_count
+    )
+    final_tail_alpha = options.overall_alpha / (2 * constraint_count)
+    deficiencies = []
+    for request_class, slo in sorted(failure_rate_slos.items()):
+        required_optimization = minimum_zero_failure_replications(
+            slo,
+            sequential_tail_alpha,
+        )
+        required_final = minimum_zero_failure_replications(
+            slo,
+            final_tail_alpha,
+        )
+        if (
+            options.maximum_optimization_replications < required_optimization
+            or options.final_validation_replications < required_final
+        ):
+            deficiencies.append(
+                f"{request_class}: maximum optimization replications >= "
+                f"{required_optimization}, final validation replications >= "
+                f"{required_final}"
+            )
+    if deficiencies:
+        raise ValueError(
+            "The replication policy cannot certify the declared terminal-failure-"
+            "rate SLO even if every observed request succeeds. Required minima: "
+            + "; ".join(deficiencies)
+            + "."
+        )
+    return None
+
+
 def build_calibration_profile(
     system,
     *,
     maximum_configuration,
+    minimum_configuration=None,
     request_class_slos,
     warmup_duration,
     measurement_duration,
@@ -1029,7 +1189,13 @@ def build_calibration_profile(
     options = options or CalibrationOptions()
     service_count = len(system.get_services())
     minimum = _normalize_configuration(
-        system.get_minimum_stable_replicas(), service_count, "minimum configuration"
+        (
+            system.get_minimum_stable_replicas()
+            if minimum_configuration is None
+            else minimum_configuration
+        ),
+        service_count,
+        "minimum configuration",
     )
     maximum = _normalize_configuration(
         maximum_configuration, service_count, "maximum configuration"
@@ -1064,9 +1230,19 @@ def build_calibration_profile(
             "Terminal-failure-rate SLOs must belong to latency-SLO request classes."
         )
     if any(
-        not math.isfinite(slo) or not 0.0 <= slo < 1.0 for _, slo in failure_rate_slos
+        not math.isfinite(slo) or not 0.0 < slo < 1.0 for _, slo in failure_rate_slos
     ):
-        raise ValueError("Terminal-failure-rate SLOs must be finite values in [0, 1).")
+        raise ValueError("Terminal-failure-rate SLOs must be finite values in (0, 1).")
+    validate_timeout_failure_rate_constraints(
+        system,
+        slo_classes,
+        dict(failure_rate_slos),
+    )
+    validate_failure_rate_replication_policy(
+        options,
+        slo_classes,
+        dict(failure_rate_slos),
+    )
     if latency_slo_kind not in {"mean", "percentile"}:
         raise ValueError("latency_slo_kind must be mean or percentile.")
     if not math.isfinite(warmup_duration) or warmup_duration < 0:

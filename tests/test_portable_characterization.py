@@ -84,6 +84,14 @@ def test_measurement_contract_freezes_cross_cluster_counter_semantics():
     assert contract["optional_capacity_envelope"]["sample_unit"] == (
         "independent_fixed_replica_load_test_run"
     )
+    assert contract["statistically_controlled_stability_floor"]["headroom"] == {
+        "input": "workload.sizing_policy.maximum_capacity_utilization",
+        "default": 0.85,
+        "meaning": (
+            "maximum confidence-bounded offered-load ratio against measured "
+            "healthy capacity"
+        ),
+    }
     assert (
         "no automatic linear"
         in contract["optional_capacity_envelope"]["replica_scaling"]
@@ -140,6 +148,53 @@ def test_workload_rejects_a_separate_arrival_rate_override():
     workload["total_external_arrival_rate_rps"] = 40.0
 
     with pytest.raises(ValueError, match="arrival rates come from the measurement"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            workload,
+            _loaded_yaml("measurements.yaml"),
+            base_path=EXAMPLE,
+        )
+
+
+def test_workload_parses_capacity_utilization_policy_and_fingerprints_it():
+    default_inputs = _inputs()
+    workload = _loaded_yaml("workload.yaml")
+    workload["sizing_policy"] = {"maximum_capacity_utilization": 0.70}
+
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("deployment.yaml"),
+        workload,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+
+    assert default_inputs.workload.maximum_capacity_utilization == pytest.approx(0.85)
+    assert inputs.workload.maximum_capacity_utilization == pytest.approx(0.70)
+    assert inputs.fingerprint != default_inputs.fingerprint
+
+
+@pytest.mark.parametrize("value", [0.0, 1.0, -0.1, 1.1, "not-a-number"])
+def test_workload_rejects_invalid_capacity_utilization_policy(value):
+    workload = _loaded_yaml("workload.yaml")
+    workload["sizing_policy"] = {"maximum_capacity_utilization": value}
+
+    with pytest.raises(ValueError, match="maximum_capacity_utilization"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("deployment.yaml"),
+            workload,
+            _loaded_yaml("measurements.yaml"),
+            base_path=EXAMPLE,
+        )
+
+
+def test_workload_capacity_utilization_policy_rejects_unknown_fields():
+    workload = _loaded_yaml("workload.yaml")
+    workload["sizing_policy"] = {
+        "maximum_capacity_utilization": 0.80,
+        "certainty": 0.95,
+    }
+
+    with pytest.raises(ValueError, match="must contain exactly"):
         parse_portable_sizing_inputs(
             _loaded_yaml("deployment.yaml"),
             workload,

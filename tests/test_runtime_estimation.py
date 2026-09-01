@@ -63,8 +63,16 @@ def test_estimate_reports_ordinary_and_full_configured_work():
     assert result.replica_search_mode == "SCALABLE"
     assert result.placement_search_mode_at_maximum_bounds == "SCALABLE"
     assert result.workflow_search_mode == "SCALABLE"
+    assert tuple(stage.stage for stage in result.stages) == (
+        "Stage A — calibration",
+        "Stage B — replica optimization",
+        "Stage D — node placement",
+        "Stage E — placement-aware calibration",
+        "Stage C — final validation",
+    )
     assert result.measurement_duration_ceiling == pytest.approx(
-        4 * initial_measurement_duration(system, options)
+        (2 ** (options.measurement_max_doublings - 1))
+        * initial_measurement_duration(system, options)
     )
     assert all(
         stage.configured_ceiling_seconds >= stage.ordinary_planning_seconds
@@ -157,6 +165,35 @@ def test_runtime_estimate_supports_skipped_node_placement():
     assert placement.ordinary_planning_seconds == 0.0
     assert placement.configured_ceiling_seconds == 0.0
     assert placement.ordinary_work == "placement skipped"
+
+    placement_calibration = next(
+        stage for stage in result.stages if "placement-aware" in stage.stage
+    )
+    assert placement_calibration.ordinary_planning_seconds == 0.0
+    assert placement_calibration.configured_ceiling_seconds == 0.0
+    assert placement_calibration.ordinary_work == "placement skipped"
+
+
+def test_runtime_estimate_includes_fixed_placement_recalibration():
+    system, resources = _system_and_resources()
+
+    result = calculate_workflow_runtime_estimate(
+        system,
+        resources,
+        _rates(),
+        options=CalibrationOptions(),
+        maximum_replicas=10,
+        workers=8,
+    )
+
+    placement_calibration = next(
+        stage for stage in result.stages if "placement-aware" in stage.stage
+    )
+    assert placement_calibration.ordinary_planning_seconds > 0.0
+    assert placement_calibration.configured_ceiling_seconds >= (
+        placement_calibration.ordinary_planning_seconds
+    )
+    assert "fixed-placement" in placement_calibration.ordinary_work
 
 
 def test_scalable_replica_mode_caps_projected_configuration_work():

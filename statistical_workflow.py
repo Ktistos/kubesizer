@@ -13,6 +13,8 @@ from calibration import (
     save_statistical_calibration,
     save_statistical_calibration_failure,
     select_warmup_pilot_parameters,
+    validate_failure_rate_replication_policy,
+    validate_timeout_failure_rate_constraints,
     validate_profile_for_experiment,
 )
 from optimization import (
@@ -490,7 +492,10 @@ def _calibrate_one(
     diagnostics = calibration_diagnostics_summary(warmup, measurement, options)
     profile_representatives = representatives
     analytical_minimum = tuple(system.get_minimum_stable_replicas())
-    if analytical_minimum not in profile_representatives:
+    if (
+        minimum_configuration is None
+        and analytical_minimum not in profile_representatives
+    ):
         profile_representatives = (
             analytical_minimum,
             *profile_representatives,
@@ -498,6 +503,7 @@ def _calibrate_one(
     profile = build_calibration_profile(
         system,
         maximum_configuration=maximum,
+        minimum_configuration=minimum_configuration,
         request_class_slos=request_class_slos,
         warmup_duration=warmup.global_warmup,
         measurement_duration=measurement.global_measurement_duration,
@@ -527,6 +533,7 @@ def calibrate(
     maximum_replicas,
     options=None,
     workers=1,
+    minimum_configuration=None,
     extra_representative_configurations=(),
     report_directory=None,
     progress_callback=None,
@@ -545,15 +552,93 @@ def calibrate(
             )
     if not request_class_slos:
         raise ValueError("Simulation calibration requires at least one latency SLO.")
+    validate_timeout_failure_rate_constraints(
+        system,
+        request_class_slos,
+    )
+    validate_failure_rate_replication_policy(
+        options,
+        request_class_slos,
+        getattr(system, "get_request_class_failure_rate_slos", lambda: {})(),
+    )
     return _calibrate_one(
         system,
         request_class_slos=request_class_slos,
         maximum_replicas=maximum_replicas,
         options=options,
         workers=workers,
+        minimum_configuration=minimum_configuration,
         extra_representative_configurations=extra_representative_configurations,
         report_directory=report_directory,
         progress_callback=progress_callback,
+        latency_slo_kind=latency_slo_kind,
+    )
+
+
+def calibrate_fixed_placement(
+    system,
+    configuration,
+    *,
+    request_class_slos=None,
+    options=None,
+    workers=1,
+    report_directory=None,
+    progress_callback=None,
+):
+    """Calibrate W and M for one placement-aware final-validation candidate."""
+    options = options or CalibrationOptions()
+    configuration = _maximum_configuration(system, tuple(configuration))
+    placement_model = getattr(
+        system,
+        "get_simulation_placement_model",
+        lambda: None,
+    )()
+    if placement_model is None:
+        raise ValueError("Fixed-placement calibration requires an attached placement.")
+    service_names = tuple(
+        service.get_name()
+        for service in sorted(
+            system.get_services().values(),
+            key=lambda service: service.get_id(),
+        )
+    )
+    placed_configuration = tuple(
+        sum(
+            placement_model["placement"][node][service_name]
+            for node in placement_model["node_names"]
+        )
+        for service_name in service_names
+    )
+    if placed_configuration != configuration:
+        raise ValueError(
+            "Attached placement replica totals do not match the final configuration."
+        )
+    system.configure_system_replicas(configuration)
+    declared_kind = _declared_latency_slo_kind(system)
+    latency_slo_kind = declared_kind or "percentile"
+    if request_class_slos is None:
+        request_class_slos = _workload_simulation_limits(system)
+    elif declared_kind in {"mean", "percentile"}:
+        declared_limits = _workload_simulation_limits(system)
+        if dict(request_class_slos) != declared_limits:
+            raise ValueError(
+                "Explicit simulation SLOs must match those declared by the workload."
+            )
+    validate_timeout_failure_rate_constraints(system, request_class_slos)
+    validate_failure_rate_replication_policy(
+        options,
+        request_class_slos,
+        getattr(system, "get_request_class_failure_rate_slos", lambda: {})(),
+    )
+    return _calibrate_one(
+        system,
+        request_class_slos=request_class_slos,
+        maximum_replicas=configuration,
+        options=options,
+        workers=workers,
+        report_directory=report_directory,
+        progress_callback=progress_callback,
+        minimum_configuration=configuration,
         latency_slo_kind=latency_slo_kind,
     )
 
@@ -763,6 +848,7 @@ def optimize_with_analytical_model(
     mode=OptimizationMode.AUTO,
     exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     scalable_options=None,
+    minimum_configuration=None,
     initial_configuration=None,
     replica_costs=None,
     structural_feasibility=None,
@@ -774,7 +860,9 @@ def optimize_with_analytical_model(
     model. SCALABLE (also accepted as APPROXIMATE) is a budgeted heuristic.
     With no declared mean SLO, the stable vector is the capacity target. Neither
     mode estimates p95 latency or provides statistical SLO evidence.
-    ``initial_configuration`` seeds scalable construction only.
+    ``minimum_configuration`` is a hard lower bound and must itself be at or
+    above analytical stability. ``initial_configuration`` seeds scalable
+    construction only.
     """
     declared_kind = _declared_latency_slo_kind(system)
     declared_timeouts = getattr(
@@ -816,6 +904,7 @@ def optimize_with_analytical_model(
         system,
         request_class_mean_latency_limits,
         maximum_replicas,
+        minimum_configuration=minimum_configuration,
         initial_configuration=initial_configuration,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,

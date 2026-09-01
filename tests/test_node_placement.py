@@ -12,6 +12,7 @@ from optimization import (
     ScalablePlacementSearchOptions,
     optimize_node_placement,
 )
+from performance_models import Cluster
 
 
 class FakeEdge:
@@ -239,6 +240,34 @@ def build_problem_for_system(system, node_latencies):
     return NodePlacementProblem(FakeCluster(system, nodes))
 
 
+def test_cluster_capacity_metadata_is_optional_for_unconstrained_placement():
+    system = FakeSystem({"api": {"gamma": 1.0, "replicas": 1}})
+    cluster = Cluster(
+        "capacity-free",
+        {
+            "nodes": [
+                {
+                    "name": "node-a",
+                    "communication_latency_seconds": {"node-b": 0.001},
+                },
+                {
+                    "name": "node-b",
+                    "communication_latency_seconds": {"node-a": 0.001},
+                },
+            ]
+        },
+        system,
+    )
+    problem = NodePlacementProblem(cluster)
+
+    evaluation = problem.evaluate(
+        {"node-a": {"api": 1}, "node-b": {"api": 0}}
+    )
+
+    assert evaluation.valid is True
+    assert evaluation.resource_feasibility_checked is False
+
+
 def brute_force_optimum(problem):
     """Small-instance oracle kept in tests, not as a production optimizer."""
     feasible = tuple(
@@ -304,6 +333,38 @@ def test_derives_edge_traffic_from_synchronous_call_graph():
 
     assert problem.get_service_arrival_rates() == {"api": 10.0, "worker": 20.0}
     assert problem.get_edge_traffic_rates() == {("api", "worker"): 20.0}
+    assert problem.get_communication_traffic_rates() == {
+        ("api", "worker"): 20.0,
+        ("worker", "api"): 20.0,
+    }
+
+
+def test_synchronous_call_placement_cost_includes_response_network_leg():
+    system = FakeCallGraphSystem(
+        {
+            "api": {"gamma": 10.0, "replicas": 1},
+            "worker": {"gamma": 0.0, "replicas": 1},
+        }
+    )
+    problem = build_problem_for_system(
+        system,
+        {
+            "node-a": {"node-b": 0.001, "node-c": 0.020},
+            "node-b": {"node-a": 0.100, "node-c": 0.010},
+            "node-c": {"node-a": 0.020, "node-b": 0.010},
+        },
+    )
+
+    asymmetric = problem.evaluate(
+        {"node-a": {"api": 1}, "node-b": {"worker": 1}}
+    )
+    balanced = problem.evaluate(
+        {"node-a": {"api": 1}, "node-c": {"worker": 1}}
+    )
+
+    assert asymmetric.network_cost_raw == pytest.approx(20.0 * (0.001 + 0.100))
+    assert balanced.network_cost_raw == pytest.approx(20.0 * (0.020 + 0.020))
+    assert balanced.total_cost < asymmetric.total_cost
 
 
 def test_visit_only_workload_does_not_invent_placement_edges():

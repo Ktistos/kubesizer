@@ -113,6 +113,37 @@ def test_public_calibrate_runs_warmup_then_measurement_and_freezes_profile(monke
     )
 
 
+def test_fixed_placement_calibration_uses_only_the_selected_configuration(
+    monkeypatch,
+):
+    system = make_system()
+    system.configure_system_replicas((2,))
+    system.configure_simulation_placement(
+        placement={"node-a": {"api": 2}},
+        communication_latency_seconds={"node-a": {"node-a": 0.0}},
+    )
+    expected = object()
+    observed = {}
+
+    def calibrate_one(selected_system, **kwargs):
+        observed.update(kwargs)
+        assert selected_system is system
+        return expected
+
+    monkeypatch.setattr(statistical_workflow, "_calibrate_one", calibrate_one)
+
+    result = statistical_workflow.calibrate_fixed_placement(
+        system,
+        (2,),
+        request_class_slos={"checkout": 1.0},
+        options=options(),
+    )
+
+    assert result is expected
+    assert observed["minimum_configuration"] == (2,)
+    assert observed["maximum_replicas"] == (2,)
+
+
 def test_global_warmup_bucket_budget_scales_down_for_large_topologies():
     large_system = SimpleNamespace(
         get_services=lambda: {str(index): object() for index in range(20)}
@@ -144,6 +175,37 @@ def test_public_calibrate_defaults_to_workload_p95_slos(monkeypatch):
 
     assert result is expected
     assert captured["request_class_slos"] == {"checkout": 1.75}
+
+
+def test_public_calibrate_passes_a_statistical_stability_floor(monkeypatch):
+    system = make_system()
+    captured = {}
+
+    def fake_calibrate_one(selected, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(statistical_workflow, "_calibrate_one", fake_calibrate_one)
+
+    statistical_workflow.calibrate(
+        system,
+        request_class_slos={"checkout": 1.0},
+        maximum_replicas=3,
+        minimum_configuration=(2,),
+    )
+
+    assert captured["minimum_configuration"] == (2,)
+
+
+def test_public_analytical_optimization_respects_a_statistical_floor():
+    result = statistical_workflow.optimize_with_analytical_model(
+        make_system(),
+        request_class_mean_latency_limits={},
+        maximum_replicas=3,
+        minimum_configuration=(2,),
+    )
+
+    assert result.configuration == (2,)
 
 
 def test_simulation_calibration_accepts_workload_mean_slos(monkeypatch):

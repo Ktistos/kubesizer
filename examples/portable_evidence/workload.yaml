@@ -10,6 +10,12 @@ request_classes:
     end_to_end_latency_slos:
       mean_seconds: 0.25
 
+# Engineering headroom for the confidence-bounded stability floor. This is a
+# capacity ratio, not observed CPU utilization. Lower values require at least
+# as many replicas and reserve more capacity for variation.
+sizing_policy:
+  maximum_capacity_utilization: 0.85
+
 # Optional, inferred only from a low-load aligned observation after subtracting
 # CPU execution, modeled downstream response, and communication round trips.
 # It releases CPU but retains one configured service-concurrency slot.

@@ -286,6 +286,41 @@ def test_unknown_removal_prevents_deletion_local_certificate():
     assert result.unresolved_lower_cost_states == ((1, 1),)
 
 
+def test_vns_improvement_does_not_inherit_previous_local_certificate():
+    def status(configuration):
+        if configuration == (1, 1):
+            return "INCONCLUSIVE"
+        if configuration == (2, 1):
+            return "STATISTICALLY_INFEASIBLE"
+        return "STATISTICALLY_FEASIBLE"
+
+    def rank(current, candidate):
+        changed = next(
+            index
+            for index, (left, right) in enumerate(zip(current, candidate))
+            if left != right
+        )
+        return 10.0 if changed == 0 else 1.0
+
+    problem = FunctionalReplicaProblem(
+        stable=(1, 1),
+        maximum=(3, 2),
+        status=status,
+        rank=rank,
+    )
+    result = ScalableReplicaOptimizer(
+        maximum_configuration_evaluations=20,
+        candidate_width=1,
+        maximum_restarts=1,
+        maximum_vns_neighborhood=1,
+        random_seed=7,
+    ).optimize(problem)
+
+    assert result.configuration == (1, 2)
+    assert not result.deletion_local_certified
+    assert result.unresolved_lower_cost_states == ((1, 1),)
+
+
 def test_stable_vector_weighted_cost_cache_and_seed_are_reproducible():
     def make():
         return FunctionalReplicaProblem(

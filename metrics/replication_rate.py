@@ -2,6 +2,11 @@ import math
 from dataclasses import dataclass
 
 
+FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD = (
+    "independent-replication-kl-hoeffding-v1"
+)
+
+
 @dataclass(frozen=True)
 class IndependentReplicationRateInterval:
     """Distribution-free interval for a mean rate across independent runs."""
@@ -19,11 +24,71 @@ class IndependentReplicationRateInterval:
     upper_bound: float
     half_width: float
     per_tail_alpha: float
-    method: str = "independent-replication-empirical-bernstein-v1"
+    method: str = FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD
 
     @property
     def slo_margin(self):
         return self.slo - self.upper_bound
+
+
+def minimum_zero_failure_replications(slo, per_tail_alpha):
+    """Return runs needed for a zero-observation KL-Hoeffding upper bound."""
+    slo = float(slo)
+    per_tail_alpha = float(per_tail_alpha)
+    if not math.isfinite(slo) or not 0.0 < slo < 1.0:
+        raise ValueError(
+            "A certifiable failure-rate SLO must lie strictly between zero and one."
+        )
+    if not math.isfinite(per_tail_alpha) or not 0.0 < per_tail_alpha < 0.5:
+        raise ValueError("per_tail_alpha must lie strictly between zero and 0.5.")
+    return max(
+        2,
+        math.ceil(math.log(per_tail_alpha) / math.log1p(-slo)),
+    )
+
+
+def _binary_relative_entropy(observed, candidate):
+    if observed == 0.0:
+        return -math.log1p(-candidate)
+    if observed == 1.0:
+        return -math.log(candidate)
+    return (
+        observed * math.log(observed / candidate)
+        + (1.0 - observed)
+        * math.log((1.0 - observed) / (1.0 - candidate))
+    )
+
+
+def _kl_hoeffding_bounds(observed, count, per_tail_alpha):
+    target = math.log(1.0 / per_tail_alpha) / count
+    if observed == 0.0:
+        lower = 0.0
+        upper = 1.0 - math.exp(-target)
+        return lower, upper
+    if observed == 1.0:
+        lower = math.exp(-target)
+        upper = 1.0
+        return lower, upper
+
+    low = 0.0
+    high = observed
+    for _ in range(80):
+        middle = (low + high) / 2.0
+        if _binary_relative_entropy(observed, middle) > target:
+            low = middle
+        else:
+            high = middle
+    lower = high
+
+    low = observed
+    high = 1.0
+    for _ in range(80):
+        middle = (low + high) / 2.0
+        if _binary_relative_entropy(observed, middle) > target:
+            high = middle
+        else:
+            low = middle
+    return lower, low
 
 
 def independent_replication_rate_interval(
@@ -36,8 +101,10 @@ def independent_replication_rate_interval(
     """Bound the expected per-run failure fraction without iid-request claims.
 
     Each nonempty replication contributes one bounded observation in ``[0, 1]``.
-    The empirical-Bernstein radius is deliberately nonzero when every observed
-    run has zero failures; ordinary resampling cannot reveal an unseen event.
+    Inverting the Bernoulli-KL form of Hoeffding's inequality gives a finite-
+    sample, distribution-free bound for independent bounded replication rates.
+    It remains nonzero when every observed run has zero failures, but is much
+    tighter than the previous additive empirical-Bernstein correction.
     """
 
     clusters = tuple(tuple(cluster) for cluster in failure_clusters)
@@ -48,8 +115,10 @@ def independent_replication_rate_interval(
         for cluster in clusters
     ):
         raise ValueError("Failure clusters must contain only binary outcomes.")
-    if not math.isfinite(float(slo)) or not 0.0 <= float(slo) < 1.0:
-        raise ValueError("Failure-rate SLO must be finite and lie in [0, 1).")
+    if not math.isfinite(float(slo)) or not 0.0 < float(slo) < 1.0:
+        raise ValueError(
+            "Failure-rate SLO must be finite and lie strictly between zero and one."
+        )
     if (
         not math.isfinite(float(per_tail_alpha))
         or not 0.0 < float(per_tail_alpha) < 0.5
@@ -66,19 +135,13 @@ def independent_replication_rate_interval(
     )
     count = len(rates)
     estimate = sum(rates) / count
-    variance = sum((value - estimate) ** 2 for value in rates) / (count - 1)
-
-    # Maurer-Pontil empirical-Bernstein form for independent observations
-    # bounded to [0, 1].  Using delta=2*per_tail_alpha gives a simultaneous
-    # two-sided interval under the caller's two-tail Bonferroni allocation.
-    log_term = math.log(1.0 / float(per_tail_alpha))
-    radius = math.sqrt(2.0 * variance * log_term / count) + (
-        7.0 * log_term / (3.0 * (count - 1))
-    )
     total = sum(len(cluster) for cluster in nonempty)
     failed = sum(sum(bool(value) for value in cluster) for cluster in nonempty)
-    lower = max(0.0, estimate - radius)
-    upper = min(1.0, estimate + radius)
+    lower, upper = _kl_hoeffding_bounds(
+        estimate,
+        count,
+        float(per_tail_alpha),
+    )
     return IndependentReplicationRateInterval(
         request_class=str(request_class),
         slo=float(slo),

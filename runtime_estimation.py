@@ -607,6 +607,87 @@ def calculate_workflow_runtime_estimate(
         * ordinary_measurement_calibration_bootstrap_work
     )
 
+    # A simulation workflow with node placement must calibrate the selected
+    # fixed placement before fresh final validation because communication
+    # latency and node execution multipliers change the simulator semantics.
+    # The fixed-placement profile has one representative configuration.
+    if resources is None:
+        placement_calibration_seconds = 0.0
+        ordinary_placement_calibration_seconds = 0.0
+    else:
+        fixed_warmup_work = 0.0
+        fixed_starting_horizon = parameters.pilot_horizon
+        for _ in range(options.warmup_max_validation_horizon_extensions + 1):
+            fixed_warmup_work += (
+                options.warmup_replications
+                * batch_horizon_factor
+                * fixed_starting_horizon
+            )
+            fixed_accepted_horizon = fixed_starting_horizon * (2**doubling_count)
+            fixed_warmup_work += (
+                options.warmup_validation_replications
+                * options.warmup_max_validation_rounds
+                * fixed_accepted_horizon
+            )
+            fixed_starting_horizon = fixed_accepted_horizon * 2.0
+        fixed_measurement_work = options.measurement_calibration_replications * sum(
+            warmup_duration_ceiling + duration + options.maximum_drain_time
+            for duration in measurement_study_durations
+        )
+        fixed_bootstrap_work = (
+            options.measurement_calibration_replications
+            * len(system.get_request_classes())
+            * sum(measurement_analysis_durations)
+        )
+        placement_calibration_seconds = (
+            _parallel_runtime(
+                rates.warmup_seconds_per_replication_time_unit,
+                fixed_warmup_work,
+                workers,
+            )
+            + _parallel_runtime(
+                rates.measurement_seconds_per_replication_time_unit,
+                fixed_measurement_work,
+                workers,
+            )
+            + rates.bootstrap_seconds_per_replication_time_unit_per_class
+            * fixed_bootstrap_work
+        )
+        fixed_ordinary_warmup_work = (
+            options.warmup_replications
+            * ordinary_batch_horizon_factor
+            * parameters.pilot_horizon
+            + options.warmup_validation_replications
+            * options.warmup_max_validation_rounds
+            * ordinary_validation_horizon
+        )
+        fixed_ordinary_measurement_work = (
+            options.measurement_calibration_replications
+            * sum(
+                ordinary_warmup_duration + duration
+                for duration in ordinary_measurement_study_durations
+            )
+        )
+        fixed_ordinary_bootstrap_work = (
+            options.measurement_calibration_replications
+            * len(system.get_request_classes())
+            * sum(ordinary_measurement_analysis_durations)
+        )
+        ordinary_placement_calibration_seconds = (
+            _parallel_runtime(
+                rates.warmup_seconds_per_replication_time_unit,
+                fixed_ordinary_warmup_work,
+                workers,
+            )
+            + _parallel_runtime(
+                rates.measurement_seconds_per_replication_time_unit,
+                fixed_ordinary_measurement_work,
+                workers,
+            )
+            + rates.bootstrap_seconds_per_replication_time_unit_per_class
+            * fixed_ordinary_bootstrap_work
+        )
+
     replica_configuration_count = math.prod(
         high - low + 1 for low, high in zip(minimum, maximum)
     )
@@ -835,19 +916,6 @@ def calculate_workflow_runtime_estimate(
             ),
         ),
         StageRuntimeEstimate(
-            stage="Stage C — final validation",
-            ordinary_planning_seconds=ordinary_final_seconds * safety_factor,
-            configured_ceiling_seconds=final_seconds * safety_factor,
-            ordinary_work=(
-                f"one configuration with {options.final_validation_replications} "
-                "fresh replications and ordinary draining"
-            ),
-            ceiling_work=(
-                f"the same fixed replications plus the full "
-                f"{options.maximum_drain_time:g}-unit drain allowance"
-            ),
-        ),
-        StageRuntimeEstimate(
             stage="Stage D — node placement",
             ordinary_planning_seconds=(ordinary_placement_seconds * safety_factor),
             configured_ceiling_seconds=placement_seconds * safety_factor,
@@ -876,6 +944,41 @@ def calculate_workflow_runtime_estimate(
                         "complete evaluations"
                     )
                 )
+            ),
+        ),
+        StageRuntimeEstimate(
+            stage="Stage E — placement-aware calibration",
+            ordinary_planning_seconds=(
+                ordinary_placement_calibration_seconds * safety_factor
+            ),
+            configured_ceiling_seconds=(
+                placement_calibration_seconds * safety_factor
+            ),
+            ordinary_work=(
+                "placement skipped"
+                if resources is None
+                else "one fixed-placement warm-up and measurement campaign"
+            ),
+            ceiling_work=(
+                "placement skipped"
+                if resources is None
+                else (
+                    "the selected placement with all configured warm-up and "
+                    "measurement extensions"
+                )
+            ),
+        ),
+        StageRuntimeEstimate(
+            stage="Stage C — final validation",
+            ordinary_planning_seconds=ordinary_final_seconds * safety_factor,
+            configured_ceiling_seconds=final_seconds * safety_factor,
+            ordinary_work=(
+                f"one configuration with {options.final_validation_replications} "
+                "fresh replications and ordinary draining"
+            ),
+            ceiling_work=(
+                f"the same fixed replications plus the full "
+                f"{options.maximum_drain_time:g}-unit drain allowance"
             ),
         ),
     )

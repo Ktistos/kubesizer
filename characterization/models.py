@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,6 +11,7 @@ if TYPE_CHECKING:
 
 
 MEASUREMENT_METHODOLOGY_VERSION = "prometheus-istio-kubernetes-v1"
+DEFAULT_MAXIMUM_CAPACITY_UTILIZATION = 0.85
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ class WorkloadDefinition:
     load_forecast_multipliers: tuple[float, ...] = (1.0,)
     communication_latency: object | None = None
     service_blocking_times: tuple[tuple[str, object], ...] = ()
+    maximum_capacity_utilization: float = DEFAULT_MAXIMUM_CAPACITY_UTILIZATION
 
     @property
     def maximum_load_multiplier(self):
@@ -320,13 +323,124 @@ class DeploymentCharacterization:
 @dataclass(frozen=True)
 class SizingPolicy:
     target_cpu_utilization: float = 0.65
-    empirical_capacity_utilization: float = 0.85
+    empirical_capacity_utilization: float = DEFAULT_MAXIMUM_CAPACITY_UTILIZATION
     cpu_demand_quantile: float = 0.90
     demand_uncertainty_multiplier: float = 1.10
     minimum_measurement_windows: int = 3
     maximum_accepted_throttling_ratio: float = 0.05
     capacity_confidence_level: float = 0.95
     minimum_capacity_runs_per_replica: int = 3
+
+
+class StabilityFloorStatus(str, Enum):
+    """Evidence status for a statistically controlled replica floor."""
+
+    CONFIDENCE_BOUNDED_STABLE = "CONFIDENCE_BOUNDED_STABLE"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    OUTSIDE_REPLICA_BOUNDS = "OUTSIDE_REPLICA_BOUNDS"
+
+
+class StatisticalStabilityError(RuntimeError):
+    """Raised when evidence cannot establish the requested stability floor."""
+
+
+@dataclass(frozen=True)
+class CapacityPointConfidenceBound:
+    """One-sided per-replica capacity bound at one tested replica count."""
+
+    replicas: int
+    healthy_run_count: int
+    completed_rates_rps_per_replica: tuple[float, ...]
+    mean_completed_rate_rps_per_replica: float
+    lower_bound_rps_per_replica: float
+    confidence_level: float
+
+
+@dataclass(frozen=True)
+class ServiceStabilityAssessment:
+    """Evidence used to choose the stable lower bound for one service."""
+
+    service: str
+    status: StabilityFloorStatus
+    analytical_minimum_replicas: int
+    maximum_replicas: int
+    required_replicas: int | None
+    arrival_rate_samples_rps: tuple[float, ...]
+    arrival_rate_mean_rps: float | None
+    arrival_rate_upper_bound_rps: float | None
+    capacity_bounds: tuple[CapacityPointConfidenceBound, ...]
+    service_rate_lower_bound_rps_per_replica: float | None
+    usable_service_rate_lower_bound_rps_per_replica: float | None
+    stability_margin_lower_bound_rps: float | None
+    limiting_reason: str | None
+    warnings: tuple[str, ...]
+
+    @property
+    def confidence_bounded_capacity_utilization(self):
+        """Return the conservative offered-load ratio at the selected floor."""
+        if self.arrival_rate_upper_bound_rps == 0.0:
+            return 0.0
+        if (
+            self.required_replicas is None
+            or self.arrival_rate_upper_bound_rps is None
+            or self.service_rate_lower_bound_rps_per_replica is None
+            or self.service_rate_lower_bound_rps_per_replica <= 0.0
+        ):
+            return None
+        return self.arrival_rate_upper_bound_rps / (
+            self.required_replicas
+            * self.service_rate_lower_bound_rps_per_replica
+        )
+
+
+@dataclass(frozen=True)
+class StatisticalStabilityFloor:
+    """Joint-confidence lower replica bound for one measured workload.
+
+    ``CONFIDENCE_BOUNDED_STABLE`` is conditional on the declared workload
+    envelope, independent observation-window/run assumptions, and the
+    per-replica capacity-scaling model.  It is not a proof against arbitrary
+    future traffic or hidden shared-resource changes.
+    """
+
+    input_fingerprint: str
+    method: str
+    status: StabilityFloorStatus
+    overall_confidence_level: float
+    individual_bound_confidence_level: float
+    multiplicity_correction: str
+    maximum_capacity_utilization: float
+    analytical_minimum_configuration: tuple[int, ...]
+    minimum_stable_configuration: tuple[int, ...] | None
+    maximum_configuration: tuple[int, ...]
+    services: tuple[ServiceStabilityAssessment, ...]
+    assumptions: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+    @property
+    def configuration(self):
+        if self.minimum_stable_configuration is None:
+            raise StatisticalStabilityError(
+                "The evidence did not establish a confidence-bounded stable "
+                "configuration."
+            )
+        return self.minimum_stable_configuration
+
+    def assert_confidence_bounded_stable(self):
+        if self.status != StabilityFloorStatus.CONFIDENCE_BOUNDED_STABLE:
+            details = "; ".join(
+                f"{service.service}: {service.limiting_reason}"
+                for service in self.services
+                if service.status != StabilityFloorStatus.CONFIDENCE_BOUNDED_STABLE
+            )
+            raise StatisticalStabilityError(
+                "No statistically controlled stability floor was established"
+                + (f" ({details})" if details else ".")
+            )
+
+    def assert_robustly_stable(self):
+        """Backward-compatible alias for the explicitly conditional check."""
+        self.assert_confidence_bounded_stable()
 
 
 @dataclass(frozen=True)

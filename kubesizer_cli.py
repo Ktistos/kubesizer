@@ -24,8 +24,8 @@ import yaml  # type: ignore[import-untyped]
 from calibration import CalibrationOptions
 from characterization import (
     build_characterized_system_variants,
+    estimate_statistical_stability_floor,
     load_and_prepare_initial_sizing,
-    recommendation_initial_configuration,
 )
 from optimization import (
     NodePlacementProblem,
@@ -36,6 +36,7 @@ from optimization import (
 from performance_models import Cluster, QueueingNetworkType, System
 from statistical_workflow import (
     calibrate,
+    calibrate_fixed_placement,
     optimize_with_analytical_model,
     optimize_with_calibrated_simulation,
     validate_final_configuration,
@@ -143,25 +144,21 @@ def _load_workflow_system(args):
             key=lambda item: item.get_id(),
         )
     )
-    initial_configuration = recommendation_initial_configuration(
-        plan.recommendation,
-        service_order,
+    stability_floor = estimate_statistical_stability_floor(
+        plan.inputs,
+        plan.characterization,
+        analytical_minimum=system.get_minimum_stable_replicas(),
+        maximum_configuration=(args.max_replicas,) * len(service_order),
+        service_order=service_order,
     )
-    service_resource_requests = {
-        service.name: {
-            "cpu_request_millicores": int(
-                round(service.cpu_request_cores * 1000.0)
-            ),
-            "memory_request_bytes": int(service.memory_request_bytes or 0),
-        }
-        for service in plan.inputs.deployment.services
-    }
-    return (
-        system,
-        workload_path,
-        initial_configuration,
-        service_resource_requests,
-    )
+    stability_floor.assert_confidence_bounded_stable()
+    minimum_configuration = stability_floor.configuration
+    # The statistically controlled floor is both the hard lower bound and the
+    # construction start.  All further replica additions must therefore be
+    # justified by the selected latency/SLO evaluator, rather than inherited
+    # from a separate utilization-based sizing heuristic.
+    initial_configuration = minimum_configuration
+    return system, workload_path, initial_configuration, minimum_configuration
 
 
 def _resources_or_skip(
@@ -189,6 +186,53 @@ def _resources_or_skip(
         "status": "PENDING",
         "resources_file": str(path),
     }
+
+
+def _validate_analytical_placement(system, placement_model):
+    """Reject a placed analytical recommendation that no longer meets its SLOs."""
+    multipliers = tuple(
+        float(value)
+        for value in placement_model.get("execution_time_multipliers", {}).values()
+    )
+    if any(
+        not math.isclose(value, 1.0, rel_tol=0.0, abs_tol=1e-12)
+        for value in multipliers
+    ):
+        raise CliUsageError(
+            "Analytical replica evaluation cannot certify node execution-time "
+            "multipliers. Use --replica-evaluation simulation or supply unit "
+            "multipliers."
+        )
+    system.configure_simulation_placement(**placement_model)
+    limits = getattr(
+        system,
+        "get_request_class_mean_latency_limits",
+        lambda: {},
+    )()
+    if not limits:
+        return None
+    means = system.get_request_class_mean_latencies()
+    violations = tuple(
+        sorted(
+            (
+                request_class,
+                float(means[request_class]),
+                float(limit),
+            )
+            for request_class, limit in limits.items()
+            if float(means[request_class]) > float(limit)
+        )
+    )
+    if violations:
+        details = "; ".join(
+            f"{request_class}: mean {mean:.6g}s > SLO {limit:.6g}s"
+            for request_class, mean, limit in violations
+        )
+        raise RuntimeError(
+            "The selected node placement invalidates analytical mean-latency "
+            f"feasibility ({details}). No recommendation was emitted."
+        )
+    return None
 
 
 def _calibration_options(args: argparse.Namespace) -> CalibrationOptions:
@@ -219,6 +263,7 @@ class _ConciseProgressReporter:
         "replica_sizing": "Stage B — replica optimization",
         "validation": "Stage C — final validation",
         "placement": "Stage D — node placement",
+        "placement_calibration": "Stage E — placement-aware calibration",
     }
 
     _STAGE_EVENTS = {
@@ -235,6 +280,11 @@ class _ConciseProgressReporter:
         "placement_search_started": "placement",
         "placement_search_progress": "placement",
         "placement_search_completed": "placement",
+        "placement_calibration_started": "placement_calibration",
+        "placement_calibration_pilot_started": "placement_calibration",
+        "placement_calibration_validation_started": "placement_calibration",
+        "placement_calibration_measurement_started": "placement_calibration",
+        "placement_calibration_completed": "placement_calibration",
     }
 
     _COMPLETION_EVENTS = {
@@ -242,6 +292,7 @@ class _ConciseProgressReporter:
         "replica_optimization_completed",
         "final_validation_completed",
         "placement_search_completed",
+        "placement_calibration_completed",
     }
 
     def __init__(
@@ -563,6 +614,38 @@ class _ConciseProgressReporter:
             return self._coarse_search_progress("placement", details)
         if event == "placement_search_completed":
             return "placement", "Node placement complete.", None
+        if event == "placement_calibration_started":
+            return (
+                "placement_calibration",
+                "Calibrating the selected placement.",
+                None,
+            )
+        if event == "placement_calibration_pilot_started":
+            horizon = self._number(details.get("simulation_horizon"))
+            return (
+                "placement_calibration",
+                f"Placement calibration: testing warm-up horizon {horizon}.",
+                None,
+            )
+        if event == "placement_calibration_validation_started":
+            return (
+                "placement_calibration",
+                "Placement calibration: validating warm-up.",
+                None,
+            )
+        if event == "placement_calibration_measurement_started":
+            duration = self._number(details.get("simulation_duration"))
+            return (
+                "placement_calibration",
+                f"Placement calibration: testing measurement duration {duration}.",
+                None,
+            )
+        if event == "placement_calibration_completed":
+            return (
+                "placement_calibration",
+                "Placement-aware calibration complete.",
+                None,
+            )
         return None
 
     def __call__(self, event, details):
@@ -605,6 +688,26 @@ def _notify_progress(args, event, details=None):
         callback(event, details or {})
 
 
+def _placement_calibration_progress_callback(args):
+    callback = _progress_callback(args)
+    if callback is None:
+        return None
+    event_mapping = {
+        "pilot_batch_started": "placement_calibration_pilot_started",
+        "validation_started": "placement_calibration_validation_started",
+        "measurement_trajectories_started": (
+            "placement_calibration_measurement_started"
+        ),
+    }
+
+    def report(event, details):
+        translated = event_mapping.get(event)
+        if translated is not None:
+            callback(translated, details)
+
+    return report
+
+
 def _prepare_runtime_reporting(
     system,
     resources,
@@ -623,6 +726,8 @@ def _prepare_runtime_reporting(
     expected_stages.append("replica_sizing")
     if resources is not None:
         expected_stages.append("placement")
+        if evaluation_mode == ReplicaEvaluationMode.SIMULATION:
+            expected_stages.append("placement_calibration")
     if evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         expected_stages.append("validation")
     reporter.configure_workflow(expected_stages)
@@ -682,12 +787,13 @@ def _service_recommendations(system, configuration, placement=None):
     return recommendations
 
 
-def _run_calibration(system, args):
+def _run_calibration(system, args, *, minimum_configuration=None):
     result = calibrate(
         system,
         maximum_replicas=args.max_replicas,
         options=_calibration_options(args),
         workers=args.workers,
+        minimum_configuration=minimum_configuration,
         progress_callback=_progress_callback(args),
     )
     _notify_progress(args, "calibration_completed")
@@ -699,6 +805,7 @@ def _run_replica_workflow(
     args,
     replica_mode,
     initial_configuration=None,
+    minimum_configuration=None,
 ):
     evaluation_mode = ReplicaEvaluationMode(args.replica_evaluation.upper())
     kind = system.get_request_class_latency_slo_kind()
@@ -742,12 +849,17 @@ def _run_replica_workflow(
             system,
             maximum_replicas=args.max_replicas,
             mode=replica_mode,
+            minimum_configuration=minimum_configuration,
             initial_configuration=initial_configuration,
             progress_callback=_progress_callback(args),
         )
         return result, None, None
 
-    profile = _run_calibration(system, args)
+    profile = _run_calibration(
+        system,
+        args,
+        minimum_configuration=minimum_configuration,
+    )
     result = optimize_with_calibrated_simulation(
         system,
         profile,
@@ -774,7 +886,7 @@ def _command_run(args):
         system,
         _,
         initial_configuration,
-        measured_resource_requests,
+        minimum_configuration,
     ) = _load_workflow_system(args)
     if args.replica_evaluation == "simulation":
         compatibility_check = getattr(
@@ -807,6 +919,7 @@ def _command_run(args):
         args,
         replica_mode,
         initial_configuration,
+        minimum_configuration,
     )
     if validation is not None and not validation.passed:
         reason = getattr(validation, "failure_reason", None)
@@ -816,25 +929,10 @@ def _command_run(args):
         )
     selected_placement = None
     if resources is not None:
-        service_resource_requests = (
-            measured_resource_requests
-            if measured_resource_requests is not None
-            else resources.get("service_resource_requests")
-        )
-        if service_resource_requests is None:
-            raise CliUsageError(
-                "Node placement requires CPU and memory requests for every "
-                "service. Supply service_resource_requests in the resources "
-                "file, use portable --deployment evidence, or pass "
-                "--skip-placement."
-            )
         system.configure_system_replicas(result.configuration)
         cluster = Cluster("cli-cluster", resources, system)
         placement_result = optimize_node_placement(
-            NodePlacementProblem(
-                cluster,
-                service_resource_requests=service_resource_requests,
-            ),
+            NodePlacementProblem(cluster),
             mode=placement_mode,
             progress_callback=_progress_callback(args),
         )
@@ -843,9 +941,20 @@ def _command_run(args):
             "placement",
             placement_result.configuration,
         )
+        placement_model = cluster.simulation_placement_model(selected_placement)
         if _profile is not None:
-            placement_model = cluster.simulation_placement_model(selected_placement)
             system.configure_simulation_placement(**placement_model)
+            _notify_progress(args, "placement_calibration_started")
+            _profile = calibrate_fixed_placement(
+                system,
+                result.configuration,
+                options=_calibration_options(args),
+                workers=args.workers,
+                progress_callback=_placement_calibration_progress_callback(args),
+            )
+            _notify_progress(args, "placement_calibration_completed")
+        else:
+            _validate_analytical_placement(system, placement_model)
     if _profile is not None and validation is None:
         validation = validate_final_configuration(
             system,

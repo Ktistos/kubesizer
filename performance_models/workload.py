@@ -997,10 +997,11 @@ def _parse_request_classes(
                     "maximum_terminal_failure_rate"
                 ),
             )
-            if failure_rate >= 1.0:
+            if failure_rate <= 0.0 or failure_rate >= 1.0:
                 raise ValueError(
                     f"request_classes.{request_class_name}."
-                    "maximum_terminal_failure_rate must be less than one."
+                    "maximum_terminal_failure_rate must be greater than zero "
+                    "and less than one."
                 )
             if end_to_end_timeouts[request_class_name] <= 0.0:
                 raise ValueError(

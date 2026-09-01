@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from .models import MEASUREMENT_METHODOLOGY_VERSION
+from .models import (
+    DEFAULT_MAXIMUM_CAPACITY_UTILIZATION,
+    MEASUREMENT_METHODOLOGY_VERSION,
+)
 
 
 def measurement_methodology_contract():
@@ -124,8 +127,9 @@ def measurement_methodology_contract():
                 "healthy",
             ],
             "healthy_semantics": (
-                "the run met its predeclared latency, error, scheduler-delay, "
-                "and stationarity gates"
+                "the run tracked offered throughput with bounded backlog and met "
+                "predeclared error, scheduler-delay, and stationarity gates; any "
+                "latency safety ceiling is distinct from the optimizer's target SLO"
             ),
             "statistical_bound": (
                 "one-sided Student-t lower confidence bound over complete runs"
@@ -133,6 +137,40 @@ def measurement_methodology_contract():
             "replica_scaling": (
                 "bounded by observed replica count; no automatic linear "
                 "per-replica extrapolation"
+            ),
+        },
+        "statistically_controlled_stability_floor": {
+            "arrival_bound": (
+                "one-sided Student-t upper confidence bound over complete "
+                "aligned workload windows"
+            ),
+            "capacity_bound": (
+                "one-sided Student-t lower confidence bound over independent "
+                "healthy capacity runs, normalized per replica"
+            ),
+            "multiplicity": (
+                "Bonferroni over every service-arrival and tested-capacity bound"
+            ),
+            "rule": "replicas * usable_capacity_lower_bound > arrival_upper_bound",
+            "headroom": {
+                "input": "workload.sizing_policy.maximum_capacity_utilization",
+                "default": DEFAULT_MAXIMUM_CAPACITY_UTILIZATION,
+                "meaning": (
+                    "maximum confidence-bounded offered-load ratio against "
+                    "measured healthy capacity"
+                ),
+            },
+            "unobserved_replica_counts": (
+                "explicitly labelled conditional extrapolation using the worst "
+                "bounded per-replica rate seen at tested counts"
+            ),
+            "failure_semantics": (
+                "missing evidence or a floor above the configured bounds is "
+                "reported; analytical stability is not substituted as proof"
+            ),
+            "separation_from_slo": (
+                "the floor screens capacity stability; request-class SLO "
+                "feasibility remains a later analytical or simulation decision"
             ),
         },
         "application_cpu": {

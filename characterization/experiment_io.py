@@ -14,7 +14,7 @@ import json
 import math
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from .quality import ObservedExperimentReplication
 

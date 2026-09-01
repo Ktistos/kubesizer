@@ -204,6 +204,52 @@ def test_attached_placement_matrix_overrides_unplaced_network_mixture():
     )
 
 
+def test_routing_transition_uses_one_way_analytical_and_simulated_delay():
+    workload = {
+        "request_classes": {
+            "request": {
+                "concurrency_weight": 1.0,
+                "routing": {"api": {"db": 1.0}},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {
+                    "api": {"distribution": "deterministic", "rate": 0.5}
+                }
+            },
+            "service_times": {
+                service: {"distribution": "deterministic", "mean": 0.1}
+                for service in ("api", "db")
+            },
+        },
+    }
+    system = System("placed-routing", workload, QueueingNetworkType.OPEN)
+    system.configure_simulation_placement(
+        placement={
+            "node-a": {"api": 1, "db": 0},
+            "node-b": {"api": 0, "db": 1},
+        },
+        communication_latency_seconds={
+            "node-a": {"node-b": 0.02},
+            "node-b": {"node-a": 0.03},
+        },
+    )
+
+    replication = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=2.5,
+        seeds=(8005,),
+    )[0]
+
+    assert replication.request_class_latencies["request"] == pytest.approx((0.22,))
+    assert system.get_request_class_mean_latencies()["request"] == pytest.approx(
+        system.solve().get_mean_latencies()[0]
+        + system.solve().get_mean_latencies()[1]
+        + 0.02
+    )
+
+
 def test_attached_placement_can_preserve_measured_same_node_delay():
     system = System("same-node-placed", _call_workload(), QueueingNetworkType.OPEN)
     system.configure_simulation_placement(

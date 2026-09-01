@@ -9,6 +9,8 @@ from scripts.validate_richer_simulation import (
     _client_means_by_request_class,
     _leaf_blocking_lognormal,
     _observed_class_rates,
+    _simulate_model,
+    _solve_analytical_model,
     build_characterized_models,
 )
 
@@ -115,6 +117,25 @@ def test_characterization_builds_distinct_baseline_and_blocking_models():
     ] < 0.01
 
 
+def test_characterization_separates_sizing_policy_from_queueing_models():
+    workload, measurement, cohort, config = _fixture()
+    workload["sizing_policy"] = {"maximum_capacity_utilization": 0.80}
+
+    models, diagnostics = build_characterized_models(
+        workload,
+        measurement,
+        cohort,
+        config,
+    )
+
+    assert all("sizing_policy" not in model for model in models.values())
+    assert diagnostics["sizing_policy_metadata"] == {
+        "maximum_capacity_utilization": 0.80
+    }
+    assert diagnostics["sizing_policy_applied_to_model_evaluation"] is False
+    assert workload["sizing_policy"] == {"maximum_capacity_utilization": 0.80}
+
+
 def test_lognormal_blocking_fit_preserves_residual_mean_and_median():
     specification = _leaf_blocking_lognormal(0.025, 0.015, 0.005)
 
@@ -208,3 +229,37 @@ def test_legacy_multiclass_evidence_rejects_ambiguous_operation_names():
         _client_means_by_request_class(config, cohort)
     with pytest.raises(ValueError, match="class-specific arrival count"):
         _observed_class_rates(config, cohort)
+
+
+def test_model_prediction_reports_mean_and_p95_from_the_same_replications():
+    workload, _measurement, _cohort, _config = _fixture()
+
+    result = _simulate_model(
+        workload,
+        (1,),
+        seeds=(101, 102, 103),
+        workers=1,
+        warmup_duration=1.0,
+        measurement_duration=10.0,
+        bootstrap_resamples=1_000,
+        bootstrap_seed=999,
+    )
+
+    assert result["intervals"]["request"] == result["statistics"]["request"][
+        "mean"
+    ]
+    assert result["statistics"]["request"]["p95"]["estimate"] >= result[
+        "statistics"
+    ]["request"]["mean"]["estimate"]
+
+
+def test_analytical_prediction_reports_mean_without_inventing_p95():
+    workload, _measurement, _cohort, _config = _fixture()
+
+    result = _solve_analytical_model(workload, (1,))
+
+    assert result["evaluation_method"] == "ANALYTICAL_MEAN_POINT_ESTIMATE"
+    assert set(result["statistics"]["request"]) == {"mean"}
+    assert "p95" not in result["statistics"]["request"]
+    assert result["statistics"]["request"]["mean"]["lower_bound"] is None
+    assert result["uncertainty_limitation"]

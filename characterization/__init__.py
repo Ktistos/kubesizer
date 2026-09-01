@@ -12,6 +12,7 @@ from .latency import (
 from .models import (
     AlignedInputWindow,
     CapacityEnvelopePoint,
+    CapacityPointConfidenceBound,
     DeploymentCharacterization,
     DeploymentSpec,
     ExternalRequestClassCharacterization,
@@ -26,6 +27,10 @@ from .models import (
     ServiceSizingRecommendation,
     SimulationWorkloadVariant,
     SizingPolicy,
+    StabilityFloorStatus,
+    StatisticalStabilityFloor,
+    StatisticalStabilityError,
+    ServiceStabilityAssessment,
     TargetRequestClass,
     UncertaintyDimension,
     WorkloadDefinition,
@@ -70,11 +75,13 @@ from .sizing import (
     recommend_initial_replicas,
     recommendation_initial_configuration,
 )
+from .stability import estimate_statistical_stability_floor
 from .workflow import load_and_prepare_initial_sizing, prepare_initial_sizing
 
 __all__ = [
     "AlignedInputWindow",
     "CapacityEnvelopePoint",
+    "CapacityPointConfidenceBound",
     "ClosedLoopExperimentAdapter",
     "ClosedLoopExperimentOptions",
     "DeploymentCharacterization",
@@ -102,8 +109,12 @@ __all__ = [
     "ServiceDeployment",
     "ServiceSizingRecommendation",
     "ServiceSizingRisk",
+    "ServiceStabilityAssessment",
     "SimulationWorkloadVariant",
     "SizingPolicy",
+    "StabilityFloorStatus",
+    "StatisticalStabilityFloor",
+    "StatisticalStabilityError",
     "TargetRequestClass",
     "UncertaintyDimension",
     "WorkloadDefinition",
@@ -115,6 +126,7 @@ __all__ = [
     "communication_latency_from_round_trip_probes",
     "decompose_aligned_latency_means",
     "estimate_low_load_service_blocking_time",
+    "estimate_statistical_stability_floor",
     "evaluate_closed_loop_recommendation",
     "load_and_prepare_initial_sizing",
     "load_observed_experiment_replication",

@@ -191,6 +191,47 @@ def test_replica_changes_do_not_change_experiment_fingerprints():
     ) is profile
 
 
+def test_attached_placement_timing_invalidates_unplaced_profile():
+    system = make_system()
+    profile = make_profile(system)
+    system.configure_simulation_placement(
+        placement={"node-a": {"api": 1, "db": 1}},
+        communication_latency_seconds={"node-a": {"node-a": 0.0}},
+        execution_time_multipliers={"node-a": 3.0},
+    )
+
+    with pytest.raises(CalibrationProfileMismatchError, match="topology"):
+        validate_profile_for_experiment(
+            profile,
+            system,
+            request_class_slos=SLOS,
+            maximum_configuration=profile.maximum_replica_configuration,
+        )
+
+
+def test_fixed_configuration_profile_can_narrow_both_calibrated_bounds():
+    system = make_system()
+    fixed = tuple(value + 1 for value in system.get_minimum_stable_replicas())
+
+    profile = build_calibration_profile(
+        system,
+        minimum_configuration=fixed,
+        maximum_configuration=fixed,
+        request_class_slos=SLOS,
+        warmup_duration=20.0,
+        measurement_duration=100.0,
+        measurement_duration_candidates=(50.0, 100.0, 200.0),
+        warmup_bucket_width=0.5,
+        representative_configurations=(fixed,),
+        calibration_diagnostics={"fixed": True},
+        creation_timestamp="2026-08-11T12:00:00+00:00",
+    )
+
+    assert profile.minimum_replica_configuration == fixed
+    assert profile.maximum_replica_configuration == fixed
+    assert profile.representative_configurations == (fixed,)
+
+
 def test_profile_rejects_insufficient_bootstrap_tail_resolution():
     profile = make_profile()
     inadequate = replace(profile, bootstrap_resample_count=10)

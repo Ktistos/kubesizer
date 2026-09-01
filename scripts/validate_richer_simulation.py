@@ -51,6 +51,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from metrics.cluster_bootstrap import (  # noqa: E402
     fixed_experiment_tail_alpha,
     replication_cluster_bootstrap_mean,
+    replication_cluster_bootstrap_p95,
 )
 from performance_models import QueueingNetworkType, System  # noqa: E402
 
@@ -60,6 +61,7 @@ MODEL_TELEMETRY = "telemetry_cpu_blocking"
 MODEL_TELEMETRY_BOTTLENECK = "telemetry_cpu_blocking_declared_bottleneck"
 MODEL_TELEMETRY_VARIABILITY = "telemetry_blocking_fitted_variability"
 MODEL_ORACLE = "oracle_occupancy_blocking"
+ANALYTICAL_MODEL_PREFIX = "analytical::"
 MODEL_NAMES = (
     MODEL_BASELINE,
     MODEL_TELEMETRY,
@@ -201,6 +203,23 @@ def _set_class_rates(workload, class_rates, interarrival_specs=None):
             entries[service] = specification
 
 
+def _queueing_model_document(workload):
+    """Separate experiment/sizing metadata from the System input contract."""
+    if not isinstance(workload, dict):
+        raise TypeError("A workload must be a mapping.")
+    required = {"request_classes", "traffic_model"}
+    missing = required - set(workload)
+    if missing:
+        raise ValueError(f"Queueing workload is missing {sorted(missing)}.")
+    unsupported = set(workload) - required - {"sizing_policy"}
+    if unsupported:
+        raise ValueError(
+            "Queueing workload contains unsupported experiment metadata: "
+            f"{sorted(unsupported)}."
+        )
+    return {name: copy.deepcopy(workload[name]) for name in sorted(required)}
+
+
 def _service_response_means(measurement):
     return {
         service: float(evidence["istio_response_time_ms"]["mean"]) / 1000.0
@@ -308,6 +327,8 @@ def build_characterized_models(
     blocking_concurrency_by_service=None,
 ):
     """Return baseline, telemetry, and oracle models plus diagnostics."""
+    sizing_policy = copy.deepcopy(base_workload.get("sizing_policy"))
+    base_workload = _queueing_model_document(base_workload)
     class_rates = _observed_class_rates(config, cohort)
     characterization_workload = copy.deepcopy(base_workload)
     _set_class_rates(characterization_workload, class_rates)
@@ -372,7 +393,12 @@ def build_characterized_models(
                 else {}
             )
 
-    diagnostics = {"services": {}, "request_classes": {}}
+    diagnostics = {
+        "services": {},
+        "request_classes": {},
+        "sizing_policy_metadata": sizing_policy,
+        "sizing_policy_applied_to_model_evaluation": False,
+    }
     for request_class in telemetry["request_classes"]:
         diagnostics["request_classes"][request_class] = {
             "client_mean_seconds": client_means[request_class],
@@ -548,7 +574,9 @@ def _simulate_model(
     if not system.solve().get_stability():
         return {
             "classification": "ANALYTICALLY_UNSTABLE",
+            "evaluation_method": "NATIVE_EVENT_SIMULATION",
             "intervals": {},
+            "statistics": {},
         }
     replications = system.simulate_measurement_replications(
         warmup_duration=warmup_duration,
@@ -559,6 +587,7 @@ def _simulate_model(
     )
     tail = fixed_experiment_tail_alpha(0.05, len(slos))
     intervals = {}
+    p95_intervals = {}
     for offset, (request_class, slo) in enumerate(slos.items()):
         interval = replication_cluster_bootstrap_mean(
             tuple(
@@ -578,9 +607,85 @@ def _simulate_model(
             "upper_bound": float(interval.upper_bound),
             "eligible_request_count": interval.eligible_request_count,
         }
+        p95_interval = replication_cluster_bootstrap_p95(
+            tuple(
+                replication.request_class_latencies[request_class]
+                for replication in replications
+            ),
+            request_class=request_class,
+            slo=slo,
+            resample_count=bootstrap_resamples,
+            seed=bootstrap_seed + 100_000 + offset,
+            lower_tail_probability=tail,
+            upper_tail_probability=1.0 - tail,
+        )
+        p95_intervals[request_class] = {
+            "estimate": float(p95_interval.estimate),
+            "lower_bound": float(p95_interval.lower_bound),
+            "upper_bound": float(p95_interval.upper_bound),
+            "eligible_request_count": p95_interval.eligible_request_count,
+        }
     return {
         "classification": _classification(intervals, slos),
+        "evaluation_method": "NATIVE_EVENT_SIMULATION",
         "intervals": intervals,
+        "statistics": {
+            request_class: {
+                "mean": intervals[request_class],
+                "p95": p95_intervals[request_class],
+            }
+            for request_class in intervals
+        },
+    }
+
+
+def _solve_analytical_model(model, configuration):
+    """Evaluate analytical mean latency without fabricating tail uncertainty."""
+
+    system = System("retained-analytical-validation", model, QueueingNetworkType.OPEN)
+    system.configure_system_replicas(configuration)
+    slos = {
+        request_class: float(
+            model["request_classes"][request_class]["end_to_end_latency_slos"][
+                "mean_seconds"
+            ]
+        )
+        for request_class in model["request_classes"]
+    }
+    metrics = system.solve()
+    if not metrics.get_stability():
+        return {
+            "classification": "ANALYTICALLY_UNSTABLE",
+            "evaluation_method": "ANALYTICAL_MEAN_POINT_ESTIMATE",
+            "intervals": {},
+            "statistics": {},
+        }
+    estimates = system.get_request_class_mean_latencies()
+    intervals = {
+        request_class: {
+            "estimate": float(estimate),
+            "lower_bound": None,
+            "upper_bound": None,
+            "eligible_request_count": None,
+        }
+        for request_class, estimate in estimates.items()
+    }
+    return {
+        "classification": (
+            "FEASIBLE"
+            if all(intervals[name]["estimate"] <= slos[name] for name in slos)
+            else "INFEASIBLE"
+        ),
+        "evaluation_method": "ANALYTICAL_MEAN_POINT_ESTIMATE",
+        "intervals": intervals,
+        "statistics": {
+            request_class: {"mean": interval}
+            for request_class, interval in intervals.items()
+        },
+        "uncertainty_limitation": (
+            "Analytical means are point estimates; no p95 or model-error "
+            "confidence interval is implied."
+        ),
     }
 
 

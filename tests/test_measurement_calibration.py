@@ -124,6 +124,14 @@ def test_initial_duration_uses_slowest_required_external_class():
     ) == pytest.approx(20.0)
 
 
+def test_initial_duration_ignores_unrequested_diagnostic_classes():
+    assert initial_measurement_duration(
+        make_system(read_gamma=10.0, rare_gamma=0.001),
+        options(target_samples_per_class=2_000),
+        request_classes=("read",),
+    ) == pytest.approx(200.0)
+
+
 def test_calibration_stops_after_first_accepted_duration_pair():
     system = FakeMeasurementSystem(make_system(), {"read": 20, "rare": 20})
     minimum = tuple(system.get_minimum_stable_replicas())

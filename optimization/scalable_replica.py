@@ -390,14 +390,15 @@ class MultiStartReplicaVNSOptimizer(Optimizer):
         problem,
         incumbent,
         incumbent_evaluation,
+        incumbent_certified,
         stable,
         rng,
         restart,
         record,
     ):
         if not hasattr(problem, "maximum_configuration"):
-            return incumbent, incumbent_evaluation, False, False
-        certified = False
+            return incumbent, incumbent_evaluation, incumbent_certified, False
+        certified = incumbent_certified
         unknown_seen = False
         q = 1
         failures = 0
@@ -541,12 +542,13 @@ class MultiStartReplicaVNSOptimizer(Optimizer):
                 problem,
                 candidate,
                 evaluation,
+                local,
                 stable,
                 rng,
                 restart,
                 record,
             )
-            local = local or vns_local
+            local = vns_local
             candidate_rank = (
                 self._cost(problem, candidate),
                 self._slack(evaluation),

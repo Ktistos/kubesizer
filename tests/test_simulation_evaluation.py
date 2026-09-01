@@ -176,6 +176,17 @@ def test_declared_terminal_failure_rate_is_an_independent_constraint():
     assert result.sequential_tail_alpha == pytest.approx(0.05 / (2 * 1 * 2))
 
 
+def test_impossible_failure_rate_replication_policy_fails_before_simulation():
+    system = make_system()
+
+    with pytest.raises(ValueError, match="Required minima"):
+        make_profile(
+            system,
+            options=make_options(),
+            failure_rate_slos={"checkout": 0.01},
+        )
+
+
 def test_configuration_evaluation_reports_sequential_batch_progress():
     system = make_system()
     profile = make_profile(system)

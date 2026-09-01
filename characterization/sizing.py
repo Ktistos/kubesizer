@@ -82,6 +82,17 @@ def _policy_fingerprint(policy):
     ).hexdigest()
 
 
+def resolve_sizing_policy(inputs, policy=None):
+    """Use an explicit API policy or the utilization declared by the workload."""
+    if policy is not None:
+        return policy
+    return SizingPolicy(
+        empirical_capacity_utilization=(
+            inputs.workload.maximum_capacity_utilization
+        )
+    )
+
+
 def recommend_initial_replicas(inputs, characterization, *, policy=None):
     """Return a conservative, idempotent starting vector rather than an optimum.
 
@@ -89,7 +100,7 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
     intentionally combined with ``max``. Missing evidence never produces an
     optimistic zero-replica constraint.
     """
-    policy = policy or SizingPolicy()
+    policy = resolve_sizing_policy(inputs, policy)
     _validate_policy(policy)
     if characterization.input_fingerprint != inputs.fingerprint:
         raise ValueError("Characterization belongs to a different evidence package.")

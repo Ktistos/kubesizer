@@ -1,41 +1,16 @@
 nodes:
   - name: skube01
     execution_time_multiplier: 1.0
-    allocatable_cpu_millicores: 15800
-    allocatable_memory_bytes: 17179869184
     communication_latency_seconds:
       skube02: 0.0012
       skube03: 0.0015
   - name: skube02
     execution_time_multiplier: 1.0
-    allocatable_cpu_millicores: 12400
-    allocatable_memory_bytes: 12884901888
     communication_latency_seconds:
       skube01: 0.0014
       skube03: 0.0009
   - name: skube03
     execution_time_multiplier: 1.0
-    allocatable_cpu_millicores: 19600
-    allocatable_memory_bytes: 25769803776
     communication_latency_seconds:
       skube01: 0.0010
       skube02: 0.0009
-
-# Kubernetes resource requests consumed by one replica. Placement is rejected
-# when these are absent because node CPU/memory feasibility cannot be checked.
-service_resource_requests:
-  api:
-    cpu_request_millicores: 500
-    memory_request_bytes: 536870912
-  auth:
-    cpu_request_millicores: 250
-    memory_request_bytes: 268435456
-  db:
-    cpu_request_millicores: 1000
-    memory_request_bytes: 2147483648
-  cache:
-    cpu_request_millicores: 250
-    memory_request_bytes: 536870912
-  worker:
-    cpu_request_millicores: 500
-    memory_request_bytes: 1073741824

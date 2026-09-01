@@ -128,6 +128,11 @@ def test_terminal_failure_rate_slo_requires_a_deadline_and_is_fingerprinted():
     with pytest.raises(ValueError, match="less than one"):
         parse_workload_spec(invalid)
 
+    zero = copy.deepcopy(workload)
+    zero["request_classes"]["request"]["maximum_terminal_failure_rate"] = 0.0
+    with pytest.raises(ValueError, match="greater than zero"):
+        parse_workload_spec(zero)
+
 
 def test_single_model_workload_requires_explicit_concurrency_weights():
     workload = {

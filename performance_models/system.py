@@ -1214,12 +1214,27 @@ class System:
 
     def get_strict_analytical_incompatibilities(self):
         """Return declared semantics not certified by the analytical model."""
+        incompatibilities = []
         if any(self.__request_class_service_blocking_time_specs.values()):
-            return (
+            incompatibilities.append(
                 "per-visit non-CPU blocking time occupies finite service "
-                "concurrency after CPU work completes",
+                "concurrency after CPU work completes"
             )
-        return ()
+        held_concurrency_sources = sorted(
+            {
+                source
+                for call_graph in self.__request_class_call_graphs.values()
+                for source, targets in call_graph.items()
+                if targets
+                and self.__service_concurrency_limits_per_replica[source] is not None
+            }
+        )
+        if held_concurrency_sources:
+            incompatibilities.append(
+                "synchronous downstream calls hold finite parent concurrency "
+                "at services " + ", ".join(held_concurrency_sources)
+            )
+        return tuple(incompatibilities)
 
     def get_request_class_fixed_latency_overheads(self):
         """Return the mean non-queueing latency for each request class."""
@@ -1669,7 +1684,7 @@ class System:
             for request_class, arrival_rates in self.__calculate_request_class_arrival_rates().items()
         }
 
-    def __mean_call_round_trip_latency(self, source_name, target_name):
+    def __mean_one_way_latency(self, source_name, target_name):
         placement = self.__simulation_placement_model
         if placement is not None:
             source_counts = {
@@ -1692,24 +1707,24 @@ class System:
                         * target_count
                         / (source_total * target_total)
                     )
-                    expected += probability * (
-                        placement["communication_latency_seconds"][source_node][
-                            target_node
-                        ]
-                        + placement["communication_latency_seconds"][target_node][
-                            source_node
-                        ]
-                    )
+                    expected += probability * placement[
+                        "communication_latency_seconds"
+                    ][source_node][target_node]
             return expected
         specification = self.__communication_latency_spec
         if specification is None:
             return 0.0
         probability = specification.unplaced_cross_node_probability
-        mean_one_way = (
+        return (
             (1.0 - probability) * specification.same_node_one_way.mean
             + probability * specification.cross_node_one_way.mean
         )
-        return 2.0 * mean_one_way
+
+    def __mean_call_round_trip_latency(self, source_name, target_name):
+        return self.__mean_one_way_latency(
+            source_name,
+            target_name,
+        ) + self.__mean_one_way_latency(target_name, source_name)
 
     def __mean_request_class_network_latency(
         self,
@@ -1743,14 +1758,14 @@ class System:
             result = 0.0
             for visit in workflow:
                 result += max(0.0, visit.mean_visits - 1.0) * (
-                    self.__mean_call_round_trip_latency(
+                    self.__mean_one_way_latency(
                         visit.service,
                         visit.service,
                     )
                 )
             for source, target in zip(workflow, workflow[1:]):
                 result += min(1.0, target.mean_visits) * (
-                    self.__mean_call_round_trip_latency(
+                    self.__mean_one_way_latency(
                         source.service,
                         target.service,
                     )
@@ -1767,7 +1782,7 @@ class System:
                 if target is None or probability <= 0.0:
                     continue
                 result += source_visits * probability * (
-                    self.__mean_call_round_trip_latency(
+                    self.__mean_one_way_latency(
                         source.get_name(),
                         target.get_name(),
                     )

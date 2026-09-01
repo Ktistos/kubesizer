@@ -100,9 +100,12 @@ class NodePlacementProblem(OptimizationProblem):
         (
             self.__service_arrival_rates,
             self.__edge_traffic_rates,
+            self.__communication_traffic_rates,
             self.__total_external_arrival_rate,
         ) = self.__derive_traffic_rates()
-        self.__total_edge_traffic_rate = sum(self.__edge_traffic_rates.values())
+        self.__total_edge_traffic_rate = sum(
+            self.__communication_traffic_rates.values()
+        )
 
     def evaluate(self, configuration):
         """Validate and calculate both placement objective components."""
@@ -184,7 +187,16 @@ class NodePlacementProblem(OptimizationProblem):
         return dict(self.__service_arrival_rates)
 
     def get_edge_traffic_rates(self):
+        """Return request/call traffic in the forward service direction."""
         return dict(self.__edge_traffic_rates)
+
+    def get_communication_traffic_rates(self):
+        """Return all network legs represented by the placement objective.
+
+        Ordinary routing contributes one forward leg. Synchronous call-graph
+        traffic contributes both its outbound request and return response leg.
+        """
+        return dict(self.__communication_traffic_rates)
 
     def get_cost_weights(self):
         return dict(self.__cost_weights)
@@ -203,7 +215,7 @@ class NodePlacementProblem(OptimizationProblem):
     def get_replica_difficulty_scores(self):
         """Return deterministic construction scores; larger means harder."""
         incident = {name: 0.0 for name in self.__service_names}
-        for (source, destination), rate in self.__edge_traffic_rates.items():
+        for (source, destination), rate in self.__communication_traffic_rates.items():
             incident[source] += rate
             if destination != source:
                 incident[destination] += rate
@@ -322,7 +334,7 @@ class NodePlacementProblem(OptimizationProblem):
                 destination,
                 distributions[destination],
             )
-            for (source, destination), rate in self.__edge_traffic_rates.items()
+            for (source, destination), rate in self.__communication_traffic_rates.items()
         )
         denominator = self.__maximum_inter_node_latency * self.__total_edge_traffic_rate
         network = raw_network / denominator if denominator > 0 else 0.0
@@ -409,7 +421,7 @@ class NodePlacementProblem(OptimizationProblem):
 
         changed = set(replacements)
         raw_network_delta = 0.0
-        for (source, destination), rate in self.__edge_traffic_rates.items():
+        for (source, destination), rate in self.__communication_traffic_rates.items():
             if source not in changed and destination not in changed:
                 continue
             before = self.__distribution_pair_latency(
@@ -588,7 +600,7 @@ class NodePlacementProblem(OptimizationProblem):
         for (
             source_service,
             destination_service,
-        ), traffic_rate in self.__edge_traffic_rates.items():
+        ), traffic_rate in self.__communication_traffic_rates.items():
             source_distribution = distributions.get(source_service)
             destination_distribution = distributions.get(destination_service)
 
@@ -943,6 +955,7 @@ class NodePlacementProblem(OptimizationProblem):
             total_external_arrival_rate += float(gamma)
 
         edge_traffic_rates = {}
+        response_traffic_rates = {}
         incoming_traffic = {service_name: 0.0 for service_name in self.__service_names}
         call_graphs = (
             self.__system.get_request_class_call_graphs()
@@ -969,6 +982,11 @@ class NodePlacementProblem(OptimizationProblem):
                         edge_key = (source_name, target_name)
                         edge_traffic_rates[edge_key] = (
                             edge_traffic_rates.get(edge_key, 0.0) + traffic_rate
+                        )
+                        response_key = (target_name, source_name)
+                        response_traffic_rates[response_key] = (
+                            response_traffic_rates.get(response_key, 0.0)
+                            + traffic_rate
                         )
                         incoming_traffic[target_name] += traffic_rate
                 continue
@@ -1031,9 +1049,16 @@ class NodePlacementProblem(OptimizationProblem):
                         f"the traffic equation for service '{service_name}'."
                     )
 
+        communication_traffic_rates = dict(edge_traffic_rates)
+        for edge_key, traffic_rate in response_traffic_rates.items():
+            communication_traffic_rates[edge_key] = (
+                communication_traffic_rates.get(edge_key, 0.0) + traffic_rate
+            )
+
         return (
             arrival_rates,
             edge_traffic_rates,
+            communication_traffic_rates,
             total_external_arrival_rate,
         )
 
@@ -1167,7 +1192,7 @@ class NodePlacementProblem(OptimizationProblem):
         for (
             source_service,
             destination_service,
-        ), traffic_rate in self.__edge_traffic_rates.items():
+        ), traffic_rate in self.__communication_traffic_rates.items():
             source_replicas = self.__fixed_replicas[source_service]
             destination_replicas = self.__fixed_replicas[destination_service]
 

@@ -14,8 +14,8 @@ class Cluster:
         for node in resources["nodes"]:
             self.__nodes[node["name"]] = Node(
                 node["name"],
-                node["allocatable_cpu_millicores"],
-                node["allocatable_memory_bytes"],
+                node.get("allocatable_cpu_millicores", 0),
+                node.get("allocatable_memory_bytes", 0),
                 node["communication_latency_seconds"],
                 node.get("execution_time_multiplier", 1.0),
             )

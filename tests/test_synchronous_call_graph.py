@@ -2,6 +2,7 @@ import pytest
 
 from calibration.profile import experiment_fingerprints
 from performance_models import QueueingNetworkType, System, parse_workload_spec
+from statistical_workflow import optimize_with_analytical_model
 
 
 def _workload(
@@ -194,6 +195,21 @@ def test_blocked_parent_releases_processing_slot_but_keeps_concurrency_slot():
     assert replication.request_class_latencies["request"] == pytest.approx(
         (0.7, 0.7)
     )
+
+
+def test_strict_analytical_sizing_rejects_held_parent_concurrency():
+    system = System(
+        "held-parent-analytical",
+        _workload(call_execution="sequential"),
+        QueueingNetworkType.OPEN,
+    )
+
+    assert any(
+        "synchronous downstream calls hold finite parent concurrency" in reason
+        for reason in system.get_strict_analytical_incompatibilities()
+    )
+    with pytest.raises(ValueError, match="Use simulation replica evaluation"):
+        optimize_with_analytical_model(system, maximum_replicas=4)
 
 
 def test_non_open_call_graph_fails_before_calibration_or_optimization():

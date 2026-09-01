@@ -144,7 +144,7 @@ def request_class_external_arrival_rates(system, request_classes=None):
             request_class,
             sum(float(service.get_gamma(request_class)) for service in services),
         )
-        for request_class in system.get_request_classes()
+        for request_class in request_classes
     )
     invalid = tuple(
         name for name, rate in rates if not math.isfinite(rate) or rate <= 0

@@ -1,9 +1,13 @@
 # Independent Implementation and Experiment Audit
 
 **Repository audited:** `/home/ktistos/work/Kubesizer`  
-**Audit date:** 29 August 2026  
-**Audited branch and revision:** `feature/statistical-simulation-workflow`, commit `8113e6afa9fc0b8f865ca82eba85de5a6a464baf`  
-**Audit method:** direct source inspection, test execution, native compilation, retained-artifact analysis, and limited read-only inspection of the completed remote experiment  
+**Original audit date:** 29 August 2026
+
+**Enriched edition:** 30 August 2026
+
+**Audited branch and revision:** `feature/statistical-simulation-workflow`, base commit `6d223c154df687100e9d7023e19d674e3cc5fa17`, plus the current uncommitted audit-correction working tree
+
+**Audit method:** direct source inspection, test execution, native compilation, retained-artifact analysis, a current-semantics replay, and an earlier read-only inspection of the completed remote experiment
 **Purpose:** an evidence-based thesis-status briefing, not a project-description document
 
 ## Audit rules and status vocabulary
@@ -30,18 +34,30 @@ Kubesizer is currently a substantial research prototype with four main layers:
 3. a mandatory C++20 discrete-event simulator with a Python statistical-control layer;
 4. exact and scalable heuristic optimizers for replica sizing and node placement.
 
-The implementation is broad and its deterministic test coverage is strong: the full current suite passed **516 tests**, and **74 focused native/simulation tests** also passed with AddressSanitizer and UndefinedBehaviorSanitizer. The C++ backend compiled in both Release and sanitizer modes.
+The implementation is broad and its deterministic test coverage is strong: the full current suite passed **556 tests**, and **74 focused native/simulation tests** also passed with AddressSanitizer and UndefinedBehaviorSanitizer. The C++ backend compiled in both Release and sanitizer modes.
 
 The experimental conclusion is much narrower. The C++ implementation decision is well supported: on the frozen calibration-like benchmark it was **35.65× faster than custom Python** with a bootstrap 95% interval of **[34.82×, 36.20×]**, and a direct long-horizon run measured **31.8×** speedup. This validates the performance motivation, not the current rich simulator's predictive accuracy.
 
-Replica-sizing quality is **not yet established for general deployments**. The largest retained deployment-family study completed 405 real-cluster runs. Twelve of its 20 workload-family/load-point decisions were rejected by evidence-quality gates. Of the eight accepted decisions, six matched the smallest passing configuration in the tested set and two were underprovisioned. At the four 30-replication target-validation points, the recommendation passed for the repeated-visit and shared-multiclass families but failed for the single-service and fan-out families. Therefore the evidence supports “promising but not generally reliable,” not a universal recommendation claim.
+Replica-sizing quality is **not yet established for general deployments**. The largest evaluated deployment-family study completed 405 real-cluster runs. Twelve of its 20 workload-family/load-point decisions were rejected by evidence-quality gates. Of the eight accepted decisions, six matched the smallest passing configuration in the tested set and two were underprovisioned. At the four 30-replication target-validation points, the recommendation passed for the repeated-visit and shared-multiclass families but failed for the single-service and fan-out families. Therefore the evidence supports “promising but not generally reliable,” not a universal recommendation claim. The original VM data were later lost; only selected replay inputs and a partial cluster-side recovery remain.
 
-Two current correctness gaps materially limit the end-to-end claim:
-
-- global warm-up validation calculates a post-warm-up stability check but does not use its `passed` value in the validation decision;
-- the normal CLI loads node CPU and memory capacities but constructs the placement problem without per-service CPU/memory requests, so those capacities are not enforced in the active placement path.
+The audit found correctness gaps, but the current tree now enforces several direct contracts: global warm-up validation uses the post-warm-up stability result; analytical mode rejects unsupported semantics; timeout feasibility includes a statistically controlled failure-rate bound; and placement-aware final checks use the selected placement. CLI placement is intentionally topology-only in this version: it does not consume pod CPU/memory requests or claim Kubernetes resource feasibility. These corrections are code-tested; they are not yet externally validated on a fresh deployment campaign.
 
 No retained experiment establishes the quality of the current exact-versus-scalable replica search, the current placement objective, percentile-SLO sizing, or the full current calibration-to-optimization-to-final-validation workflow on a real deployment. Where those claims would otherwise be tempting, this report states **NOT ESTABLISHED FROM CURRENT EVIDENCE**.
+
+## Decision-grade snapshot
+
+This table separates what the current prototype can do from what the evidence allows the thesis to claim.
+
+| Question | Current answer | Evidence boundary |
+|---|---|---|
+| Is the C++ simulator implemented and mechanically tested? | **Yes.** | Release and sanitizer builds pass; deterministic lifecycle, state, distribution, call, timeout, and measurement-cohort tests pass. |
+| Can the software statistically classify a candidate under its own model? | **Yes.** | Calibration, independent replications, multiplicity-adjusted intervals, sequential decisions, and fresh final validation are implemented and test-covered. |
+| Does a simulator confidence interval prove that the deployed Kubernetes system will pass? | **No.** | It quantifies simulation randomness conditional on the workload model. It does not cover wrong service-demand, blocking-pool, routing, residual-latency, or deployment assumptions. |
+| Is analytical stability sufficient to claim an SLO-safe deployment? | **No.** | It is a necessary model-level load condition. Retained STELAR evidence shows accurate flow and stable analytical equations can coexist with severe live latency and failures. |
+| Is the current replica recommendation generally safe for arbitrary deployments? | **Not established.** | The largest family study contained unsafe decisions; the safest current retained-data model is conservative on the stronger target subset but has not been freshly deployed. |
+| What did the latest complete in-memory workflow do? | It calibrated `W=87.918 s`, selected `M=1536 s`, selected five replicas, and passed 30-seed simulated final validation at `90.006 ms [89.376, 90.666]` under a 100 ms mean SLO. | This proves that the current workflow executes coherently on one retained characterized model. Five replicas were never tested on the live deployment, so deployment feasibility is unverified. |
+| What does node placement mean in the CLI? | **Topology-only guidance.** | It optimizes modelled communication and spreading. It does not use pod requests/limits or certify Kubernetes schedulability. |
+| What is the strongest defensible thesis position today? | Kubesizer is a statistically cautious capacity-planning prototype and experimental platform, not yet a universally trustworthy automatic sizer. | Strong kernel-performance and implementation evidence; mixed and incomplete external predictive evidence. |
 
 # 1. Current system reconstruction
 
@@ -115,9 +131,9 @@ This portable seed does not become a hard lower bound. In scalable optimization 
 
 ### Cluster resources
 
-`resources.yaml` is parsed by `Cluster` and `Node` (`performance_models/cluster.py`, `performance_models/node.py`). It defines node names, allocatable CPU/memory, directed communication latency, and execution-time multipliers.
+`resources.yaml` is parsed by `Cluster` and `Node` (`performance_models/cluster.py`, `performance_models/node.py`). The active sample defines node names, directed communication latency, and execution-time multipliers. Allocatable CPU/memory metadata is optional.
 
-The placement problem can enforce per-service CPU and memory requests if supplied (`NodePlacementProblem.__init__`, `optimization/node_placement.py:53`). The active CLI does **not** supply them: `_command_run()` constructs `NodePlacementProblem(cluster)` at `kubesizer_cli.py:777`. Consequently, node capacities in `resources.yaml` are currently parsed but not active hard constraints in normal CLI placement. This is a current implementation gap.
+The placement library can enforce per-service CPU and memory requests when a library caller supplies them (`NodePlacementProblem.__init__`, `optimization/node_placement.py`). The active CLI deliberately constructs `NodePlacementProblem(cluster)` without such requests. Therefore normal CLI placement preserves replica totals and optimizes communication/spreading, but it neither reads pod requests/limits nor certifies that Kubernetes node resources can host the recommendation.
 
 ## 1.3 Component status table
 
@@ -130,14 +146,14 @@ The placement problem can enforce per-service CPU and memory requests if supplie
 | M/G/c, G/M/c, G/G/c means | Variability-adjusted Erlang-C approximation | Implemented, experimentally weak | Tests verify calculation; STELAR evidence shows failure near capacity |
 | Analytical end-to-end mean | `System.get_request_class_mean_latencies()` | Implemented, partly experimentally evaluated | Several retained mean-latency studies; mixed/negative results |
 | C++ simulator | `native_backend/cpp/src/main.cpp` | Implemented and verified semantically by tests | Release/sanitizer build; deterministic tests pass |
-| Rich simulator predictive accuracy | Current semantics version v12 | Implemented but not validated at current revision | Retained studies use older or unreconstructable dirty snapshots |
-| Statistical calibration | `calibration/` | Implemented, with one validation defect | Unit tests pass; no retained successful full current-profile artifact |
+| Rich simulator predictive accuracy | Current semantics version v13 | Implemented and replayed against retained evidence; mixed result | Current target replay gives 75% decision agreement for the safest portable model |
+| Statistical calibration | `calibration/` | Implemented and exercised end to end in memory | Unit tests and retained-model replay pass; no clean live current-revision profile artifact |
 | Cluster-bootstrap SLO evaluation | `metrics/cluster_bootstrap.py`, `optimization/simulation_evaluation.py` | Implemented and verified at test level | Focused tests pass |
 | Exact replica sizing | Uniform-cost search | Implemented and verified on small tests | Unit comparisons; no retained application-scale quality experiment |
 | Scalable replica sizing | randomized greedy + deletion + VNS | Implemented and verified on synthetic tests | No retained benchmark-quality study |
 | Exact placement | branch-and-bound | Implemented and verified on tests | No retained real placement experiment |
 | Scalable placement | beam + relocation/swap + LNS | Implemented and verified on tests | No retained objective/quality experiment |
-| CLI placement resource enforcement | Missing service resource requests | Partially implemented | Direct active-path inspection |
+| CLI topology-only placement | Network/spreading placement without pod resource requests | Implemented and verified | Direct active-path inspection and CLI tests |
 | Runtime estimation | `runtime_estimation.py` | Implemented and tested | No retained estimator-accuracy experiment |
 | Calibration/evaluation plots | `calibration/reporting.py`, `statistical_reporting.py` | Implemented but not active by default | Plot/report tests; no current retained plots in this repo |
 | Persistent evaluation cache | None in active workflow | Planned/not implemented | Only in-process per-problem caches exist |
@@ -317,7 +333,11 @@ During sequential optimization, the per-tail error probability is:
 
 where \(K\) is the maximum number of looks and \(C\) is the number of latency plus failure-rate constraints (`CalibratedConfigurationEvaluator._tail_alpha()`, `optimization/simulation_evaluation.py:143`). This is conservative Bonferroni control across tails, looks, and constraints. Final validation has one fixed look and uses \(\alpha/(2C)\).
 
-Terminal failure-rate intervals use an independent-replication empirical-Bernstein method, not the latency bootstrap.
+Terminal failure-rate intervals use a distribution-free independent-replication
+KL-Hoeffding bound, not the latency bootstrap. Each replication contributes one
+bounded failure fraction. Profile construction rejects a replication ceiling
+that could not certify the declared failure-rate SLO even if all observed
+requests succeeded.
 
 ## 2.9 Optimization objectives
 
@@ -346,7 +366,7 @@ J_{place}=0.7J_{network}+0.3J_{spread}
 
 unless custom weights are supplied.
 
-For edge call rate \(C_{ij}\), source replica fraction \(f_{in}\), destination fraction \(f_{jm}\), and directed one-way node latency \(d_{nm}\):
+For communication-leg rate \(C_{ij}\), source replica fraction \(f_{in}\), destination fraction \(f_{jm}\), and directed one-way node latency \(d_{nm}\):
 
 \[
 J_{network}^{raw}
@@ -355,7 +375,7 @@ J_{network}^{raw}
 \sum_{n,m}f_{in}f_{jm}d_{nm}.
 \]
 
-It is normalized by maximum inter-node latency times total edge rate (`NodePlacementProblem.__calculate_network_cost()`, `optimization/node_placement.py:1164`). The separate diagnostic “average network delay” divides raw cost by total external arrival rate.
+Ordinary routing contributes one request leg. A synchronous call contributes its outbound request leg and its reverse response leg, matching the simulator's call lifecycle. The cost is normalized by maximum inter-node latency times total communication-leg rate (`NodePlacementProblem.__calculate_network_cost()`, `optimization/node_placement.py`). The separate diagnostic “average network delay” divides raw cost by total external arrival rate.
 
 The spreading penalty is a normalized concentration index based on \(\sum_n f_{in}^2\), averaged over services with more than one replica (`optimization/node_placement.py:1217`). It rewards even spreading. It is not a probabilistic availability or correlated-failure model.
 
@@ -367,7 +387,7 @@ Resource feasibility, when enabled, is simple additive bin packing:
 \sum_i c_{in}\,MEM_i\le MEM_n.
 \]
 
-As noted above, the active CLI currently does not enable these checks.
+These resource equations are available to library callers only. The active CLI does not enable them and makes no resource-fit claim.
 
 # 3. End-to-end execution flow
 
@@ -397,7 +417,7 @@ There is no calibration or fresh statistical final validation in analytical mode
 7. Cluster-bootstrap intervals and failure-rate intervals are computed. The candidate is statistically feasible, statistically infeasible, still sampling, inconclusive, or failed.
 8. Exact or scalable replica search consumes only certified-feasible candidates as goals.
 9. If placement is skipped, `validate_final_configuration()` immediately executes a fixed 30-replication holdout with fresh seeds.
-10. If placement is active, final validation is deferred. The fixed replica vector is placed; node communication and execution multipliers are installed into the simulator; then the fresh 30-replication final validation is run.
+10. If placement is active, final validation is deferred. The fixed replica vector is placed; node communication and execution multipliers are installed into the simulator; warm-up and measurement duration are recalibrated for that fixed placement; then the fresh 30-replication final validation is run.
 11. A failed final validation raises an error; it is not printed as a recommendation.
 
 This sequencing correctly avoids reusing optimization samples for the final reported decision.
@@ -493,12 +513,12 @@ Hard checks available in the problem are:
 
 - exact preservation of each service's replica total;
 - nonnegative integer counts and known services/nodes;
-- CPU and memory capacity, but only if a request is supplied for every service;
+- optional CPU and memory capacity, but only for library callers that supply a request for every service;
 - an optional user-provided hard constraint callback.
 
 Affinity, anti-affinity, zones, topology-spread constraints, taints, node selectors, pod overhead, daemonset reservation, and disruption budgets have no built-in schema. They could only be encoded through the generic callback in library use.
 
-The active objective combines expected one-way communication cost and a service-replica concentration penalty. Communication frequencies are incorporated for probabilistic routing and explicit call graphs. An input containing only visit ratios does not identify source-to-destination edges, so placement omits that communication structure.
+The active objective combines expected communication latency and a service-replica concentration penalty. Communication frequencies are incorporated for probabilistic routing and explicit call graphs. Routing transitions contribute their directed request delay. Synchronous calls contribute both outbound and return delay. An input containing only visit ratios does not identify source-to-destination edges, so placement omits that communication structure.
 
 The objective is not application end-to-end latency. It assumes traffic is distributed in proportion to replica counts and adds expected directed node latency per observed/modelled edge. It does not model Kubernetes service routing skew, connection reuse, locality policies, congestion, link bandwidth, packet loss, or zone-failure probability.
 
@@ -529,7 +549,7 @@ It reports relocation/swap local certificates only after complete scans. It neve
 
 ## 5.4 Active-path limitations
 
-The most serious placement issue is not algorithmic: the CLI does not pass service resource requests. Therefore `resource_feasibility_checked` is false in normal use even when `resources.yaml` contains allocatable CPU/memory. A placement can be returned that is impossible under actual resource requests.
+Normal CLI placement is intentionally resource-unconstrained. `resource_feasibility_checked` is false, and the result must be interpreted only as a topology/network recommendation. Kubernetes scheduling feasibility is outside this version's claim; a returned placement may be unplaceable if real pod requests or other scheduling constraints are later imposed.
 
 There is also no retained real or generated benchmark comparing placement costs with branch-and-bound optima, no measured network-latency improvement after deployment, and no resilience experiment. Thus placement correctness for the mathematical toy problems is verified, but placement usefulness is **NOT ESTABLISHED FROM CURRENT EVIDENCE**.
 
@@ -537,7 +557,7 @@ There is also no retained real or generated benchmark comparing placement costs 
 
 ## 6.1 Language and architecture
 
-The production simulator is no longer SimPy. It is a mandatory C++20 executable implemented primarily in `native_backend/cpp/src/main.cpp`, built by `native_backend/cpp/build.sh`, and invoked through the JSON/subprocess adapter in `native_backend/backend.py`. Protocol version is 11. The current semantics identifier is exported by `native_backend` and fingerprinted into calibration profiles; its current suffix is `...measured-latency-components-v12`.
+The production simulator is no longer SimPy. It is a mandatory C++20 executable implemented primarily in `native_backend/cpp/src/main.cpp`, built by `native_backend/cpp/build.sh`, and invoked through the JSON/subprocess adapter in `native_backend/backend.py`. Protocol version is 12. The current semantics identifier is exported by `native_backend` and fingerprinted into calibration profiles; its current suffix includes `...non-cpu-blocking-v13`.
 
 One replication uses one central future-event priority queue. Events are ordered by:
 
@@ -654,7 +674,7 @@ Python launches independent native replication subprocesses through a thread poo
 
 `CalibrationProfile` (`calibration/profile.py:174`) is frozen and YAML-serializable. It contains topology/workload fingerprints, simulator-semantics version, bounded replica space, \(W\), \(M\), bucket/window choices, replication policy, SLOs, CI method, seed policy, and diagnostics. `experiment_fingerprints()` (`calibration/profile.py:674`) includes service identities, routes/calls, rates, distributions, request classes, SLOs, latency components, execution semantics, and bounds. A replica change inside the calibrated bounds does not invalidate the profile; relevant workload/topology/semantics changes do.
 
-The active CLI does not save or reload the profile. Reuse is available only through explicit library serialization calls. Therefore calibration is currently repeated on each simulation CLI run.
+The active CLI does not save or reload the profile. Reuse is available only through explicit library serialization calls. Therefore calibration is currently repeated on each simulation CLI run. If node placement is enabled, the CLI also creates a second profile for the selected fixed placement before final validation. The placement model is fingerprinted, so an unplaced profile or a profile for a different placement is rejected.
 
 ## 7.2 Warm-up pilot
 
@@ -668,7 +688,7 @@ Default `CalibrationOptions` (`calibration/profile.py:25`) uses:
 - 5% relative tolerance;
 - 10% horizon and bucket-width sensitivity tolerance;
 - one safety window;
-- up to eight horizon doublings.
+- up to ten horizon doublings.
 
 The initial bucket width is five times the slowest mean service time. Candidate widths are half, equal, and double that value. The initial horizon is the maximum of 100 congestion time scales, 1,000 expected external arrivals, and 500 base buckets (`calibration/warmup_parameters.py:160-196`). These are sizing heuristics only.
 
@@ -702,17 +722,20 @@ with absolute floors of 0.1 request for count metrics and 0.01 for utilization. 
 
 `calibrate_minimum_configuration()` (`calibration/workflow.py:349`) runs the minimum stable configuration and doubles \(H\) until two consecutive adequate horizons agree within 10%. One long native trajectory is reused for its shorter prefix and rebucketed for compatible widths. It also requires \(W\le H/3\), at least 50 post-cutoff buckets, stable 60–80% versus 80–100% late means, and adjacent-width agreement.
 
-## 7.5 Global warm-up validation and current defect
+## 7.5 Global warm-up validation
 
 Representative configurations include minimum, quartiles, maximum, and optional SLO-boundary cases (`build_representative_configurations()`, `calibration/validation.py:41`). Fresh validation seeds are used. The proposed global \(W\) is the maximum required cutoff, with another safety window if validation raises it.
 
-However, `validate_global_warmup()` computes `post_warmup = check_post_warmup_stability(...)` and stores it, but constructs each result with:
+`validate_global_warmup()` computes `post_warmup = check_post_warmup_stability(...)` and accepts each representative configuration only when both conditions hold:
 
 ```python
-passed = cutoff.warmup_duration <= proposed_warmup
+passed = (
+    cutoff.warmup_duration <= proposed_warmup
+    and post_warmup.passed
+)
 ```
 
-at `calibration/validation.py:211-241`. It does not include `post_warmup.passed`. Therefore the advertised requirement that the first post-\(W\) windows themselves pass the tolerance/trend check is **not enforced**. Unit tests did not expose this contract error. Until corrected and regression-tested, global warm-up validation is only partially implemented.
+This enforces both an early-enough estimated cutoff and stability of the actual first post-\(W\) windows (`calibration/validation.py`). A regression test rejects a configuration whose inferred cutoff is early but whose post-\(W\) windows still fail the stability check.
 
 ## 7.6 Measurement duration
 
@@ -722,7 +745,7 @@ The initial duration uses the slowest class external rate:
 M_0=1.2\max_k\frac{2000}{\gamma_k}.
 \]
 
-Candidates are \(M_0,2M_0,4M_0,8M_0\) by default. Thirty replications are used for each representative configuration. Prefix arrival cohorts allow a longer drained replication to be analyzed for shorter candidate windows.
+Candidates are \(M_0,2M_0,\ldots,64M_0\) by default. The final value is used as the doubling comparison for the largest selectable value, so the largest accepted default duration is \(32M_0\). Thirty replications are used for each representative configuration. Prefix arrival cohorts allow a longer drained replication to be analyzed for shorter candidate windows.
 
 For every class, acceptance requires at least 20,000 eligible requests in total, at least 20 nonempty replications, CI half-width below the larger practical precision allowance, at most 5% statistic change after doubling, and stable CI width within 10%. The global \(M\) is the maximum accepted across representative configurations (`calibration/measurement.py:353`).
 
@@ -762,7 +785,7 @@ Within optimization, the same replication index uses the same seed across config
 - Default bootstrap resolution can reject many-class workloads. With \(K=4\), 5,000 draws, alpha 0.05, and the five-tail-draw minimum, more than about six total constraints cannot meet the configured tail-resolution check. This fails clearly rather than silently, but the default is not usable for approximately 20 request classes without more resamples or a different multiplicity method.
 - The warm-up earliest-window detector showed substantial seed sensitivity at 30 and 100 replications in retained benchmark evidence.
 - The claim that one global \(W\) is valid over all bounded configurations assumes adding replicas does not change routes, retries, service work, timeouts, concurrency behavior, or other semantics.
-- No retained current-profile artifact demonstrates a successful full calibration, sequential optimization, and final validation on a real deployment at current revision.
+- An in-memory current-v13 replay demonstrates full calibration, exact optimization, and fresh final validation for a retained characterized model. It is not a live current-revision deployment experiment and no serialized current profile was retained.
 
 # 8. Retained experiment inventory
 
@@ -770,13 +793,15 @@ Within optimization, the same replication index uses the same seed across config
 
 The current Kubesizer Git repository does **not** retain raw experiment results or generated plots. It contains example CSV/YAML fixtures, reporting code, and an older technical report, but these are not raw scientific evidence for this audit.
 
-Meaningful retained evidence was found in two sibling repositories and one completed remote study:
+At the original audit time, meaningful evidence was found in two sibling repositories and one completed remote study:
 
 - simulator benchmark: `/home/ktistos/work/queue-simulator-benchmark/results/`;
 - deployment/load experiments: `/home/ktistos/work/STELAR_LOAD_TESTS/experiments/`;
-- completed deployment-family study: `experiment@46.224.93.195:/home/experiment/experiments/deployment-family-sizing-validation-20260827/`.
+- completed deployment-family study: formerly `experiment@46.224.93.195:/home/experiment/experiments/deployment-family-sizing-validation-20260827/`.
 
-The benchmark repository was clean at commit `91f8258` during this audit. The local load-test repository was **dirty** at commit `e892537`; at least `stelar_measure/sizing_analysis.py` and tests had uncommitted modifications. The completed remote deployment-family manifest records load-test commit `5a192e0` and Kubesizer commit `572d338`, but both worktrees were dirty and the manifest stores only the list of changed paths, not the diff or content hashes. Therefore that study is retained and analyzable, but its exact executable source cannot be reconstructed from Git alone. It also predates audited HEAD `8113e6a`.
+The benchmark repository was clean at commit `91f8258` during this audit. The local load-test repository was **dirty** at commit `e892537`; at least `stelar_measure/sizing_analysis.py` and tests had uncommitted modifications. The completed remote deployment-family manifest recorded load-test commit `5a192e0` and Kubesizer commit `572d338`, but both worktrees were dirty and the manifest stored only the list of changed paths, not the diff or content hashes. The study also predates the current audit base `6d223c1`.
+
+**Post-audit preservation warning.** The Hetzner experiment VM was subsequently deleted without a volume or snapshot. The complete 405-treatment run directories, Locust traces, VM telemetry, and original remote analysis files are no longer available. A 46.4 MB local recovery bundle at `STELAR_LOAD_TESTS/experiments/recovered-rich-sizing-20260830/` preserves Kubernetes objects, logs, cumulative ingress/Istio counters, Prometheus exports, and SHA-256 checksums. Time-series traffic survives meaningfully for only the blocking-pool and repeated-mixed namespaces; it is not a full recovery of the deployment-family campaign. The machine-readable `results/richer-simulation-validation.yaml` preserves the selected accepted observations, source hashes, model inputs, simulation seeds, and replay results used by E15. Consequently, the previously inspected E11 aggregate is reported for transparency but is no longer independently reproducible from complete raw data.
 
 This provenance distinction matters: a deployment observation remains valid as a cluster observation, but it cannot be claimed as exact validation of today's source without reconstructing the dirty snapshot.
 
@@ -791,25 +816,26 @@ The table groups directories that are repetitions or stages of one scientific qu
 | E03 | How seed/replication count affects warm-up cutoff stability | \(R=30,100,300\); independent seed blocks; \(H\) vs \(2H\) | C++ kernel, thesis workload, \(\Delta=0.5\), 8 workers | candidate \(W\), horizon adequacy, H/2H sensitivity, RSS, runtime | replication counts | benchmark thesis workload | 5 ensembles each for 30/100; 3 for 300 | `queue-simulator-benchmark/results/raw/` sensitivity captures | `cpp-calibration-ensemble-sensitivity*.json/.md` | Summary tables | H/2H pass: 80% at R=30, 20% at R=100, 100% in 3 R=300 ensembles; R=300 \(W\) 60–120 | Exposes detector seed sensitivity; three R=300 ensembles are too few to establish a universal replication choice | **PRELIMINARY RESULT** |
 | E04 | Is the frozen analytical mean-latency model sufficient as the sole SLO oracle for STELAR? | Offered rate 4,16,32,48,56 RPS | one-replica vector, 3:1 operation mix, frozen visits/demands/residuals | app/client mean, p95, failures, flow error, demand change | analytical prediction vs live system; constant baseline | STELAR metadata-read | 3 runs at 4 and 56; 1 at intermediate rates | `STELAR_LOAD_TESTS/experiments/analytical-sufficiency/2026-08-21/` | `scripts/analyze_analytical_sufficiency.py`; `analysis.yaml`; `report.md` | Result table and sensitivity table | near capacity predicted 330.658 ms vs observed 1538.487 ms; false feasible; max flow error 1.44% | Mean flow was accurate while latency/capacity was not; aggregate U/X is insufficient to identify the bottleneck | **VERIFIED RESULT** |
 | E05 | Do operation-specific demands, clustering, and low-load residuals fix the STELAR analytical forecast? | operation, load point, fresh holdout run | deployment, characterization method, fixed low-load residual | mean prediction error, failures, flow error, stationarity | enriched analytical model vs live cluster | STELAR `dataset_search` and `organizations`; one descriptive cluster | 2 runs/operation at 3 characterization rates; 3 fresh mixed holdouts | `STELAR_LOAD_TESTS/experiments/operation-characterization/` and `cluster-holdout/...w300*` | `scripts/analyze_operation_profiles.py`, `validate_cluster_model.py`; combined `report.md` | operation and holdout tables | combined status FAILED; one 5.998 s pathological holdout and two recovery means 194.355/189.624 ms vs 178.032/181.068 ms; post-warm-up ensemble failed | Enrichment improved healthy-run errors but did not yield defensible stationarity or universal capacity prediction | **VERIFIED RESULT** |
-| E06 | Does a synchronous-call simulator with calibrated path residual generalize to fresh STELAR runs? | holdout replication | one characterization run for residual, fixed model, rate ≈48 RPS | predicted vs observed client/app mean, bootstrap prediction interval, failures | native simulation vs live runs | STELAR clustered metadata-read, one configuration | 1 residual-fit run; 2 validation observations; 30 simulation reps per observation | `STELAR_LOAD_TESTS/experiments/predictive-model/2026-08-23-synchronous-root-holding/` | `scripts/validate_simulation_model.py`; `predictive_validation.yaml` | YAML diagnostics | client errors 1.85% and 3.76%; both passed stored rule | Encouraging narrow holdout; residual has only one observation and simulator semantics are v7, not current v12 | **PRELIMINARY RESULT** |
+| E06 | Does a synchronous-call simulator with calibrated path residual generalize to fresh STELAR runs? | holdout replication | one characterization run for residual, fixed model, rate ≈48 RPS | predicted vs observed client/app mean, bootstrap prediction interval, failures | native simulation vs live runs | STELAR clustered metadata-read, one configuration | 1 residual-fit run; 2 validation observations; 30 simulation reps per observation | `STELAR_LOAD_TESTS/experiments/predictive-model/2026-08-23-synchronous-root-holding/` | `scripts/validate_simulation_model.py`; `predictive_validation.yaml` | YAML diagnostics | client errors 1.85% and 3.76%; both passed stored rule | Encouraging narrow holdout; residual has only one observation and simulator semantics are v7, not current v13 | **PRELIMINARY RESULT** |
 | E07 | Is a proposed STELAR replica vector reliable? | candidate/lower configurations and repeat | target workload fixed | mean latency, failures, prediction error | simulator recommendation vs deployed configurations | STELAR sizing validation | 3 candidate reps plus characterization/lower runs | `STELAR_LOAD_TESTS/experiments/sizing-validation/` | predictive-validation artifact | YAML only | one candidate repetition had about 49.98% failures; stored validation failed | Cannot validate the recommendation; evidence includes a material negative result | **INCOMPLETE** |
 | E08 | What is the empirical service capacity envelope? | worker replica count and offered rate | synthetic chained workload | throughput, latency, failures, CPU, traces | configurations/rates | controlled synthetic chain | 9 completed run directories | `STELAR_LOAD_TESTS/experiments/capacity-envelope-20260826/` | No consolidated retained analysis found | Raw CSV/YAML only | Individual raw runs exist; no audited aggregate conclusion | Useful data, but no retained decision analysis | **INCOMPLETE** |
 | E09 | Do deterministic and lognormal service distributions behave differently across replica counts? | service distribution; worker replicas | synthetic topology and load protocol | raw latency, CPU, errors, traces | deterministic vs lognormal configurations | synthetic chain | 6 deterministic plus at least 17 lognormal run directories | `STELAR_LOAD_TESTS/experiments/deterministic-*`, `lognormal-*`, `kubesizer-evaluation-20260826/`, `synthetic-chain/` | No single authoritative retained summary found | Raw artifacts | Data exist, but experiment boundaries and accepted/excluded runs are not sufficiently documented | No defensible aggregate result reconstructed | **UNCLEAR** |
 | E10 | Does the simulator recommend a feasible replica vector for a controlled heavy-tail system, and are cheaper neighbors safe? | recommended, cheaper backend, worker-limited configs | 24 RPS exponential arrivals, lognormal service SCV 4, 150 ms mean SLO | run means, t/bootstrap CIs, failures, window violations | frozen simulator prediction vs deployed synthetic system | three-service synchronous chain | recommended 5; cheaper 20; worker-limited 5 | `STELAR_LOAD_TESTS/experiments/heldout-sizing-20260826/` | retained `summary.yaml` | Configuration table | recommendation [1,2,2] mean 116.706 ms, CI [105.129,128.284], feasible; cheaper [1,2,1] also mean-feasible but 4/20 windows violated; worker-limited mean 1.164 s | Validates feasibility for one controlled topology, but recommendation was conservative for expected mean and not proven minimal | **VERIFIED RESULT** |
-| E11 | Does sizing generalize across deployment families and load shapes? | four families, five load points including bursty, bounded config grids | 60 s warm-up, 120 s cohort, 60 s drain, seed plan, cluster, evidence gates | mean latency CIs, prediction error, failure, arrival fidelity, scheduler quality, empirical minimum in tested set | Kubesizer recommendation vs live candidate grid | single-service, fan-out, repeated visit, shared multiclass | 405 completed treatments; normally 5 reps, target validation 30 | Remote `.../deployment-family-sizing-validation-20260827/{study_manifest.yaml,analysis.yaml,runs/}` | dirty-snapshot `scripts/run_sizing_study.py`, `analyze_sizing_study.py`; `analysis.yaml` | YAML tables; no retained plot | 12/20 evidence rejected; accepted: 6 matches, 2 underprovisioned; target validation: 2 families pass, 2 fail | Largest sizing study shows both usefulness and unsafe errors; exact source snapshot is unreconstructable because both repos were dirty | **VERIFIED RESULT** |
+| E11 | Does sizing generalize across deployment families and load shapes? | four families, five load points including bursty, bounded config grids | 60 s warm-up, 120 s cohort, 60 s drain, seed plan, cluster, evidence gates | mean latency CIs, prediction error, failure, arrival fidelity, scheduler quality, empirical minimum in tested set | Kubesizer recommendation vs live candidate grid | single-service, fan-out, repeated visit, shared multiclass | 405 completed treatments; normally 5 reps, target validation 30 | Original remote VM deleted; partial cluster-side recovery under `STELAR_LOAD_TESTS/experiments/recovered-rich-sizing-20260830/` | original dirty-snapshot scripts and analysis no longer retained; selected observations preserved in E15 artifact | Derived tables only; incomplete recovery | Previously inspected aggregate: 12/20 evidence rejected; accepted: 6 matches, 2 underprovisioned; target validation: 2 families pass, 2 fail | Scientifically informative, but complete raw evidence and exact dirty source snapshot are no longer reproducible | **PRELIMINARY RESULT** |
 | E12 | How close is scalable replica VNS to exact uniform-cost search? | generated instances, seed, budget | evaluator/problem fixtures | objective gap, optimum hit, runtime/evaluations | exact vs scalable | small synthetic unit fixtures | Unit tests only; no retained benchmark matrix | `tests/test_scalable_replica_optimizer.py`, `test_optimization_modes.py` | Test suite | Assertions only | Counterexamples and deterministic behavior are tested; population-level quality is not measured | Only implementation behavior is verified; optimizer-quality distributions remain unmeasured | **IMPLEMENTED BUT NOT RUN** |
 | E13 | How close is scalable placement to exact branch-and-bound and does placement improve deployed latency? | beam/VNS parameters, topology, placement | fixed replicas | objective gap, runtime, deployed latency | exact vs scalable; before/after | synthetic test fixtures only | Unit tests only | `tests/test_node_placement.py` | Test suite | Assertions only | Algorithm mechanics pass; scientific placement benefit is unmeasured | No scientific placement-quality or deployed-latency claim is supported | **IMPLEMENTED BUT NOT RUN** |
-| E14 | Does the complete current v12 calibration → optimization → final-validation workflow work on a real deployment? | topology/workload/configurations | current source and defaults | accepted \(W,M\), looks, CIs, final decision, runtime | current workflow vs live deployment | none retained at exact audited revision | None | None | None | None | No clean current-revision artifact exists | The current end-to-end workflow remains externally unvalidated | **IMPLEMENTED BUT NOT RUN** |
+| E14 | Does the complete current v13 calibration → optimization → final-validation workflow work on a real deployment? | topology/workload/configurations | current source and defaults | accepted \(W,M\), looks, CIs, final decision, runtime | current workflow vs live deployment | none retained at exact audited revision | None | None | None | None | No clean current-revision artifact exists | The current end-to-end workflow remains externally unvalidated | **IMPLEMENTED BUT NOT RUN** |
+| E15 | Does current v13 reproduce retained family decisions and complete its public workflow on a characterized family? | five simulator semantics; one target family and replica bound | retained low-load characterization; 30 replications; fixed seeds | mean latency error, decision agreement, accepted \(W,M\), recommendation, fresh CI | baseline and four enriched models | four retained target-validation families; single-family end-to-end replay | 30 simulation reps per point/model; 30 final-validation reps | `results/richer-simulation-validation.yaml`; local retained characterization artifacts | `scripts/validate_richer_simulation.py`; in-memory public workflow | Console results recorded in this report | safest portable model: 3/4 target decisions, zero unsafe false-feasible, 28.1% MAPE; single-family workflow selected 5 replicas and fresh validation estimated 90.006 ms [89.376, 90.666] under 100 ms | Confirms current code runs conservatively on retained evidence; five replicas were not deployed in the retained experiment, so recommendation accuracy is unverified | **PRELIMINARY RESULT** |
 
 ## 8.3 Number of verified experiments
 
-Using the grouped scientific questions above, there are **six VERIFIED RESULT experiment families**: E01, E02, E04, E05, E10, and E11. This count includes negative experiments and treats the cross-language benchmark and direct long-horizon run as different questions. E03 and E06 are deliberately only preliminary.
+Using the evidence that remains independently auditable, there are **five VERIFIED RESULT experiment families**: E01, E02, E04, E05, and E10. This count includes negative experiments and treats the cross-language benchmark and direct long-horizon run as different questions. E03, E06, E11, and the current retained-data replay E15 are preliminary. E11 was downgraded because its complete remote raw data and exact dirty source snapshot were lost when the VM was deleted.
 
 # 9. Reconstructed measured results
 
 ## 9.1 Simulator performance
 
-The cross-language benchmark froze a simpler common event semantics than today's rich v12 backend. All five implementations passed six deterministic traces; the compiled languages also passed fixed-seed reproducibility and distributional checks across seven stochastic workloads. Every primary runtime cell used five untimed warm-ups and 20 timed samples with shuffled order.
+The cross-language benchmark froze a simpler common event semantics than today's rich v13 backend. All five implementations passed six deterministic traces; the compiled languages also passed fixed-seed reproducibility and distributional checks across seven stochastic workloads. Every primary runtime cell used five untimed warm-ups and 20 timed samples with shuffled order.
 
 For 30 state-capturing replications on eight workers:
 
@@ -834,7 +860,7 @@ Median process-tree peak RSS for that parallel capture mode was 511.7 MiB for Si
 
 **Justified conclusion:** replacing the frozen Python event kernel with C++ makes repeated calibration simulations materially faster and less memory-intensive on the benchmark machine.
 
-**Not justified:** the benchmark does not show that C++ predictions are more accurate, that the current v12 semantics match SimPy, or that the statistical cutoff rule is correct.
+**Not justified:** the benchmark does not show that C++ predictions are more accurate, that the current v13 semantics match SimPy, or that the statistical cutoff rule is correct.
 
 ## 9.2 Direct calibration runtime and cutoff sensitivity
 
@@ -892,7 +918,7 @@ One run estimated an external path component as client mean minus application-en
 | rep 2 | 152.193 ms | 155.014 ms | [152.290, 157.557] ms | +1.85% |
 | rep 3 | 151.278 ms | 156.966 ms | [154.172, 159.740] ms | +3.76% |
 
-The underlying artifact explicitly identifies simulator semantics v7 and says the residual had one calibration observation, with no run-to-run variance estimate. This is good narrow evidence that synchronous caller holding plus a frozen path residual can transfer to two nearby runs. It does not establish transfer to another topology, load, replica vector, p95 SLO, or current semantics v12.
+The underlying artifact explicitly identifies simulator semantics v7 and says the residual had one calibration observation, with no run-to-run variance estimate. This is good narrow evidence that synchronous caller holding plus a frozen path residual can transfer to two nearby runs. It does not establish transfer to another topology, load, replica vector, p95 SLO, or current semantics v13.
 
 ## 9.6 Controlled heavy-tail sizing holdout
 
@@ -908,7 +934,7 @@ The recommendation was safe for this held-out controlled workload. It was not mi
 
 ## 9.7 Deployment-family sizing study
 
-The completed remote study used four synthetic Kubernetes deployment families, five load points per family, randomized run order/seeds, exponential arrivals except the declared bursty cases, 60 seconds warm-up, 120 seconds cohort, 60 seconds drain, and 20,000 bootstrap resamples. It retained 405 completed treatments.
+The completed remote study used four synthetic Kubernetes deployment families, five load points per family, randomized run order/seeds, exponential arrivals except the declared bursty cases, 60 seconds warm-up, 120 seconds cohort, 60 seconds drain, and 20,000 bootstrap resamples. The earlier direct audit counted 405 completed treatments. The complete raw run tree is no longer retained after deletion of the experiment VM; the values below are preserved audit findings, not a presently reproducible reanalysis of all raw treatments.
 
 Quality-gate counts over recorded per-run diagnostics were 353 passing and 52 failing. Failure reasons overlap: 42 load-generator saturation findings, 33 excessive scheduler-delay findings, 30 excessive request-failure findings, and 21 arrival-rate misses. Across all raw response statuses, the analysis saw 2,063,893 HTTP 200 responses, 81,527 HTTP 502 responses, and 22 status-0 outcomes.
 
@@ -926,17 +952,49 @@ Over all 20 family/load-point results, 12 were evidence-rejected, six matched th
 
 The strongest sizing conclusion supported by this study is negative but useful: the method distinguishes useful configurations in several call patterns, yet current model form or characterization still underestimates latency enough to reverse an SLO decision in simple and fan-out families.
 
-## 9.8 Results not established
+## 9.8 Current-v13 retained-data replay and complete workflow exercise
+
+The committed replay artifact `results/richer-simulation-validation.yaml` is the strongest machine-readable bridge between the older deployment observations and the current richer simulator. It preserves the selected accepted observations, characterization hashes, model parameters, simulation seeds, and predictions. It does **not** replace the lost complete raw deployment-family dataset.
+
+Across 18 accepted configuration decisions, with 22 class/configuration latency comparisons, the five replayed model variants produced:
+
+| Model | Mean absolute error | MAPE | Feasibility agreement | Unsafe false feasible | Conservative false infeasible |
+|---|---:|---:|---:|---:|---:|
+| Existing baseline | 29.32 ms | 18.50% | 16/18 (88.9%) | 2 | 0 |
+| Telemetry CPU + mean blocking | 77.39 ms | 36.83% | 10/18 (55.6%) | 8 | 0 |
+| Telemetry + declared bottleneck pool | 31.24 ms | 23.89% | 15/18 (83.3%) | 3 | 0 |
+| Telemetry + fitted blocking variability | 68.39 ms | 43.39% | 17/18 (94.4%) | 0 | 1 |
+| Oracle occupancy + blocking | 30.54 ms | 18.32% | 16/18 (88.9%) | 1 | 0 |
+
+The full accepted-point table favors the fitted-variability model for **decision safety**, not numerical accuracy. It removes unsafe false-feasible decisions in this retained set by becoming more conservative. Its MAPE is worse than the baseline. The “oracle” uses privileged synthetic occupancy information unavailable to ordinary DevOps measurement, while the declared-bottleneck models require a supplied worker/thread/connection-pool limit that counters alone do not identify.
+
+On the stronger four-point subset with 30 live replications per target, the fitted-variability model had 3/4 decision agreement, no unsafe false-feasible decision, one conservative false-infeasible decision, and 28.07% MAPE. This is encouraging safety evidence on a tiny selected subset, not a calibrated general error rate.
+
+A separate in-memory exercise used the current public calibration and optimization interfaces on the retained characterized single-service model:
+
+| Workflow stage | Result |
+|---|---|
+| Warm-up pilot | Horizon doubling continued to 10,242.6 s; paired adequate horizons produced the same cutoff |
+| Minimum-configuration warm-up | 67.056 s |
+| Fresh representative-configuration warm-up validation | 100 validation replications; accepted global `W=87.918041 s` |
+| Measurement-duration calibration | Global `M=1536 s`; the two-replica boundary controlled the duration |
+| Exact search with upper bound 4 | No feasible configuration found within the bounded space |
+| Exact search with upper bound 5 | Selected configuration `(5,)` |
+| Fresh final validation | 30 new seeds; 2,303,587 eligible requests; mean 90.006389 ms; simultaneous bounds [89.375614, 90.665816] ms under a 100 ms mean SLO |
+
+This exercise establishes that the corrected current workflow can calibrate, reject an insufficient bound, optimize, and perform fresh-seed final validation without fabricating feasibility. It establishes only **model-conditional simulated feasibility**. The retained live study tested no five-replica configuration, so the recommendation's deployed feasibility and minimality remain **NOT ESTABLISHED FROM CURRENT EVIDENCE**.
+
+## 9.9 Results not established
 
 No retained artifact supports numerical claims for:
 
-- current v12 p95 prediction error on a real deployment;
+- current v13 p95 prediction error on a real deployment;
 - a successful current default warm-up \(W\) and measurement \(M\) profile for the root workload;
 - exact-versus-scalable replica objective gap distribution;
 - optimizer runtime versus service count under simulation evaluation;
 - placement objective improvement on a deployed cluster;
 - placement exact-versus-scalable gap;
-- memory use of the current rich v12 backend under a full calibration;
+- memory use of the current rich v13 backend under a full calibration;
 - global minimum replica counts for any real deployment;
 - a statistically calibrated universal safety-utilization threshold.
 
@@ -946,21 +1004,21 @@ For each of these: **NOT ESTABLISHED FROM CURRENT EVIDENCE.**
 
 | Claim | Why it matters | Evidence | Code/artifact reference | Strength of evidence | Remaining uncertainty |
 |---|---|---|---|---|---|
-| The C++ kernel makes calibration computationally feasible relative to Python | Justifies architecture and enables more replications | 35.65× median speedup with CI; direct 31.8× long-horizon run | `queue-simulator-benchmark/results/report.md`; `calibration-validation.md` | Strong for frozen benchmark workload/hardware | Current v12 is richer; end-to-end calibration overhead and other hardware not measured |
+| The C++ kernel makes calibration computationally feasible relative to Python | Justifies architecture and enables more replications | 35.65× median speedup with CI; direct 31.8× long-horizon run | `queue-simulator-benchmark/results/report.md`; `calibration-validation.md` | Strong for frozen benchmark workload/hardware | Current v13 is richer; end-to-end calibration overhead and other hardware are only narrowly replayed |
 | Native state capture and bucketing are semantically consistent on deterministic fixtures | Warm-up analysis depends on exact state areas | Six cross-kernel fixtures; current sanitizer-focused tests pass | benchmark report; `tests/test_simulation_state_capture.py`; native tests | Strong deterministic evidence | Does not establish stochastic steady-state correctness |
-| Current backend supports rich distributions and call semantics | Required for representative deployment models | Current code + passing distribution/call/queue tests | `performance_models/workload.py`; C++ `main.cpp`; 516-test run | Strong implementation evidence | Real measurement identifiability and prediction accuracy remain uncertain |
+| Current backend supports rich distributions and call semantics | Required for representative deployment models | Current code + passing distribution/call/queue tests | `performance_models/workload.py`; C++ `main.cpp`; 556-test run | Strong implementation evidence | Real measurement identifiability and prediction accuracy remain uncertain |
 | Traffic equations can predict mean internal flow | Validates queue-network topology abstraction | STELAR maximum flow error 1.44% in E04 | analytical-sufficiency `analysis.yaml/report.md` | Moderate, one deployment/workload | Fan-out/non-HTTP dependencies and other topologies not broadly tested |
 | Analytical mean latency alone is sufficient for sizing | Would avoid simulation cost | E04 and E05 both reject this claim near capacity | STELAR reports | Strong evidence **against** within tested domain | It may still work in restricted low-load/simple regimes |
 | Synchronous call holding plus path residual can predict mean latency | Supports enriched simulator model | Two fresh nearby STELAR holds: 1.85%, 3.76% errors | predictive-model `predictive_validation.yaml` | Preliminary | One residual run, v7, one topology/config/load; no p95 |
 | The recommended replica vector is feasible in a controlled heavy-tail deployment | Direct sizing value | [1,2,2] upper mean bound 128.284 ms <150 ms | heldout-sizing `summary.yaml` | Moderate/strong for that one case | Only five recommendation reps; not minimal; older unspecified code snapshot |
 | Kubesizer sizing generalizes across deployment families | Central thesis claim | 405-run study: 6 accepted matches, 2 under, 12 rejected | remote `analysis.yaml`, manifest | Mixed; broadest evidence but provenance-limited | Only four synthetic families; 25% accepted underprovision; dirty sources |
 | Current statistical workflow controls repeated looks and classes | Needed for defensible feasibility | Bonferroni tail allocation and unit tests | `simulation_evaluation.py`; `test_simulation_evaluation.py` | Strong code-level evidence | Coverage not simulation-studied; default bootstrap resolution limits class count |
-| Current global warm-up is validated at post-W windows | Removes initialization bias globally | Code computes check but ignores it in pass decision | `calibration/validation.py:211-241` | Strong evidence that claim is **not currently true** | Impact size requires rerunning after fix |
+| Current global warm-up is validated at post-W windows | Removes initialization bias globally | Validation requires both an early-enough cutoff and `post_warmup_check.passed`; regression test covers rejection | `calibration/validation.py:211-241`; `tests/test_warmup_validation.py` | Strong code-level evidence | Still needs a clean deployment-scale calibration run |
 | Measurement cohort is not right-censored at W+M | Tail estimates require complete slow requests | Event logic and focused tests | C++ `main.cpp`; measurement-cohort tests | Strong implementation evidence | Deadline outcomes deliberately censor service completion but count as failures |
 | Fresh final validation avoids optimization selection bias | Required for final SLO claim | disjoint seeds, fixed 30 reps, no early stop, tests | `calibration/seeds.py`; `replica_validation.py` | Strong code-level evidence | No retained full current workflow experiment |
 | Exact replica mode proves a bounded cost optimum | Gives a real algorithmic guarantee | uniform-cost ordering and tests | `optimization/uniform_cost.py` | Strong for deterministic/conclusive evaluator | Statistical unknowns break proof; model validity is separate |
 | Scalable replica mode finds near-optimal solutions | Important for large systems | No approximation bound or retained benchmark | scalable optimizer code/tests only | Weak; claim unsupported | Gap distribution and failure-to-find-feasible rate unknown |
-| Placement respects CPU/memory in the CLI | Necessary for deployability | CLI omits service resource requests | `kubesizer_cli.py:777`; `node_placement.py:53` | Strong evidence claim is false | Library callers can enable it manually |
+| CLI placement is a topology-only recommendation | Defines the scope of the returned node mapping | CLI omits per-service resource requests and reports no resource-feasibility certificate | `kubesizer_cli.py`; `optimization/node_placement.py`; `tests/test_cli.py` | Strong code-level evidence | Kubernetes scheduling feasibility must be checked separately |
 | Placement improves latency/resilience in practice | Justifies second optimizer | No retained deployment experiment | placement code/tests | No empirical evidence | Objective fidelity and benefit unknown |
 | Runtime estimates reliably predict user wait time | Usability claim | Code and deterministic tests only | `runtime_estimation.py`, tests | Implementation-level only | Calibration across workloads/hardware not retained |
 | The tool is ready for arbitrary DevOps deployments | Intended product-level contribution | Mixed deployment-family result and evidence gates | E11 plus portable workflow | Insufficient | Measurement availability, hidden bottlenecks, p95, placement, topology diversity |
@@ -970,8 +1028,7 @@ For each of these: **NOT ESTABLISHED FROM CURRENT EVIDENCE.**
 ## 11.1 Internal validity
 
 - **Dirty experimental source snapshots.** The largest study records uncommitted changes in both Kubesizer and the load-test repository without recording their content. A later checkout cannot exactly reproduce the analysis.
-- **Warm-up validation defect.** The current global validator ignores `post_warmup_check.passed`, so a reported accepted profile may not satisfy its stated post-cutoff criterion.
-- **Incomplete placement constraints.** The CLI can produce a placement without applying CPU/memory requests, confounding any claim that the output is deployable.
+- **Recently corrected contracts lack external reruns.** Warm-up acceptance, topology-only placement validation, timeout/failure handling, and placement-aware recalibration now have deterministic tests, but no clean deployment experiment has exercised all of them together.
 - **Load-generator failures.** In E11, 52 run diagnostics failed quality gates, including saturation and scheduler delay. The analysis correctly rejects affected decisions, but the high rejection rate reduces effective evidence.
 - **Instrumentation boundaries.** Client, ingress, application-entry Istio time, and CPU demand have different boundaries. Subtracting aligned means is valid for means, but misalignment or counter aggregation can create residual error.
 - **Residual fitting.** Some models fit low-load unexplained latency and freeze it. This is valid as calibration, not direct measurement of a causal service. One residual run cannot characterize its variability.
@@ -1049,11 +1106,9 @@ The most valuable scientific outcome is that negative findings were retained: ac
 
 ## P0 — necessary for correctness
 
-1. **Enforce the post-warm-up validation result.** Include `post_warmup_check.passed` in `ConfigurationWarmupValidation.passed`; add a regression test where cutoff time is early enough but post-W windows fail. Without this, the stated calibration contract is false.
-2. **Make placement resource feasibility real in the public workflow.** Add per-service CPU/memory requests to the active input-to-`NodePlacementProblem` path, or explicitly disable placement with a clear error when they are unavailable. A capacity-ignorant placement must not be presented as deployable.
-3. **Create a clean, immutable experiment provenance bundle.** Commit/tag exact Kubesizer and load-test sources before experiments; record container images, manifests, input hashes, cluster snapshot, analysis command, and output checksums. The largest existing study cannot be exactly reproduced from Git.
-4. **Run one clean end-to-end current-revision smoke experiment.** Produce and retain the actual profile, \(W\), \(M\), optimizer evaluation history, final fresh validation, and final recommendation under v12. Code-level tests do not prove that the integrated workflow terminates and preserves its contracts.
-5. **Resolve default bootstrap resolution for many classes.** Calculate bootstrap draws from classes/looks/tail-resolution or use a suitable spending/interval method. Defaults should not fail when the intended workload has around 20 request classes.
+1. **Create a clean, immutable experiment provenance bundle.** Commit/tag exact Kubesizer and load-test sources before experiments; record container images, manifests, input hashes, cluster snapshot, analysis command, and output checksums. The largest existing study cannot be exactly reproduced from Git.
+2. **Run one clean end-to-end current-revision experiment.** Produce and retain the actual profile, \(W\), \(M\), optimizer evaluation history, placement-aware recalibration, final fresh validation, and final recommendation under v13. Code-level tests and retained-data replay do not establish real-system predictive validity.
+3. **Resolve default bootstrap resolution for many classes.** Calculate bootstrap draws from classes/looks/tail-resolution or use a suitable spending/interval method. Defaults should not fail when the intended workload has around 20 request classes.
 
 ## P1 — necessary for a strong thesis
 
@@ -1104,13 +1159,13 @@ The current method has three levels. First, it solves per-request-class traffic 
 - exact branch-and-bound and scalable beam/VNS/LNS node placement;
 - evidence-quality gates and runtime estimation.
 
-The current test suite passes 516 tests. Release and sanitizer native builds pass, and 74 focused simulation/native tests pass under sanitizers.
+The current test suite passes 556 tests. Release and sanitizer native builds pass, and 74 focused simulation/native tests pass under sanitizers.
 
 ### What has been experimentally evaluated
 
-There are six retained verified experiment families: a cross-language kernel benchmark; direct long-horizon calibration timing; an analytical sufficiency study; an operation-aware analytical holdout; a controlled heavy-tail sizing holdout; and a 405-run, four-family deployment study. Additional warm-up sensitivity and synchronous-call holdout results are preliminary.
+There are five retained verified experiment families: a cross-language kernel benchmark; direct long-horizon calibration timing; an analytical sufficiency study; an operation-aware analytical holdout; and a controlled heavy-tail sizing holdout. The 405-run family study, warm-up sensitivity study, synchronous-call holdout, and current-v13 replay are preliminary under the current evidence-retention standard.
 
-There are no retained scientific experiments for current placement quality, exact-versus-scalable optimizer gaps, current v12 p95 prediction, or a clean full current-revision calibration-to-final-validation run.
+There are no retained scientific experiments for current placement quality, exact-versus-scalable optimizer gaps, current v13 p95 prediction, or a clean live full current-revision calibration-to-final-validation run.
 
 ### Most important results so far
 
@@ -1119,6 +1174,7 @@ There are no retained scientific experiments for current placement quality, exac
 - A narrow synchronous-call simulation holdout had 1.85% and 3.76% mean-latency error in two fresh nearby runs, but used one residual-calibration run and older v7 semantics.
 - In a controlled heavy-tail system, recommended [1,2,2] was feasible: 116.706 ms mean with 95% t interval [105.129,128.284] under a 150 ms SLO. A cheaper neighbor also passed the pooled mean, so the recommendation was conservative rather than minimal.
 - In the 405-run family study, 12 of 20 decisions were evidence-rejected. Of eight accepted decisions, six matched the tested empirical minimum and two were underprovisioned. At 30-replication target validation, repeated and shared families passed; single and fan-out failed.
+- Replaying current v13 on the four retained 30-run target points gave the safest portable model 3/4 decision agreement, zero unsafe false-feasible decisions, one conservative false-infeasible decision, and 28.1% mean absolute percentage error. A full single-family workflow selected five replicas; 30 fresh simulation seeds gave 90.006 ms with simultaneous 95% bounds [89.376, 90.666] under a 100 ms mean SLO. No retained live five-replica run exists.
 
 ### What the results indicate
 
@@ -1128,27 +1184,29 @@ The tool is therefore a strong prototype and experiment platform, not yet a gene
 
 ### Current limitations
 
-The global warm-up validator does not enforce its computed post-W stability result. CLI placement does not enforce CPU/memory requests. Most real evidence concerns mean latency rather than p95. The largest study used dirty, unreconstructable source snapshots. Aggregate CPU/throughput data do not identify wall-clock service-time variance or non-CPU capacity. Placement and scalable-search quality have not been experimentally assessed.
+Most real evidence concerns mean latency rather than p95. The largest study used dirty, unreconstructable source snapshots. Aggregate CPU/throughput data do not identify wall-clock service-time variance or non-CPU capacity. Placement and scalable-search quality have not been experimentally assessed. The newly tightened warm-up, terminal-failure, and placement-aware validation paths are code-tested but have not yet been rerun as a clean deployment experiment.
 
 ### Next experiments
 
-1. Fix the two correctness gaps and run one clean, current-v12 end-to-end experiment retaining the full profile and final validation.
+1. Run one clean end-to-end experiment with the current implementation, retaining the full profile and placement-aware final validation.
 2. Repeat the four-family study with paired workloads and fresh seeds, focusing on eliminating unsafe single/fan-out decisions and adding p95 SLOs.
 3. Run exact-versus-scalable replica and placement benchmarks, then deploy selected placements against random/spread baselines.
 
 # Appendix A. Verification performed during this audit
 
-The following inexpensive checks were executed against audited HEAD:
+The following inexpensive checks were executed against the audited working tree:
 
 | Check | Command | Result |
 |---|---|---|
-| Full Python suite | `python3 -m pytest -q` | **516 passed in 4.52 s** |
+| Full native build and Python suite | `make test` | **556 passed in 8.80 s** |
 | C++ Release build | `./native_backend/cpp/build.sh` | passed |
 | C++ sanitizer build | `./native_backend/cpp/build.sh --sanitizers` | passed |
 | Focused sanitizer-backed native/statistical tests | sanitizer backend via `KUBESIZER_CPP_BACKEND=...` with native, consistency, state, workflow, call, concurrency, and distribution tests | **74 passed in 16.76 s** |
-| Static typing | `mypy` over 62 source files | failed only for two missing `types-PyYAML` stub diagnostics in `calibration/profile.py` and `characterization/experiment_io.py` |
+| Static typing | `mypy` over 61 source files | passed with no issues; untyped PyYAML imports are explicitly isolated |
 | Formatter/linter availability | configured command inspection | no repository-wide configured lint target found; `ruff` executable was not available through the checked command path |
 | Analytical CLI smoke | minimum workload, analytical exact, skip placement, quiet | completed; one recommended replica for the single service |
+| Current retained target replay | four deployment families, five model variants, 30 replications, 20,000 bootstrap draws | safest portable model: 3/4 decisions, zero unsafe false-feasible, 28.1% MAPE |
+| Current public workflow replay | characterized single-service target, exact search through five replicas, 30 fresh validation runs | \(W=87.918\) s, \(M=1536\) s, selected five replicas; final mean 90.006 ms [89.376, 90.666] under 100 ms |
 
 Passing tests establish implementation consistency with the tests. They do not establish external predictive validity.
 
@@ -1189,6 +1247,7 @@ The following claims are presently defensible:
 
 - A compiled C++ event kernel can make repeated warm-up simulations tens of times faster than the Python alternatives on the retained benchmark.
 - The current source implements a statistically cautious simulation-evaluation architecture that distinguishes feasible, infeasible, inconclusive, and failed results.
+- The active CLI can recommend a network/spreading placement without requiring pod requests or limits, but it does not claim Kubernetes resource feasibility.
 - Mean traffic equations can be accurate even when latency/capacity predictions are wrong.
 - Enriching the simulator with synchronous call holding, distributions, measured latency layers, and input uncertainty is technically implemented and has encouraging narrow evidence.
 - Some controlled replica recommendations are feasible, but the method can also underprovision.
@@ -1196,9 +1255,8 @@ The following claims are presently defensible:
 The following claims are not presently defensible:
 
 - Kubesizer reliably sizes arbitrary Kubernetes microservice deployments.
-- The current v12 simulator has a known general prediction error.
+- The current v13 simulator still has material and topology-dependent prediction error.
 - The scalable optimizers are near-optimal.
-- The node-placement result is resource-feasible through the active CLI.
 - The placement objective improves deployed latency or availability.
 - The current calibration workflow has been externally validated end to end.
 

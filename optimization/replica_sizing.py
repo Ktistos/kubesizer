@@ -177,8 +177,9 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
     Exact/scalable describes search coverage. It does not change the queueing
     formulas selected by the system, and neither search mode turns analytical
     mean latency into a p95 or a statistical feasibility claim.
-    ``initial_configuration`` seeds scalable construction only; exact search
-    still starts at the analytical lower bound.
+    ``minimum_configuration`` can raise the hard lower bound above the
+    analytical vector. ``initial_configuration`` only seeds scalable
+    construction; exact search starts at the hard lower bound.
     """
 
     def __init__(
@@ -187,6 +188,7 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         request_class_mean_latency_limits,
         max_replicas,
         *,
+        minimum_configuration=None,
         initial_configuration=None,
         replica_costs=None,
         structural_feasibility=None,
@@ -198,17 +200,32 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         self.__service_count = len(system.get_services())
         self.__request_classes = tuple(system.get_request_classes())
         self.__limits = self.__normalize_limits(request_class_mean_latency_limits)
-        self.__stable = self.__normalize_configuration(
+        analytical_stable = self.__normalize_configuration(
             tuple(system.get_minimum_stable_replicas()),
             maximum=None,
         )
+        self.__stable = (
+            analytical_stable
+            if minimum_configuration is None
+            else self.__normalize_configuration(
+                minimum_configuration,
+                maximum=None,
+            )
+        )
+        if any(
+            supplied < analytical
+            for supplied, analytical in zip(self.__stable, analytical_stable)
+        ):
+            raise ValueError(
+                "minimum_configuration cannot be below analytical stability."
+            )
         self.__maximum = self.__normalize_maximum(max_replicas)
         if any(
             maximum < minimum for minimum, maximum in zip(self.__stable, self.__maximum)
         ):
             raise ValueError(
-                "Maximum replica bounds cannot be below the analytically "
-                "stable configuration."
+                "Maximum replica bounds cannot be below the required stable "
+                "configuration."
             )
         self.__construction_start = (
             self.__stable
@@ -220,7 +237,8 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             for value, minimum in zip(self.__construction_start, self.__stable)
         ):
             raise ValueError(
-                "initial_configuration cannot be below analytical stability."
+                "initial_configuration cannot be below the required stability "
+                "floor."
             )
         self.__replica_costs = self.__normalize_replica_costs(replica_costs)
         self.__structural_feasibility = structural_feasibility

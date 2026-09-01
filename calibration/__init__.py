@@ -9,6 +9,8 @@ from .profile import (
     experiment_fingerprints,
     load_calibration_profile,
     save_calibration_profile,
+    validate_failure_rate_replication_policy,
+    validate_timeout_failure_rate_constraints,
     validate_profile_for_experiment,
 )
 from .seeds import (
@@ -116,6 +118,8 @@ __all__ = [
     "experiment_fingerprints",
     "load_calibration_profile",
     "save_calibration_profile",
+    "validate_failure_rate_replication_policy",
+    "validate_timeout_failure_rate_constraints",
     "validate_profile_for_experiment",
     "MetricWarmupDiagnostic",
     "WarmupEnsembleSeries",
