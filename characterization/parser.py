@@ -17,13 +17,12 @@ import yaml  # type: ignore[import-untyped]
 from performance_models import CommunicationLatencySpec, parse_duration_distribution
 
 from .models import (
-    CapacityObservation,
     DEFAULT_MAXIMUM_CAPACITY_UTILIZATION,
-    DeploymentSpec,
+    MEASUREMENT_METHODOLOGY_VERSION,
+    CapacityObservation,
     ExternalArrivalSample,
     ExternalInterval,
     LatencyHistogramBucket,
-    MEASUREMENT_METHODOLOGY_VERSION,
     MeasurementPackage,
     PortableSizingInputs,
     ServiceClassInterval,
@@ -245,13 +244,10 @@ def _validate_interval_alignment(measurements):
         )
 
 
-def parse_deployment_spec(value):
-    """Validate the static service/resource declaration."""
-    if not isinstance(value, Mapping) or set(value) != {"services"}:
-        raise ValueError("deployment must contain exactly services.")
-    raw_services = value["services"]
+def _parse_workload_services(raw_services):
+    """Validate service execution facts embedded in the workload."""
     if not isinstance(raw_services, Mapping) or not raw_services:
-        raise ValueError("deployment.services must be a nonempty mapping.")
+        raise ValueError("workload.services must be a nonempty mapping.")
     services = []
     allowed = {
         "namespace",
@@ -262,44 +258,44 @@ def parse_deployment_spec(value):
         "concurrency_limit_per_replica",
     }
     for service_name, raw in raw_services.items():
-        name = _name(service_name, "deployment service name")
+        name = _name(service_name, "workload service name")
         if not isinstance(raw, Mapping) or set(raw) - allowed:
             raise ValueError(
-                f"deployment.services.{name} contains unsupported fields: "
+                f"workload.services.{name} contains unsupported fields: "
                 f"{sorted(set(raw) - allowed) if isinstance(raw, Mapping) else []}."
             )
         required = {"namespace", "cpu_request_cores"}
         missing = required - set(raw)
         if missing:
             raise ValueError(
-                f"deployment.services.{name} is missing {sorted(missing)}."
+                f"workload.services.{name} is missing {sorted(missing)}."
             )
         cpu_request = _finite(
             raw["cpu_request_cores"],
-            f"deployment.services.{name}.cpu_request_cores",
+            f"workload.services.{name}.cpu_request_cores",
             positive=True,
         )
         cpu_limit = _optional_number(
             raw,
             "cpu_limit_cores",
-            f"deployment.services.{name}.cpu_limit_cores",
+            f"workload.services.{name}.cpu_limit_cores",
             positive=True,
         )
         if cpu_limit is not None and cpu_limit < cpu_request:
             raise ValueError(
-                f"deployment.services.{name}.cpu_limit_cores cannot be smaller "
+                f"workload.services.{name}.cpu_limit_cores cannot be smaller "
                 "than cpu_request_cores."
             )
         memory_request = _optional_number(
             raw,
             "memory_request_bytes",
-            f"deployment.services.{name}.memory_request_bytes",
+            f"workload.services.{name}.memory_request_bytes",
             positive=True,
         )
         memory_limit = _optional_number(
             raw,
             "memory_limit_bytes",
-            f"deployment.services.{name}.memory_limit_bytes",
+            f"workload.services.{name}.memory_limit_bytes",
             positive=True,
         )
         if (
@@ -308,7 +304,7 @@ def parse_deployment_spec(value):
             and memory_limit < memory_request
         ):
             raise ValueError(
-                f"deployment.services.{name}.memory_limit_bytes cannot be "
+                f"workload.services.{name}.memory_limit_bytes cannot be "
                 "smaller than memory_request_bytes."
             )
         concurrency_limit = raw.get("concurrency_limit_per_replica")
@@ -318,7 +314,7 @@ def parse_deployment_spec(value):
             or concurrency_limit <= 0
         ):
             raise ValueError(
-                f"deployment.services.{name}.concurrency_limit_per_replica "
+                f"workload.services.{name}.concurrency_limit_per_replica "
                 "must be a positive integer when supplied."
             )
         services.append(
@@ -326,7 +322,7 @@ def parse_deployment_spec(value):
                 name=name,
                 namespace=_name(
                     raw["namespace"],
-                    f"deployment.services.{name}.namespace",
+                    f"workload.services.{name}.namespace",
                 ),
                 cpu_request_cores=cpu_request,
                 cpu_limit_cores=cpu_limit,
@@ -335,7 +331,7 @@ def parse_deployment_spec(value):
                 concurrency_limit_per_replica=concurrency_limit,
             )
         )
-    return DeploymentSpec(tuple(services))
+    return tuple(services)
 
 
 def _canonical_slo(raw, label):
@@ -367,9 +363,10 @@ def _canonical_slo(raw, label):
     return (("percentile", (("quantile", quantile), ("maximum_seconds", maximum))),)
 
 
-def parse_workload_definition(value, deployment, *, base_path=None):
+def parse_workload_definition(value, *, base_path=None):
     """Validate request semantics and SLOs for the measured workload."""
     allowed_top_level = {
+        "services",
         "request_classes",
         "load_forecast",
         "sizing_policy",
@@ -378,16 +375,19 @@ def parse_workload_definition(value, deployment, *, base_path=None):
     }
     if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
-            "workload must contain request_classes and may contain load_forecast, "
-            "sizing_policy, communication_latency, and service_blocking_times; "
+            "workload must contain services and request_classes and may contain "
+            "load_forecast, sizing_policy, communication_latency, and "
+            "service_blocking_times; "
             "arrival rates come from the measurement package."
         )
-    if "request_classes" not in value:
-        raise ValueError("workload is missing request_classes.")
+    missing = {"services", "request_classes"} - set(value)
+    if missing:
+        raise ValueError(f"workload is missing {sorted(missing)}.")
+    services = _parse_workload_services(value["services"])
     raw_classes = value["request_classes"]
     if not isinstance(raw_classes, Mapping) or not raw_classes:
         raise ValueError("request_classes must be a nonempty mapping.")
-    service_names = set(deployment.service_names)
+    service_names = {service.name for service in services}
     classes = []
     allowed = {
         "concurrency_weight",
@@ -763,6 +763,7 @@ def parse_workload_definition(value, deployment, *, base_path=None):
             for service_name, specification in raw_blocking_times.items()
         )
     return WorkloadDefinition(
+        services=services,
         request_classes=tuple(classes),
         load_forecast_multipliers=multipliers,
         communication_latency=communication_latency,
@@ -1212,17 +1213,14 @@ def _fingerprint(*values):
 
 
 def parse_portable_sizing_inputs(
-    deployment,
     workload,
     measurement_manifest,
     *,
     base_path,
     workload_base_path=None,
 ):
-    parsed_deployment = parse_deployment_spec(deployment)
     parsed_workload = parse_workload_definition(
         workload,
-        parsed_deployment,
         base_path=(base_path if workload_base_path is None else workload_base_path),
     )
     parsed_measurements = parse_measurement_manifest(
@@ -1230,24 +1228,20 @@ def parse_portable_sizing_inputs(
         base_path=base_path,
     )
     return PortableSizingInputs(
-        deployment=parsed_deployment,
         workload=parsed_workload,
         measurements=parsed_measurements,
         fingerprint=_fingerprint(
-            parsed_deployment,
             parsed_workload,
             parsed_measurements,
         ),
     )
 
 
-def load_portable_sizing_inputs(deployment_path, workload_path, measurements_path):
-    """Load a complete offline evidence package from three YAML files."""
-    deployment_path = Path(deployment_path).expanduser().resolve()
+def load_portable_sizing_inputs(workload_path, measurements_path):
+    """Load a complete offline evidence package from two YAML files."""
     workload_path = Path(workload_path).expanduser().resolve()
     measurements_path = Path(measurements_path).expanduser().resolve()
     return parse_portable_sizing_inputs(
-        _read_yaml(deployment_path, "deployment"),
         _read_yaml(workload_path, "workload"),
         _read_yaml(measurements_path, "measurement manifest"),
         base_path=measurements_path.parent,

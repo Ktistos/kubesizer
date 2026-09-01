@@ -1,10 +1,9 @@
-# Kubesizer `workload.yaml` and `deployment.yaml` Guide
+# Kubesizer `workload.yaml` and `measurements.yaml` Guide
 
 This guide describes the **portable evidence workflow**, where a DevOps engineer supplies:
 
 ```text
 workload.yaml     What traffic means and what must be achieved
-deployment.yaml   Which deployed services produced the measurements
 measurements.yaml Where the observed workload and capacity data are stored
 resources.yaml    Optional node communication data for placement
 ```
@@ -14,7 +13,6 @@ The command is:
 ```bash
 kubesizer \
   --workload workload.yaml \
-  --deployment deployment.yaml \
   --measurements measurements.yaml \
   --replica-evaluation simulation \
   --replica-search auto \
@@ -24,6 +22,27 @@ kubesizer \
 ## Example `workload.yaml`
 
 ```yaml
+# Static service facts needed to interpret the measurement evidence. Keeping
+# them in this file gives the workload one canonical service vocabulary.
+services:
+  api:
+    namespace: production
+    cpu_request_cores: 0.5
+    cpu_limit_cores: 1.0
+    concurrency_limit_per_replica: 32
+
+  auth:
+    namespace: production
+    cpu_request_cores: 0.25
+
+  database:
+    namespace: data
+    cpu_request_cores: 1.0
+
+  cache:
+    namespace: production
+    cpu_request_cores: 0.25
+
 # Request classes are logical user operations, such as browsing a catalogue
 # or submitting an order. The weights must add up to 1.0.
 request_classes:
@@ -131,6 +150,12 @@ communication_latency:
 
 | Field | Meaning inside Kubesizer |
 |---|---|
+| `services` | Canonical modeled services and the execution context under which their evidence was measured. |
+| `services.<name>.namespace` | Kubernetes namespace used to validate service/pod attribution. |
+| `services.<name>.cpu_request_cores` | CPU reservation used to convert measured CPU-seconds/request into an elapsed execution-time estimate. |
+| `services.<name>.cpu_limit_cores` | Optional reported CPU ceiling; it is not treated as guaranteed capacity. |
+| `services.<name>.memory_*` | Optional retained measurement context; not currently a placement-packing proof. |
+| `services.<name>.concurrency_limit_per_replica` | Optional measured/configured finite worker, thread, connection, or admission pool. |
 | `request_classes` | Logical operations whose latencies and SLOs are evaluated separately. |
 | `concurrency_weight` | Expected share of external requests belonging to the class. All class weights must sum to `1.0`. It is checked against the measured class mix. |
 | `entry_services` | How the class's measured external arrival rate is divided among application entry services. The weights for one class must sum to `1.0`. |
@@ -167,9 +192,9 @@ The corresponding observed rates are 30 browse requests/second and 10 checkout r
 
 This separation prevents a manually typed rate and a measured rate from silently disagreeing.
 
-## Example `deployment.yaml`
+## Service declarations inside `workload.yaml`
 
-A minimal valid deployment file is:
+A minimal portable workload starts with:
 
 ```yaml
 services:
@@ -190,7 +215,7 @@ services:
     cpu_request_cores: 0.25
 ```
 
-An extended version can retain more resource context and explicit concurrency limits:
+The service entries can retain more resource context and explicit concurrency limits:
 
 ```yaml
 services:
@@ -226,13 +251,13 @@ services:
     memory_limit_bytes: 536870912
 ```
 
-## Why `deployment.yaml` is useful
+## Why the service facts remain useful
 
-`workload.yaml` says **how requests behave**. It does not contain enough information to interpret Kubernetes and Prometheus observations. `deployment.yaml` supplies that missing deployment context.
+The separate deployment file was redundant, but its service facts were not. They now live under `workload.services`, beside the request topology that refers to them.
 
 ### 1. It defines the canonical service set
 
-Prometheus data is reported by namespace and pod, while workload topology uses logical service names. `deployment.yaml` tells Kubesizer which services belong to the experiment and which namespace each service occupies.
+Prometheus data is reported by namespace and pod, while workload topology uses logical service names. `workload.services` tells Kubesizer which services belong to the experiment and which namespace each service occupies.
 
 This prevents unrelated pods with similar names from being mixed into the model.
 
@@ -244,7 +269,7 @@ The portable measurement pipeline joins Istio throughput with application-contai
 namespace + pod
 ```
 
-The deployment specification provides the expected namespace/service ownership used to validate that attribution.
+The workload service declarations provide the expected namespace/service ownership used to validate that attribution.
 
 ### 3. It turns CPU demand into an execution-time model
 
@@ -285,17 +310,17 @@ The field is optional because it is not reliably available for every application
 
 A service-demand estimate is not universal. It was observed under a particular CPU reservation, memory configuration, software version, node environment, and workload.
 
-Keeping the deployment facts alongside the measurements makes it possible to detect that the deployment changed and that old evidence should not be reused blindly.
+Keeping these facts in the workload fingerprint makes it possible to detect that the measured execution context changed and that old evidence should not be reused blindly.
 
 ### 6. It does not tell Kubesizer the answer
 
-`deployment.yaml` describes one replica's execution context. It does not provide the recommended replica count. The replica count is the output of the stability and SLO optimization.
+`workload.services` describes one replica's measured execution context. It does not provide the recommended replica count. The replica count is the output of the stability and SLO optimization.
 
 It also does not replace `resources.yaml`:
 
 | File | Scope |
 |---|---|
-| `deployment.yaml` | Per-service namespace, CPU/memory context, and optional concurrency |
+| `workload.yaml` | Services, request topology, SLOs, sizing policy, and measurement context |
 | `resources.yaml` | Optional node identities, node-to-node latency, and execution multipliers for placement |
 
 The current CLI node-placement flow does not enforce CPU/memory packing because it does not yet pass per-service placement demands into the placement problem. Therefore deployment CPU/memory values currently characterize service execution; they are not a Kubernetes scheduling proof.
@@ -306,17 +331,15 @@ For a deployment-informed recommendation, provide at least:
 
 ```text
 workload.yaml
+  - every modeled service
+  - namespace and CPU request for every service
+  - optional resource context and concurrency limits
   - every request class
   - concurrency weight for every class
   - entry-service weights
   - calls and explicit call execution semantics
   - a mean or p95 end-to-end latency SLO
   - optional maximum capacity utilization; default 0.85
-
-deployment.yaml
-  - every modeled service
-  - namespace
-  - CPU request in cores
 
 measurements.yaml and retained CSVs
   - aligned external request-class counts
@@ -331,7 +354,10 @@ Latency histograms, arrival traces, network measurements, blocking-time evidence
 
 The easiest way to remember the files is:
 
-> `workload.yaml` describes the question.  
-> `deployment.yaml` describes the environment in which the evidence was observed.  
-> `measurements.yaml` points to the evidence.  
+> `workload.yaml` describes the services, workload, and sizing question.
+>
+> `measurements.yaml` points to the evidence observed for that workload.
+>
+> `resources.yaml` optionally describes nodes for placement.
+>
 > Kubesizer produces the replica answer.

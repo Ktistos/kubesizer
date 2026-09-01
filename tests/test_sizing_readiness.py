@@ -10,21 +10,19 @@ from characterization import (
     LatencySummary,
     RecommendationReadiness,
     assess_initial_sizing_risk,
+    build_simulation_workload_variants,
     characterize_deployment,
     load_and_prepare_initial_sizing,
     load_portable_sizing_inputs,
-    recommend_initial_replicas,
-    build_simulation_workload_variants,
     parse_portable_sizing_inputs,
+    recommend_initial_replicas,
 )
-
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
 
 
 def _evidence():
     inputs = load_portable_sizing_inputs(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / "measurements.yaml",
     )
@@ -40,7 +38,6 @@ def _yaml(name):
 
 def test_prepared_initial_sizing_exposes_conditional_risk_ranges():
     prepared = load_and_prepare_initial_sizing(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / "measurements.yaml",
     )
@@ -125,7 +122,6 @@ def test_inferred_edges_are_explicit_structural_uncertainty_not_a_hidden_claim()
     workload["request_classes"]["browse"].pop("calls")
     workload["request_classes"]["browse"].pop("call_execution")
     inputs = parse_portable_sizing_inputs(
-        _yaml("deployment.yaml"),
         workload,
         _yaml("measurements.yaml"),
         base_path=EXAMPLE,

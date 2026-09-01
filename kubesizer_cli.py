@@ -34,6 +34,7 @@ from optimization import (
     optimize_node_placement,
 )
 from performance_models import Cluster, QueueingNetworkType, System
+from runtime_estimation import estimate_workflow_runtime
 from statistical_workflow import (
     calibrate,
     calibrate_fixed_placement,
@@ -41,8 +42,6 @@ from statistical_workflow import (
     optimize_with_calibrated_simulation,
     validate_final_configuration,
 )
-from runtime_estimation import estimate_workflow_runtime
-
 
 CLI_VERSION = "0.2.0"
 DEFAULT_MAXIMUM_REPLICAS = 10
@@ -110,18 +109,12 @@ def _load_system(
 
 def _load_workflow_system(args):
     """Load either a native workload or the portable evidence workflow."""
-    portable_paths = (args.deployment, args.measurements)
-    if any(portable_paths) and not all(portable_paths):
-        raise CliUsageError(
-            "--deployment and --measurements must be supplied together."
-        )
-    if not all(portable_paths):
+    if args.measurements is None:
         system, workload_path = _load_system(args.workload)
         return system, workload_path, None, None
 
     workload_path = Path(args.workload).expanduser().resolve()
     plan = load_and_prepare_initial_sizing(
-        args.deployment,
         workload_path,
         args.measurements,
     )
@@ -1003,17 +996,10 @@ def _add_workload_argument(parser):
         help="Workload YAML path (default: workload.yaml).",
     )
     parser.add_argument(
-        "--deployment",
-        help=(
-            "Kubernetes resource facts for a portable measurement workflow. "
-            "Requires --measurements."
-        ),
-    )
-    parser.add_argument(
         "--measurements",
         help=(
-            "Versioned measurement-manifest YAML. Requires --deployment; "
-            "arrival rates are derived from its evidence."
+            "Versioned measurement-manifest YAML. When supplied, service facts "
+            "come from workload.services and arrival rates from its evidence."
         ),
     )
 

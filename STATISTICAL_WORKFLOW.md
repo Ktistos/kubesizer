@@ -50,7 +50,6 @@ from characterization import (
 )
 
 prepared = load_and_prepare_initial_sizing(
-    "deployment.yaml",
     "workload.yaml",
     "measurements.yaml",
 )

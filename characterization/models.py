@@ -39,21 +39,6 @@ class ServiceDeployment:
 
 
 @dataclass(frozen=True)
-class DeploymentSpec:
-    services: tuple[ServiceDeployment, ...]
-
-    @property
-    def service_names(self):
-        return tuple(service.name for service in self.services)
-
-    def service(self, name):
-        for service in self.services:
-            if service.name == name:
-                return service
-        raise KeyError(name)
-
-
-@dataclass(frozen=True)
 class TargetRequestClass:
     name: str
     concurrency_weight: float
@@ -84,11 +69,22 @@ class TargetRequestClass:
 
 @dataclass(frozen=True)
 class WorkloadDefinition:
+    services: tuple[ServiceDeployment, ...]
     request_classes: tuple[TargetRequestClass, ...]
     load_forecast_multipliers: tuple[float, ...] = (1.0,)
     communication_latency: object | None = None
     service_blocking_times: tuple[tuple[str, object], ...] = ()
     maximum_capacity_utilization: float = DEFAULT_MAXIMUM_CAPACITY_UTILIZATION
+
+    @property
+    def service_names(self):
+        return tuple(service.name for service in self.services)
+
+    def service(self, name):
+        for service in self.services:
+            if service.name == name:
+                return service
+        raise KeyError(name)
 
     @property
     def maximum_load_multiplier(self):
@@ -245,7 +241,6 @@ class MeasurementPackage:
 
 @dataclass(frozen=True)
 class PortableSizingInputs:
-    deployment: DeploymentSpec
     workload: WorkloadDefinition
     measurements: MeasurementPackage
     fingerprint: str

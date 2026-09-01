@@ -8,7 +8,6 @@ from .sizing import recommend_initial_replicas, resolve_sizing_policy
 
 
 def prepare_initial_sizing(
-    deployment,
     workload,
     measurement_manifest,
     *,
@@ -19,7 +18,6 @@ def prepare_initial_sizing(
 ):
     """Parse mappings, derive evidence, and return an initial recommendation."""
     inputs = parse_portable_sizing_inputs(
-        deployment,
         workload,
         measurement_manifest,
         base_path=base_path,
@@ -44,7 +42,6 @@ def prepare_initial_sizing(
 
 
 def load_and_prepare_initial_sizing(
-    deployment_path,
     workload_path,
     measurements_path,
     *,
@@ -52,9 +49,8 @@ def load_and_prepare_initial_sizing(
     evidence_gate_policy=None,
     require_recommendable=True,
 ):
-    """Load the three-file package and return a deterministic sizing result."""
+    """Load the two-file package and return a deterministic sizing result."""
     inputs = load_portable_sizing_inputs(
-        deployment_path,
         workload_path,
         measurements_path,
     )

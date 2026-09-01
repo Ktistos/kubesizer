@@ -1,5 +1,5 @@
-import json
 import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -963,8 +963,6 @@ def test_portable_measurements_run_end_to_end_to_service_recommendations(
         [
             "--workload",
             str(evidence / "workload.yaml"),
-            "--deployment",
-            str(evidence / "deployment.yaml"),
             "--measurements",
             str(evidence / "measurements.with-capacity.yaml"),
             "--replica-evaluation",
@@ -1005,8 +1003,6 @@ def test_portable_workflow_refuses_to_claim_stability_without_capacity_runs(
         [
             "--workload",
             str(evidence / "workload.yaml"),
-            "--deployment",
-            str(evidence / "deployment.yaml"),
             "--measurements",
             str(evidence / "measurements.yaml"),
             "--replica-evaluation",
@@ -1063,8 +1059,6 @@ def test_portable_measurements_seed_the_internal_simulation_optimizer(
         [
             "--workload",
             str(evidence / "workload.yaml"),
-            "--deployment",
-            str(evidence / "deployment.yaml"),
             "--measurements",
             str(evidence / "measurements.with-capacity.yaml"),
             "--replica-evaluation",
@@ -1089,7 +1083,6 @@ def test_portable_workflow_starts_at_statistical_floor_not_legacy_sizing_seed(
 ):
     evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
     plan = kubesizer_cli.load_and_prepare_initial_sizing(
-        evidence / "deployment.yaml",
         evidence / "workload.yaml",
         evidence / "measurements.with-capacity.yaml",
     )
@@ -1116,7 +1109,6 @@ def test_portable_workflow_starts_at_statistical_floor_not_legacy_sizing_seed(
     )
     arguments = SimpleNamespace(
         workload=str(evidence / "workload.yaml"),
-        deployment=str(evidence / "deployment.yaml"),
         measurements=str(evidence / "measurements.with-capacity.yaml"),
         max_replicas=4,
     )
@@ -1138,7 +1130,6 @@ def test_portable_cli_honors_declared_maximum_capacity_utilization(tmp_path):
     workload_path.write_text(yaml.safe_dump(workload), encoding="utf-8")
     arguments = SimpleNamespace(
         workload=str(workload_path),
-        deployment=str(evidence / "deployment.yaml"),
         measurements=str(evidence / "measurements.with-capacity.yaml"),
         max_replicas=4,
     )
@@ -1151,21 +1142,21 @@ def test_portable_cli_honors_declared_maximum_capacity_utilization(tmp_path):
     assert minimum == (2, 2)
 
 
-def test_portable_measurement_arguments_must_be_supplied_together(capsys):
-    exit_code = kubesizer_cli.main(
-        [
-            "--workload",
-            "unused.yaml",
-            "--deployment",
-            "deployment.yaml",
-            "--json",
-            "--quiet",
-        ]
-    )
+def test_removed_deployment_argument_is_rejected(capsys):
+    with pytest.raises(SystemExit) as error:
+        kubesizer_cli.main(
+            [
+                "--workload",
+                str(Path(__file__).parents[1] / "workload.minimum.yaml"),
+                "--deployment",
+                "deployment.yaml",
+                "--json",
+                "--quiet",
+            ]
+        )
 
-    output = json.loads(capsys.readouterr().out)
-    assert exit_code == 2
-    assert "must be supplied together" in output["error"]["message"]
+    assert error.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
 
 
 def test_out_is_the_only_explicit_result_write(tmp_path, capsys):

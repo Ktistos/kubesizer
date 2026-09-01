@@ -4,16 +4,15 @@ import pytest
 import yaml
 
 from characterization import (
-    StatisticalStabilityError,
     StabilityFloorStatus,
+    StatisticalStabilityError,
     build_characterized_system_variants,
+    characterize_deployment,
     estimate_statistical_stability_floor,
     load_and_prepare_initial_sizing,
     parse_portable_sizing_inputs,
-    characterize_deployment,
 )
 from optimization import AnalyticalReplicaSizingProblem, UniformCostReplicaOptimizer
-
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
 
@@ -25,7 +24,6 @@ def _load_yaml(name):
 
 def _plan(manifest="measurements.with-capacity.yaml"):
     return load_and_prepare_initial_sizing(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / manifest,
     )
@@ -79,7 +77,6 @@ def test_declared_lower_utilization_produces_a_no_smaller_stability_floor():
     workload = _load_yaml("workload.yaml")
     workload["sizing_policy"] = {"maximum_capacity_utilization": 0.50}
     inputs = parse_portable_sizing_inputs(
-        _load_yaml("deployment.yaml"),
         workload,
         _load_yaml("measurements.with-capacity.yaml"),
         base_path=EXAMPLE,
@@ -126,7 +123,6 @@ def test_floor_uses_strict_capacity_margin_and_labels_untested_count(tmp_path):
     manifest = _load_yaml("measurements.yaml")
     manifest["capacity_observations"] = str(capacity)
     inputs = parse_portable_sizing_inputs(
-        _load_yaml("deployment.yaml"),
         _load_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,
@@ -159,7 +155,6 @@ def test_floor_reports_when_confidence_bounded_requirement_exceeds_bounds(tmp_pa
     manifest = _load_yaml("measurements.yaml")
     manifest["capacity_observations"] = str(capacity)
     inputs = parse_portable_sizing_inputs(
-        _load_yaml("deployment.yaml"),
         _load_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,

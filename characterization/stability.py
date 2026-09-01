@@ -88,8 +88,8 @@ def estimate_statistical_stability_floor(
     if characterization.input_fingerprint != inputs.fingerprint:
         raise ValueError("Characterization belongs to a different evidence package.")
 
-    service_order = tuple(service_order or inputs.deployment.service_names)
-    declared_services = tuple(inputs.deployment.service_names)
+    service_order = tuple(service_order or inputs.workload.service_names)
+    declared_services = tuple(inputs.workload.service_names)
     if len(service_order) != len(declared_services) or set(service_order) != set(
         declared_services
     ):

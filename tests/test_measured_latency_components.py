@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+from calibration.profile import experiment_fingerprints
 from characterization import (
     build_simulation_workload_variants,
     characterize_deployment,
     parse_portable_sizing_inputs,
 )
-from calibration.profile import experiment_fingerprints
 from native_backend import get_native_backend
 from performance_models import QueueingNetworkType, System, parse_workload_spec
 
@@ -268,8 +268,6 @@ def test_attached_placement_can_preserve_measured_same_node_delay():
 
 def test_portable_workload_preserves_measured_components_and_network_model():
     base_path = Path(__file__).parents[1] / "examples" / "portable_evidence"
-    with (base_path / "deployment.yaml").open(encoding="utf-8") as stream:
-        deployment = yaml.safe_load(stream)
     with (base_path / "workload.yaml").open(encoding="utf-8") as stream:
         workload = yaml.safe_load(stream)
     with (base_path / "measurements.yaml").open(encoding="utf-8") as stream:
@@ -293,7 +291,6 @@ def test_portable_workload_preserves_measured_components_and_network_model():
         "api": {"distribution": "deterministic", "mean": 0.006}
     }
     inputs = parse_portable_sizing_inputs(
-        deployment,
         workload,
         measurements,
         base_path=base_path,

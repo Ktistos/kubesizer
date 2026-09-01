@@ -66,7 +66,7 @@ This table separates what the current prototype can do from what the evidence al
 The active user entry point is the single-command CLI in `kubesizer_cli.py`:
 
 - `build_parser()` (`kubesizer_cli.py:905`) defines workload, deployment evidence, replica-evaluation, replica-search, placement-search, bounds, worker, progress, and output options.
-- `_load_workflow_system()` (`kubesizer_cli.py:110`) chooses either a native workload YAML or the portable deployment/workload/measurement evidence path.
+- `_load_workflow_system()` (`kubesizer_cli.py:110`) chooses either a native workload YAML or the portable workload-plus-measurement evidence path; portable service facts live under `workload.services`.
 - `_run_replica_workflow()` (`kubesizer_cli.py:683`) selects analytical or calibrated-simulation sizing.
 - `_command_run()` (`kubesizer_cli.py:745`) runs sizing, optional placement, and—when simulation is used—fresh final validation after placement effects have been installed.
 
@@ -424,7 +424,7 @@ This sequencing correctly avoids reusing optimization samples for the final repo
 
 ## 3.3 Portable evidence flow
 
-1. `_load_workflow_system()` receives `--deployment`, `--workload`, and `--measurements`.
+1. `_load_workflow_system()` receives `--workload` and `--measurements`; static service facts are embedded under `workload.services`.
 2. `load_and_prepare_initial_sizing()` (`characterization/workflow.py:45`) parses and fingerprints all evidence.
 3. `characterize_deployment()` derives flows, CPU demand, capacity evidence, latency components, and quality diagnostics.
 4. `recommend_initial_replicas()` creates the telemetry-derived seed.

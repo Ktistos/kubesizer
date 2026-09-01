@@ -30,7 +30,6 @@ def _loaded_yaml(name):
 
 def _inputs():
     return load_portable_sizing_inputs(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / "measurements.yaml",
     )
@@ -109,7 +108,6 @@ def test_measurement_contract_freezes_cross_cluster_counter_semantics():
 
 def test_capacity_example_produces_detailed_bounded_evidence():
     plan = load_and_prepare_initial_sizing(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / "measurements.with-capacity.yaml",
     )
@@ -127,7 +125,6 @@ def test_measurement_manifest_requires_the_supported_methodology():
     manifest.pop("methodology_version")
     with pytest.raises(ValueError, match="missing.*methodology_version"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             _loaded_yaml("workload.yaml"),
             manifest,
             base_path=EXAMPLE,
@@ -136,7 +133,6 @@ def test_measurement_manifest_requires_the_supported_methodology():
     manifest["methodology_version"] = "cluster-specific-guess-v1"
     with pytest.raises(ValueError, match="Unsupported measurement methodology"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             _loaded_yaml("workload.yaml"),
             manifest,
             base_path=EXAMPLE,
@@ -149,11 +145,37 @@ def test_workload_rejects_a_separate_arrival_rate_override():
 
     with pytest.raises(ValueError, match="arrival rates come from the measurement"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             workload,
             _loaded_yaml("measurements.yaml"),
             base_path=EXAMPLE,
         )
+
+
+def test_portable_workload_requires_embedded_service_declarations():
+    workload = _loaded_yaml("workload.yaml")
+    workload.pop("services")
+
+    with pytest.raises(ValueError, match="workload is missing.*services"):
+        parse_portable_sizing_inputs(
+            workload,
+            _loaded_yaml("measurements.yaml"),
+            base_path=EXAMPLE,
+        )
+
+
+def test_embedded_service_context_is_part_of_the_input_fingerprint():
+    baseline = _inputs()
+    workload = _loaded_yaml("workload.yaml")
+    workload["services"]["api"]["cpu_request_cores"] = 0.75
+
+    changed = parse_portable_sizing_inputs(
+        workload,
+        _loaded_yaml("measurements.yaml"),
+        base_path=EXAMPLE,
+    )
+
+    assert changed.workload.service("api").cpu_request_cores == pytest.approx(0.75)
+    assert changed.fingerprint != baseline.fingerprint
 
 
 def test_workload_parses_capacity_utilization_policy_and_fingerprints_it():
@@ -162,7 +184,6 @@ def test_workload_parses_capacity_utilization_policy_and_fingerprints_it():
     workload["sizing_policy"] = {"maximum_capacity_utilization": 0.70}
 
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         workload,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
@@ -180,7 +201,6 @@ def test_workload_rejects_invalid_capacity_utilization_policy(value):
 
     with pytest.raises(ValueError, match="maximum_capacity_utilization"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             workload,
             _loaded_yaml("measurements.yaml"),
             base_path=EXAMPLE,
@@ -196,7 +216,6 @@ def test_workload_capacity_utilization_policy_rejects_unknown_fields():
 
     with pytest.raises(ValueError, match="must contain exactly"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             workload,
             _loaded_yaml("measurements.yaml"),
             base_path=EXAMPLE,
@@ -209,7 +228,6 @@ def test_manifest_rejects_unobservable_per_request_cpu_samples():
 
     with pytest.raises(ValueError, match="unsupported fields"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             _loaded_yaml("workload.yaml"),
             manifest,
             base_path=EXAMPLE,
@@ -217,11 +235,10 @@ def test_manifest_rejects_unobservable_per_request_cpu_samples():
 
 
 def test_measurement_namespace_must_match_the_declared_kubernetes_service():
-    deployment = _loaded_yaml("deployment.yaml")
-    deployment["services"]["api"]["namespace"] = "another-namespace"
+    workload = _loaded_yaml("workload.yaml")
+    workload["services"]["api"]["namespace"] = "another-namespace"
     inputs = parse_portable_sizing_inputs(
-        deployment,
-        _loaded_yaml("workload.yaml"),
+        workload,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
     )
@@ -249,7 +266,6 @@ def test_measurement_infers_replicas_and_requires_a_fixed_observation(tmp_path):
     manifest["service_intervals"] = str(changing_replicas)
     manifest.pop("service_class_intervals")
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         _loaded_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,
@@ -268,7 +284,6 @@ def test_service_counter_windows_must_be_unique_and_aligned(tmp_path):
     manifest["service_intervals"] = str(duplicate)
     with pytest.raises(ValueError, match="duplicate rows"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             _loaded_yaml("workload.yaml"),
             manifest,
             base_path=EXAMPLE,
@@ -279,7 +294,6 @@ def test_service_counter_windows_must_be_unique_and_aligned(tmp_path):
     manifest["service_intervals"] = str(missing_window)
     with pytest.raises(ValueError, match="same observation windows"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             _loaded_yaml("workload.yaml"),
             manifest,
             base_path=EXAMPLE,
@@ -333,7 +347,6 @@ def test_empirical_capacity_envelope_is_bounded_by_observed_replica_count(
         ),
     )
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         _loaded_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,
@@ -362,7 +375,6 @@ def test_empirical_capacity_does_not_extrapolate_linearly(tmp_path):
         ),
     )
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         _loaded_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,
@@ -393,7 +405,6 @@ def test_unhealthy_capacity_run_blocks_conflicting_replica_count(tmp_path):
         ),
     )
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         _loaded_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,
@@ -419,7 +430,6 @@ def test_capacity_run_ids_must_be_unique_per_service_and_replica(tmp_path):
 
     with pytest.raises(ValueError, match="duplicate.*run_id"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             _loaded_yaml("workload.yaml"),
             manifest,
             base_path=EXAMPLE,
@@ -429,7 +439,6 @@ def test_capacity_run_ids_must_be_unique_per_service_and_replica(tmp_path):
 def test_cpu_demand_is_derived_from_time_aligned_cpu_and_request_counters():
     manifest = _loaded_yaml("measurements.yaml")
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         _loaded_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,
@@ -456,7 +465,6 @@ def test_optional_evidence_can_be_omitted_without_blocking_initial_sizing():
         "service_intervals": "service-intervals.csv",
     }
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         _loaded_yaml("workload.yaml"),
         manifest,
         base_path=EXAMPLE,
@@ -475,12 +483,10 @@ def test_optional_evidence_can_be_omitted_without_blocking_initial_sizing():
 
 def test_sizing_is_idempotent_and_workload_semantics_change_the_fingerprint():
     first = load_and_prepare_initial_sizing(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / "measurements.yaml",
     )
     second = load_and_prepare_initial_sizing(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / "measurements.yaml",
     )
@@ -489,7 +495,6 @@ def test_sizing_is_idempotent_and_workload_semantics_change_the_fingerprint():
     target = _loaded_yaml("workload.yaml")
     target["request_classes"]["browse"]["fixed_latency_overhead_seconds"] = 0.01
     changed = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         target,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
@@ -506,7 +511,6 @@ def test_portable_workflow_preserves_clustered_latency_overhead_evidence():
         "sampling": "cluster_bootstrap",
     }
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         target,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
@@ -528,7 +532,6 @@ def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
     target["request_classes"]["browse"].pop("calls")
     target["request_classes"]["browse"].pop("call_execution")
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         target,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
@@ -543,7 +546,6 @@ def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
 
 def test_recommendation_is_a_search_start_not_a_mandatory_replica_floor():
     plan = load_and_prepare_initial_sizing(
-        EXAMPLE / "deployment.yaml",
         EXAMPLE / "workload.yaml",
         EXAMPLE / "measurements.yaml",
     )
@@ -616,7 +618,6 @@ def test_declared_load_forecast_certifies_the_maximum_measured_load():
     target = _loaded_yaml("workload.yaml")
     target["load_forecast"] = {"multipliers": [1.0, 1.25, 1.5]}
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         target,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
@@ -643,19 +644,18 @@ def test_declared_load_forecast_certifies_the_maximum_measured_load():
     )
 
 
-def test_portable_deployment_preserves_a_declared_service_pool_limit():
-    deployment = _loaded_yaml("deployment.yaml")
-    deployment["services"]["api"]["concurrency_limit_per_replica"] = 17
+def test_portable_workload_preserves_a_declared_service_pool_limit():
+    workload = _loaded_yaml("workload.yaml")
+    workload["services"]["api"]["concurrency_limit_per_replica"] = 17
     inputs = parse_portable_sizing_inputs(
-        deployment,
-        _loaded_yaml("workload.yaml"),
+        workload,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
     )
     characterization = characterize_deployment(inputs)
     (variant,) = build_simulation_workload_variants(inputs, characterization)
 
-    assert inputs.deployment.services[0].concurrency_limit_per_replica == 17
+    assert inputs.workload.services[0].concurrency_limit_per_replica == 17
     assert (
         variant.workload["traffic_model"]["service_times"]["api"][
             "concurrency_limit_per_replica"
@@ -696,7 +696,6 @@ def test_inferred_edge_ordering_returns_explicit_sequential_and_parallel_variant
     target["request_classes"]["browse"].pop("calls")
     target["request_classes"]["browse"].pop("call_execution")
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         target,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
@@ -719,7 +718,6 @@ def test_ambiguity_variant_budget_fails_instead_of_sampling_semantics():
     target = _loaded_yaml("workload.yaml")
     target["request_classes"]["browse"]["call_execution"] = "uncertain"
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         target,
         _loaded_yaml("measurements.yaml"),
         base_path=EXAMPLE,
@@ -746,7 +744,6 @@ def test_invalid_histogram_and_missing_simulation_rate_fail_clearly(tmp_path):
     manifest["service_latency_histograms"] = str(histogram)
     with pytest.raises(ValueError, match="cumulative counts decrease"):
         parse_portable_sizing_inputs(
-            _loaded_yaml("deployment.yaml"),
             _loaded_yaml("workload.yaml"),
             manifest,
             base_path=EXAMPLE,
@@ -759,7 +756,6 @@ def test_invalid_histogram_and_missing_simulation_rate_fail_clearly(tmp_path):
     manifest.pop("service_edges")
     manifest.pop("external_intervals")
     inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("deployment.yaml"),
         target,
         manifest,
         base_path=EXAMPLE,

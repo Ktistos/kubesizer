@@ -384,7 +384,7 @@ def build_simulation_workload_variants(
                     else {}
                 ),
             }
-            for service in inputs.deployment.services
+            for service in inputs.workload.services
         }
         if joint_uncertainty is None:
             assumptions.append(

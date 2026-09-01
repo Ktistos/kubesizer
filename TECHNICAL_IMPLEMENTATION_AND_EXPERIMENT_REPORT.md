@@ -681,7 +681,7 @@ inputs and judges whether that conversion is safe enough to use.
 
 Important responsibilities include:
 
-- parsing deployment, workload, and measurement evidence;
+- parsing workload-embedded service facts and measurement evidence;
 - choosing a defensible CPU-capacity basis;
 - building empirical demand distributions;
 - representing client, ingress, network, and residual latency separately;

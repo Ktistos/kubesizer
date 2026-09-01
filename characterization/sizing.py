@@ -110,7 +110,7 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
     overall_warnings = list(characterization.warnings)
     strong_evidence = True
     detailed_evidence = True
-    for deployment_service in inputs.deployment.services:
+    for deployment_service in inputs.workload.services:
         evidence = service_characterizations[deployment_service.name]
         workload_rate = evidence.workload_arrival_rate_rps
         minimum_replicas = 1

@@ -34,7 +34,7 @@ The most important choice is the **input path**:
 
 | Input path | Supplied files | Starting lower bound | Best use |
 |---|---|---|---|
-| **Portable evidence path** | `workload.yaml` + `deployment.yaml` + measurement manifest and CSV files | Maximum of the analytical floor and a confidence-bounded empirical capacity floor | Recommended when real deployment measurements and capacity runs exist |
+| **Portable evidence path** | `workload.yaml` with service declarations + measurement manifest and CSV files | Maximum of the analytical floor and a confidence-bounded empirical capacity floor | Recommended when real deployment measurements and capacity runs exist |
 | **Direct model path** | A self-contained `workload.yaml` | Analytical queue-stability floor only | Synthetic studies, prototypes, or manually characterized workloads |
 
 The next choice is the **replica evaluator**:
@@ -91,7 +91,6 @@ The important arguments are:
 
 ```text
 --workload PATH
---deployment PATH
 --measurements PATH
 --resources PATH
 --skip-placement
@@ -129,12 +128,11 @@ kubesizer \
   --skip-placement
 ```
 
-### 2.2 Deployment-evidence run with simulation
+### 2.2 Measured-evidence run with simulation
 
 ```bash
 kubesizer \
   --workload examples/portable_evidence/workload.yaml \
-  --deployment examples/portable_evidence/deployment.yaml \
   --measurements examples/portable_evidence/measurements.with-capacity.yaml \
   --replica-evaluation simulation \
   --replica-search auto \
@@ -146,7 +144,6 @@ kubesizer \
 ```bash
 kubesizer \
   --workload workload.yaml \
-  --deployment deployment.yaml \
   --measurements measurements.yaml \
   --resources resources.yaml \
   --replica-evaluation simulation \
@@ -162,21 +159,20 @@ This last command is a valid **hybrid search workflow**: scalable replica sizing
 
 ## 3.1 Portable evidence path: recommended for measured deployments
 
-This path is selected only when both `--deployment` and `--measurements` are supplied. Supplying one without the other is rejected.
+This path is selected when `--measurements` is supplied. The referenced workload must then contain the `services` mapping needed to interpret that evidence.
 
-The three main files have separate responsibilities:
+The two main files have separate responsibilities:
 
 | File | Owner | Question answered |
 |---|---|---|
-| `deployment.yaml` | DevOps/platform engineer | Which services exist, in which namespace, under what reserved resources and concurrency limit? |
-| `workload.yaml` | DevOps/application owner | Which request classes exist, where do they enter, what calls do they make, and what SLO must they satisfy? |
+| `workload.yaml` | DevOps/application owner | Which services and request classes exist, what measured execution context applies, where requests enter, what calls they make, and what SLO must they satisfy? |
 | `measurements.yaml` | Measurement exporter | Where are the normalized, retained measurement CSV files? |
 
 The workload rates are **not duplicated** in portable `workload.yaml`. Kubesizer derives them from the measured external intervals. This avoids two competing sources of truth.
 
 Current execution:
 
-1. `characterization.parser.load_portable_sizing_inputs` parses the deployment, workload, and measurement manifest.
+1. `characterization.parser.load_portable_sizing_inputs` parses the workload and measurement manifest; service facts are read from `workload.services`.
 2. `characterization.analysis.characterize_deployment` converts aligned counters and histograms into arrival, visit, demand, latency, error, and capacity evidence.
 3. `characterization.simulation.build_characterized_system_variants` creates the queueing/simulation workload.
 4. The CLI requires one unambiguous execution variant. If call ordering is unclear, it asks for `call_execution` rather than silently choosing sequential or parallel semantics.
@@ -192,7 +188,7 @@ The optimizer is never allowed to remove replicas below the empirical stability 
 
 ## 3.2 Direct model path: self-contained workload
 
-When `--deployment` and `--measurements` are omitted, Kubesizer loads a native self-contained workload using `performance_models.system.System`.
+When `--measurements` is omitted, Kubesizer loads a native self-contained workload using `performance_models.system.System`.
 
 The native file directly declares:
 
@@ -400,9 +396,9 @@ When simulation is used, placement-specific communication latency and execution 
 
 ## 5. Portable YAML package: what the DevOps engineer supplies
 
-## 5.1 `deployment.yaml`
+## 5.1 Service declarations in portable `workload.yaml`
 
-A minimal deployment file is:
+A portable workload begins with its canonical service declarations:
 
 ```yaml
 services:
@@ -429,9 +425,9 @@ services:
 
 The CPU request is intentionally different from observed CPU use. Observed CPU use tells Kubesizer what was consumed; the request tells it what CPU share the scheduler reserves for the replica.
 
-## 5.2 Portable `workload.yaml`
+## 5.2 Request topology and SLOs in portable `workload.yaml`
 
-A minimal portable workload is:
+A minimal request section in the same file is:
 
 ```yaml
 request_classes:
@@ -797,7 +793,6 @@ Use when the DevOps engineer can provide aligned observation windows and indepen
 ```bash
 kubesizer \
   --workload workload.yaml \
-  --deployment deployment.yaml \
   --measurements measurements.yaml \
   --replica-evaluation simulation \
   --replica-search auto \
@@ -816,7 +811,6 @@ Interpretation:
 ```bash
 kubesizer \
   --workload workload.yaml \
-  --deployment deployment.yaml \
   --measurements measurements.yaml \
   --replica-evaluation analytical \
   --replica-search auto \
@@ -834,7 +828,6 @@ Interpretation:
 ```bash
 kubesizer \
   --workload workload.yaml \
-  --deployment deployment.yaml \
   --measurements measurements.yaml \
   --replica-evaluation simulation \
   --replica-search scalable \

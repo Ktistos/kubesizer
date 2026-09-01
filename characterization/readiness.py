@@ -269,7 +269,7 @@ def assess_initial_sizing_risk(
             )
         )
 
-    for service in inputs.deployment.services:
+    for service in inputs.workload.services:
         evidence = characterization.service_map[service.name]
         item = recommendations[service.name]
         aligned_demands = tuple(

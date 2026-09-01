@@ -19,7 +19,6 @@ from .models import (
     ServiceCharacterization,
 )
 
-
 CAPACITY_ENVELOPE_CONFIDENCE_LEVEL = 0.95
 
 
@@ -199,7 +198,7 @@ def _aligned_input_windows(inputs, service_windows):
     request_classes = tuple(
         request_class.name for request_class in inputs.workload.request_classes
     )
-    service_names = inputs.deployment.service_names
+    service_names = inputs.workload.service_names
     external = defaultdict(float)
     for row in inputs.measurements.external_intervals:
         external[(row.start, row.end, row.request_class)] += row.request_count
@@ -324,7 +323,7 @@ def _visits_from_calls(service_names, entries, calls, request_class):
 
 
 def _derive_class_flows(inputs, service_rates, external_rates):
-    service_names = inputs.deployment.service_names
+    service_names = inputs.workload.service_names
     class_service_rates = _service_class_rates(
         inputs.measurements.service_class_intervals
     )
@@ -410,7 +409,7 @@ def _derive_class_flows(inputs, service_rates, external_rates):
 
 def characterize_deployment(inputs):
     """Produce normalized evidence without fitting facts the data cannot identify."""
-    declared_services = set(inputs.deployment.service_names)
+    declared_services = set(inputs.workload.service_names)
     measured_services = {row.service for row in inputs.measurements.service_intervals}
     class_rate_services = {
         row.service for row in inputs.measurements.service_class_intervals
@@ -444,7 +443,7 @@ def characterize_deployment(inputs):
             f"service_intervals contain no measurements for services {sorted(missing)}."
         )
     deployment_namespaces = {
-        service.name: service.namespace for service in inputs.deployment.services
+        service.name: service.namespace for service in inputs.workload.services
     }
     mismatched_namespaces = sorted(
         {
@@ -466,7 +465,7 @@ def characterize_deployment(inputs):
         )
     observed_replica_counts = {}
     variable_replica_services = []
-    for service in inputs.deployment.services:
+    for service in inputs.workload.services:
         counts = {
             len(pods) for pods in pod_counts[service.name].values()
         }
@@ -555,7 +554,7 @@ def characterize_deployment(inputs):
     }
     aligned_input_windows = _aligned_input_windows(inputs, windows)
 
-    flow_balance_errors = {service: None for service in inputs.deployment.service_names}
+    flow_balance_errors = {service: None for service in inputs.workload.service_names}
     if all(
         request_class.name in external_rates
         for request_class in inputs.workload.request_classes
@@ -569,12 +568,12 @@ def characterize_deployment(inputs):
                 * visits_by_class[request_class.name].get(service, 0.0)
                 for request_class in inputs.workload.request_classes
             )
-            for service in inputs.deployment.service_names
+            for service in inputs.workload.service_names
         }
         flow_balance_errors = {
             service: abs(predicted_observed_rates[service] - service_rates[service])
             / max(service_rates[service], 1e-12)
-            for service in inputs.deployment.service_names
+            for service in inputs.workload.service_names
         }
 
     aggregate_edges = _edge_rates(inputs.measurements.service_edges)
@@ -590,7 +589,7 @@ def characterize_deployment(inputs):
 
     services = []
     global_warnings = list(flow_warnings)
-    for deployment_service in inputs.deployment.services:
+    for deployment_service in inputs.workload.services:
         name = deployment_service.name
         service_windows = windows[name]
         window_demands = tuple(
