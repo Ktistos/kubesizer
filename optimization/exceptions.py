@@ -2,10 +2,6 @@ class NoFeasibleConfigurationError(RuntimeError):
     """Raised when a search returns no certified feasible configuration."""
 
 
-class RequestClassMetricsUnavailableError(RuntimeError):
-    """Raised when configured SLOs lack end-to-end request-class measurements."""
-
-
 class StatisticalEvaluationError(RuntimeError):
     """Raised when calibrated simulation cannot produce a valid decision."""
 

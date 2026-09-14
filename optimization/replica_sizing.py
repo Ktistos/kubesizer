@@ -2,23 +2,16 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 
-from metrics import (
-    Metrics,
-    ReliabilityStatus,
-    RequestClassP95Reliability,
-    evaluate_request_class_p95_reliability,
-)
+from metrics import Metrics
 
 from .base import GraphSearchProblem
-from .exceptions import (
-    RequestClassMetricsUnavailableError,
-    StatisticalEvaluationError,
-)
+from .exceptions import StatisticalEvaluationError
 from .simulation_evaluation import (
     CalibratedConfigurationEvaluator,
     ConfigurationEvaluation,
     SimulationClassification,
 )
+
 
 class AnalyticalClassification(str, Enum):
     """Deterministic classifications from the configured analytical model."""
@@ -69,22 +62,8 @@ class ReplicaSizingEvaluation:
     tie_breaker: float
     analytical_metrics: Metrics
     simulation_metrics: Metrics | None
-    reliability: RequestClassP95Reliability | None = None
     classification: SimulationClassification | None = None
     configuration_evaluation: ConfigurationEvaluation | None = None
-
-    @property
-    def reliability_status(self):
-        if self.classification == SimulationClassification.STATISTICALLY_FEASIBLE:
-            return ReliabilityStatus.RELIABLY_FEASIBLE
-        if self.classification in (
-            SimulationClassification.INCONCLUSIVE,
-            SimulationClassification.CONTINUE_SAMPLING,
-        ):
-            return ReliabilityStatus.UNCERTAIN
-        if self.reliability is None:
-            return ReliabilityStatus.RELIABLY_INFEASIBLE
-        return self.reliability.status
 
     def ranking_key(self):
         """Return the lexicographic feasibility, cost, and latency ordering."""
@@ -95,7 +74,165 @@ class ReplicaSizingEvaluation:
         )
 
 
-class AnalyticalReplicaSizingProblem(GraphSearchProblem):
+def _positive_integer_tuple(values, size, message):
+    values = tuple(values)
+    if len(values) != size or any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in values
+    ):
+        raise ValueError(message)
+    return values
+
+
+def _maximum_replicas(value, service_count):
+    values = (value,) * service_count if isinstance(value, int) else value
+    return _positive_integer_tuple(
+        values,
+        service_count,
+        "max_replicas must define one positive integer per service.",
+    )
+
+
+def _replica_costs(values, service_count):
+    if values is None:
+        result = (1.0,) * service_count
+    elif isinstance(values, (int, float)) and not isinstance(values, bool):
+        result = (float(values),) * service_count
+    else:
+        result = tuple(float(value) for value in values)
+    if len(result) != service_count or any(
+        not math.isfinite(value) or value <= 0 for value in result
+    ):
+        raise ValueError(
+            "replica_costs must define one finite positive cost per service."
+        )
+    return result
+
+
+class _BoundedReplicaSizingProblem(GraphSearchProblem):
+    """Shared exact-search geometry for analytical and simulation evidence."""
+
+    def __init__(
+        self,
+        system,
+        initial,
+        maximum,
+        *,
+        replica_costs,
+        structural_feasibility,
+        progress_callback,
+        invalid_configuration_message,
+        exceeded_configuration_message,
+    ):
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable or None.")
+        self._system = system
+        self._service_count = len(system.get_services())
+        self._invalid_configuration_message = invalid_configuration_message
+        self._exceeded_configuration_message = exceeded_configuration_message
+        self._initial = _positive_integer_tuple(
+            initial,
+            self._service_count,
+            invalid_configuration_message,
+        )
+        self._maximum = _positive_integer_tuple(
+            maximum,
+            self._service_count,
+            exceeded_configuration_message,
+        )
+        self._replica_costs = _replica_costs(replica_costs, self._service_count)
+        self._structural_feasibility = structural_feasibility
+        self._progress_callback = progress_callback
+        self._evaluation_history = {}
+
+    @property
+    def configuration_evaluations(self):
+        return dict(self._evaluation_history)
+
+    def _normalize(self, configuration):
+        values = _positive_integer_tuple(
+            configuration,
+            self._service_count,
+            self._invalid_configuration_message,
+        )
+        if any(value > limit for value, limit in zip(values, self._maximum)):
+            raise ValueError(self._exceeded_configuration_message)
+        return values
+
+    def _record_evaluation(self, configuration, evaluation):
+        self._evaluation_history[configuration] = evaluation
+        if self._progress_callback is not None:
+            classification = getattr(evaluation, "classification", None)
+            self._progress_callback(
+                "replica_configuration_evaluated",
+                {
+                    "configuration": configuration,
+                    "completed_configurations": len(self._evaluation_history),
+                    "search_space_configurations": self.configuration_count(),
+                    "classification": getattr(classification, "value", classification),
+                },
+            )
+        return evaluation
+
+    def initial_state(self):
+        return self._initial
+
+    def stable_configuration(self):
+        return self._initial
+
+    def maximum_configuration(self):
+        return self._maximum
+
+    def configuration_count(self):
+        return math.prod(
+            maximum - minimum + 1
+            for minimum, maximum in zip(self._initial, self._maximum)
+        )
+
+    def replica_costs(self):
+        return self._replica_costs
+
+    def configuration_cost(self, configuration):
+        return sum(
+            count * cost
+            for count, cost in zip(self._normalize(configuration), self._replica_costs)
+        )
+
+    def candidate_is_structurally_feasible(self, configuration):
+        configuration = self._normalize(configuration)
+        return self._structural_feasibility is None or bool(
+            self._structural_feasibility(configuration)
+        )
+
+    def neighbors(self, state):
+        state = self._normalize(state)
+        result = []
+        for service_id, replicas in enumerate(state):
+            if replicas < self._maximum[service_id]:
+                candidate = list(state)
+                candidate[service_id] += 1
+                result.append(tuple(candidate))
+        return tuple(result)
+
+    def step_cost(self, current, neighbor):
+        current = self._normalize(current)
+        neighbor = self._normalize(neighbor)
+        differences = tuple(right - left for left, right in zip(current, neighbor))
+        if differences.count(1) != 1 or any(
+            value not in (0, 1) for value in differences
+        ):
+            raise ValueError("A replica-sizing step must add exactly one replica.")
+        return self._replica_costs[differences.index(1)]
+
+    def evaluate_and_check(self, configuration):
+        evaluation = self.evaluate(configuration)
+        return evaluation, evaluation.feasible
+
+    def is_feasible(self, configuration):
+        return self.evaluate(configuration).feasible
+
+
+class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
     """Bounded replica sizing using stability and optional mean constraints.
 
     Exact search does not change the queueing formulas selected by the system
@@ -115,44 +252,51 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         structural_feasibility=None,
         progress_callback=None,
     ):
-        if progress_callback is not None and not callable(progress_callback):
-            raise TypeError("progress_callback must be callable or None.")
-        self.__system = system
-        self.__service_count = len(system.get_services())
+        service_count = len(system.get_services())
         self.__request_classes = tuple(system.get_request_classes())
         self.__limits = self.__normalize_limits(request_class_mean_latency_limits)
-        analytical_stable = self.__normalize_configuration(
+        analytical_stable = _positive_integer_tuple(
             tuple(system.get_minimum_stable_replicas()),
-            maximum=None,
+            service_count,
+            "Configuration must define a positive integer per service.",
         )
-        self.__stable = (
+        initial = (
             analytical_stable
             if minimum_configuration is None
-            else self.__normalize_configuration(
+            else _positive_integer_tuple(
                 minimum_configuration,
-                maximum=None,
+                service_count,
+                "Configuration must define a positive integer per service.",
             )
         )
         if any(
             supplied < analytical
-            for supplied, analytical in zip(self.__stable, analytical_stable)
+            for supplied, analytical in zip(initial, analytical_stable)
         ):
             raise ValueError(
                 "minimum_configuration cannot be below analytical stability."
             )
-        self.__maximum = self.__normalize_maximum(max_replicas)
-        if any(
-            maximum < minimum for minimum, maximum in zip(self.__stable, self.__maximum)
-        ):
+        maximum = _maximum_replicas(max_replicas, service_count)
+        if any(high < low for low, high in zip(initial, maximum)):
             raise ValueError(
                 "Maximum replica bounds cannot be below the required stable "
                 "configuration."
             )
-        self.__replica_costs = self.__normalize_replica_costs(replica_costs)
-        self.__structural_feasibility = structural_feasibility
-        self.__progress_callback = progress_callback
+        super().__init__(
+            system,
+            initial,
+            maximum,
+            replica_costs=replica_costs,
+            structural_feasibility=structural_feasibility,
+            progress_callback=progress_callback,
+            invalid_configuration_message=(
+                "Configuration must define a positive integer per service."
+            ),
+            exceeded_configuration_message=(
+                "Configuration exceeds the replica search bounds."
+            ),
+        )
         self.__evidence_cache = {}
-        self.__evaluation_cache = {}
 
     def __normalize_limits(self, values):
         limits = dict(values)
@@ -176,121 +320,20 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             )
         return normalized
 
-    def __normalize_maximum(self, value):
-        if isinstance(value, int) and not isinstance(value, bool):
-            values = (value,) * self.__service_count
-        else:
-            values = tuple(value)
-        if len(values) != self.__service_count or any(
-            isinstance(item, bool) or not isinstance(item, int) or item <= 0
-            for item in values
-        ):
-            raise ValueError(
-                "max_replicas must define one positive integer per service."
-            )
-        return values
-
-    def __normalize_replica_costs(self, values):
-        if values is None:
-            normalized = (1.0,) * self.__service_count
-        elif isinstance(values, (int, float)) and not isinstance(values, bool):
-            normalized = (float(values),) * self.__service_count
-        else:
-            normalized = tuple(float(value) for value in values)
-        if len(normalized) != self.__service_count or any(
-            not math.isfinite(value) or value <= 0 for value in normalized
-        ):
-            raise ValueError(
-                "replica_costs must define one finite positive cost per service."
-            )
-        return normalized
-
-    def __normalize_configuration(self, configuration, *, maximum=True):
-        values = tuple(configuration)
-        if len(values) != self.__service_count or any(
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            for value in values
-        ):
-            raise ValueError(
-                "Configuration must define a positive integer per service."
-            )
-        if maximum is not None and any(
-            value > limit for value, limit in zip(values, self.__maximum)
-        ):
-            raise ValueError("Configuration exceeds the replica search bounds.")
-        return values
-
-    @property
-    def configuration_evaluations(self):
-        return dict(self.__evaluation_cache)
-
-    def initial_state(self):
-        return self.__stable
-
-    def stable_configuration(self):
-        return self.__stable
-
-    def maximum_configuration(self):
-        return self.__maximum
-
-    def configuration_count(self):
-        return math.prod(
-            maximum - minimum + 1
-            for minimum, maximum in zip(self.__stable, self.__maximum)
-        )
-
-    def replica_costs(self):
-        return self.__replica_costs
-
-    def configuration_cost(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
-        return sum(
-            count * cost for count, cost in zip(configuration, self.__replica_costs)
-        )
-
-    def candidate_is_structurally_feasible(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
-        return (
-            True
-            if self.__structural_feasibility is None
-            else bool(self.__structural_feasibility(configuration))
-        )
-
-    def neighbors(self, state):
-        state = self.__normalize_configuration(state)
-        neighbors = []
-        for service_id, replicas in enumerate(state):
-            if replicas >= self.__maximum[service_id]:
-                continue
-            candidate = list(state)
-            candidate[service_id] += 1
-            neighbors.append(tuple(candidate))
-        return tuple(neighbors)
-
-    def step_cost(self, current, neighbor):
-        current = self.__normalize_configuration(current)
-        neighbor = self.__normalize_configuration(neighbor)
-        differences = tuple(right - left for left, right in zip(current, neighbor))
-        if differences.count(1) != 1 or any(
-            difference not in (0, 1) for difference in differences
-        ):
-            raise ValueError("A replica-sizing step must add exactly one replica.")
-        return self.__replica_costs[differences.index(1)]
-
     def _request_class_means(self):
-        values = self.__system.get_request_class_mean_latencies()
+        values = self._system.get_request_class_mean_latencies()
         return tuple(
             (request_class, float(values[request_class]))
             for request_class in self.__request_classes
         )
 
     def _evidence(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
+        configuration = self._normalize(configuration)
         cached = self.__evidence_cache.get(configuration)
         if cached is not None:
             return cached
-        self.__system.configure_system_replicas(configuration)
-        analytical = self.__system.solve()
+        self._system.configure_system_replicas(configuration)
+        analytical = self._system.solve()
         class_means = self._request_class_means() if analytical.get_stability() else ()
         evidence = (analytical, class_means)
         self.__evidence_cache[configuration] = evidence
@@ -317,8 +360,8 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         return value
 
     def evaluate(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
-        cached = self.__evaluation_cache.get(configuration)
+        configuration = self._normalize(configuration)
+        cached = self._evaluation_history.get(configuration)
         if cached is not None:
             return cached
 
@@ -353,370 +396,10 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
                 "ANALYTICAL_MEAN_LATENCY" if self.__limits else "ANALYTICAL_STABILITY"
             ),
         )
-        self.__evaluation_cache[configuration] = evaluation
-        if self.__progress_callback is not None:
-            self.__progress_callback(
-                "replica_configuration_evaluated",
-                {
-                    "configuration": configuration,
-                    "completed_configurations": len(self.__evaluation_cache),
-                    "search_space_configurations": self.configuration_count(),
-                    "classification": classification.value,
-                },
-            )
-        return evaluation
-
-    def evaluate_and_check(self, configuration):
-        evaluation = self.evaluate(configuration)
-        return evaluation, evaluation.feasible
-
-    def is_feasible(self, configuration):
-        return self.evaluate(configuration).feasible
+        return self._record_evaluation(configuration, evaluation)
 
 
-class ReplicaSizingProblem(GraphSearchProblem):
-    """Bounded replica-sizing problem with cached model evaluations.
-
-    End-to-end p95 values must be supplied through
-    ``Metrics.get_request_class_p95_latencies``. Current per-service p95 values
-    are intentionally not substituted for request-class measurements. When a
-    warm-up is provided, the system continues without resetting at its end;
-    ``simulation_duration`` defines the measurement-arrival window. Each
-    configuration uses a fixed batch of independent native replications and is
-    feasible only when every simultaneous p95 upper confidence bound passes.
-    """
-
-    def __init__(
-        self,
-        system,
-        simulation_duration,
-        request_class_slos,
-        max_replicas,
-        warmup_duration=0.0,
-        replication_count=30,
-        simulation_workers=1,
-        evaluation_seed_start=300_000,
-        confidence_level=0.95,
-        replica_costs=None,
-        structural_feasibility=None,
-    ):
-        self.__system = system
-        self.__measurement_duration = float(simulation_duration)
-        self.__warmup_duration = float(warmup_duration)
-        self.__request_class_slos = dict(request_class_slos)
-        self.__replication_count = replication_count
-        self.__simulation_workers = simulation_workers
-        self.__evaluation_seed_start = evaluation_seed_start
-        self.__confidence_level = float(confidence_level)
-        self.__service_count = len(system.get_services())
-        self.__max_replicas = self.__normalize_max_replicas(max_replicas)
-        self.__replica_costs = self.__normalize_replica_costs(replica_costs)
-        self.__structural_feasibility = structural_feasibility
-        stable_method = getattr(system, "get_minimum_stable_replicas", None)
-        stable_configuration = (
-            stable_method()
-            if stable_method is not None
-            else tuple(
-                math.floor(arrival_rate / service.get_mu()) + 1
-                for arrival_rate, service in zip(
-                    system.get_effective_arrival_rates(),
-                    system.get_services().values(),
-                )
-            )
-        )
-        self.__stable_configuration = self.__normalize_configuration(
-            stable_configuration
-        )
-        if (
-            not math.isfinite(self.__measurement_duration)
-            or self.__measurement_duration <= 0
-        ):
-            raise ValueError("simulation_duration must be greater than zero.")
-        if not math.isfinite(self.__warmup_duration) or self.__warmup_duration < 0:
-            raise ValueError("warmup_duration must be finite and non-negative.")
-        if any(slo <= 0 for slo in self.__request_class_slos.values()):
-            raise ValueError("Request-class SLOs must be greater than zero.")
-        if (
-            isinstance(self.__replication_count, bool)
-            or not isinstance(self.__replication_count, int)
-            or self.__replication_count < 2
-        ):
-            raise ValueError("replication_count must be an integer of at least two.")
-        if (
-            isinstance(self.__simulation_workers, bool)
-            or not isinstance(self.__simulation_workers, int)
-            or self.__simulation_workers <= 0
-        ):
-            raise ValueError("simulation_workers must be a positive integer.")
-        if (
-            isinstance(self.__evaluation_seed_start, bool)
-            or not isinstance(self.__evaluation_seed_start, int)
-            or self.__evaluation_seed_start < 0
-        ):
-            raise ValueError("evaluation_seed_start must be non-negative.")
-        if not 0.0 < self.__confidence_level < 1.0:
-            raise ValueError("confidence_level must lie strictly between zero and one.")
-        configuration_count = math.prod(self.__max_replicas)
-        largest_seed = (
-            self.__evaluation_seed_start
-            + configuration_count * self.__replication_count
-            - 1
-        )
-        if largest_seed > 2**63 - 1:
-            raise ValueError("Evaluation seed range exceeds signed 64-bit integers.")
-
-        self.__analytical_cache = {}
-        self.__replication_cache = {}
-        self.__simulation_cache = {}
-        self.__reliability_cache = {}
-        self.__evaluation_cache = {}
-        self.__search_order_cache = {}
-
-    def __normalize_replica_costs(self, replica_costs):
-        if replica_costs is None:
-            values = (1.0,) * self.__service_count
-        elif isinstance(replica_costs, (int, float)) and not isinstance(
-            replica_costs, bool
-        ):
-            values = (float(replica_costs),) * self.__service_count
-        else:
-            values = tuple(float(value) for value in replica_costs)
-        if len(values) != self.__service_count or any(
-            not math.isfinite(value) or value <= 0 for value in values
-        ):
-            raise ValueError(
-                "replica_costs must define one finite positive cost per service."
-            )
-        return values
-
-    def __normalize_max_replicas(self, max_replicas):
-        if isinstance(max_replicas, int):
-            normalized = tuple(max_replicas for _ in range(self.__service_count))
-        else:
-            normalized = tuple(max_replicas)
-
-        if len(normalized) != self.__service_count:
-            raise ValueError("max_replicas must provide one bound per service.")
-        if any(limit < 1 for limit in normalized):
-            raise ValueError("Every maximum replica bound must be at least one.")
-        return normalized
-
-    def __normalize_configuration(self, configuration):
-        configuration = tuple(configuration)
-        if len(configuration) != self.__service_count:
-            raise ValueError("Configuration size does not match the system.")
-        if any(not isinstance(value, int) or value < 1 for value in configuration):
-            raise ValueError("Replica counts must be positive integers.")
-        if any(
-            value > limit for value, limit in zip(configuration, self.__max_replicas)
-        ):
-            raise ValueError("Configuration exceeds the replica search bounds.")
-        return configuration
-
-    def evaluation_seeds(self, configuration):
-        """Return the deterministic disjoint seed block for a configuration."""
-        configuration = self.__normalize_configuration(configuration)
-        configuration_index = 0
-        for replicas, radix in zip(configuration, self.__max_replicas):
-            configuration_index = configuration_index * radix + (replicas - 1)
-        first_seed = (
-            self.__evaluation_seed_start
-            + configuration_index * self.__replication_count
-        )
-        return tuple(first_seed + offset for offset in range(self.__replication_count))
-
-    def initial_state(self):
-        return self.__stable_configuration
-
-    def stable_configuration(self):
-        return self.__stable_configuration
-
-    def configuration_count(self):
-        return math.prod(
-            maximum - minimum + 1
-            for minimum, maximum in zip(
-                self.__stable_configuration,
-                self.__max_replicas,
-            )
-        )
-
-    def maximum_configuration(self):
-        return self.__max_replicas
-
-    def replica_costs(self):
-        return self.__replica_costs
-
-    def configuration_cost(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
-        return sum(
-            count * cost for count, cost in zip(configuration, self.__replica_costs)
-        )
-
-    def candidate_is_structurally_feasible(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
-        return (
-            True
-            if self.__structural_feasibility is None
-            else bool(self.__structural_feasibility(configuration))
-        )
-
-    def search_tie_breaker(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
-        cached = self.__search_order_cache.get(configuration)
-        if cached is not None:
-            return cached
-        self.__system.configure_system_replicas(configuration)
-        analytical = self.__analytical_cache.get(configuration)
-        if analytical is None:
-            analytical = self.__system.solve()
-            self.__analytical_cache[configuration] = analytical
-        utilizations = tuple(analytical.get_mean_utilizations())
-        value = max((float(item) for item in utilizations), default=math.inf)
-        if math.isnan(value):
-            raise ValueError("Analytical utilization ranking returned NaN.")
-        self.__search_order_cache[configuration] = value
-        return value
-
-    def neighbors(self, state):
-        state = self.__normalize_configuration(state)
-        neighbors = []
-        for service_id, replicas in enumerate(state):
-            if replicas >= self.__max_replicas[service_id]:
-                continue
-            neighbor = list(state)
-            neighbor[service_id] += 1
-            neighbors.append(tuple(neighbor))
-        return tuple(neighbors)
-
-    def step_cost(self, current, neighbor):
-        current = self.__normalize_configuration(current)
-        neighbor = self.__normalize_configuration(neighbor)
-        differences = tuple(
-            neighbor_value - current_value
-            for current_value, neighbor_value in zip(current, neighbor)
-        )
-        if differences.count(1) != 1 or any(
-            value not in (0, 1) for value in differences
-        ):
-            raise ValueError("A replica-sizing step must add exactly one replica.")
-        service_id = differences.index(1)
-        return self.__replica_costs[service_id]
-
-    def evaluate(self, configuration):
-        configuration = self.__normalize_configuration(configuration)
-        if configuration in self.__evaluation_cache:
-            return self.__evaluation_cache[configuration]
-
-        self.__system.configure_system_replicas(configuration)
-        analytical_metrics = self.__analytical_cache.get(configuration)
-        if analytical_metrics is None:
-            analytical_metrics = self.__system.solve()
-            self.__analytical_cache[configuration] = analytical_metrics
-
-        if not self.candidate_is_structurally_feasible(configuration):
-            evaluation = ReplicaSizingEvaluation(
-                configuration=configuration,
-                feasible=False,
-                cost=math.inf,
-                tie_breaker=math.inf,
-                analytical_metrics=analytical_metrics,
-                simulation_metrics=None,
-                classification=(SimulationClassification.STRUCTURALLY_INFEASIBLE),
-            )
-            self.__evaluation_cache[configuration] = evaluation
-            return evaluation
-
-        if not analytical_metrics.get_stability():
-            evaluation = ReplicaSizingEvaluation(
-                configuration=configuration,
-                feasible=False,
-                cost=math.inf,
-                tie_breaker=math.inf,
-                analytical_metrics=analytical_metrics,
-                simulation_metrics=None,
-            )
-            self.__evaluation_cache[configuration] = evaluation
-            return evaluation
-
-        simulation_metrics = self.__simulation_cache.get(configuration)
-        reliability = self.__reliability_cache.get(configuration)
-        if simulation_metrics is None or reliability is None:
-            replications = self.__replication_cache.get(configuration)
-            if replications is None:
-                replications = self.__system.simulate_measurement_replications(
-                    warmup_duration=self.__warmup_duration,
-                    measurement_duration=self.__measurement_duration,
-                    seeds=self.evaluation_seeds(configuration),
-                    workers=self.__simulation_workers,
-                )
-                self.__replication_cache[configuration] = tuple(replications)
-                replications = self.__replication_cache[configuration]
-            missing_classes = {
-                request_class
-                for request_class in self.__request_class_slos
-                if any(
-                    request_class not in replication.request_class_p95_latencies
-                    for replication in replications
-                )
-            }
-            if missing_classes:
-                missing = ", ".join(sorted(missing_classes))
-                raise RequestClassMetricsUnavailableError(
-                    "Simulation did not provide end-to-end p95 latency for "
-                    f"request classes in every replication: {missing}."
-                )
-            try:
-                reliability = evaluate_request_class_p95_reliability(
-                    replications,
-                    self.__request_class_slos,
-                    confidence_level=self.__confidence_level,
-                    adjust_for_multiple_classes=True,
-                )
-            except ValueError as error:
-                if "measured no requests" in str(error) or "has no p95" in str(error):
-                    raise RequestClassMetricsUnavailableError(str(error)) from error
-                raise
-            request_class_mean_p95 = {
-                request_class: interval.mean_p95
-                for request_class, interval in reliability.request_class_intervals.items()
-            }
-            simulation_metrics = Metrics(
-                (),
-                (),
-                True,
-                request_class_p95_latencies=request_class_mean_p95,
-            )
-            self.__simulation_cache[configuration] = simulation_metrics
-            self.__reliability_cache[configuration] = reliability
-
-        feasible = reliability.status == ReliabilityStatus.RELIABLY_FEASIBLE
-        cost = self.configuration_cost(configuration) if feasible else math.inf
-        tie_breaker = (
-            max(
-                interval.upper_bound / interval.slo
-                for interval in reliability.request_class_intervals.values()
-            )
-            if feasible and reliability.request_class_intervals
-            else (0.0 if feasible else math.inf)
-        )
-
-        evaluation = ReplicaSizingEvaluation(
-            configuration=configuration,
-            feasible=feasible,
-            cost=cost,
-            tie_breaker=tie_breaker,
-            analytical_metrics=analytical_metrics,
-            simulation_metrics=simulation_metrics,
-            reliability=reliability,
-        )
-        self.__evaluation_cache[configuration] = evaluation
-        return evaluation
-
-    def is_feasible(self, configuration):
-        return self.evaluate(configuration).feasible
-
-
-class CalibratedReplicaSizingProblem(GraphSearchProblem):
+class CalibratedReplicaSizingProblem(_BoundedReplicaSizingProblem):
     """Bounded exact search driven by calibrated simulation results."""
 
     def __init__(
@@ -730,140 +413,41 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         structural_feasibility=None,
         progress_callback=None,
     ):
-        self.__system = system
         self.__profile = calibration_profile
-        self.__service_count = len(system.get_services())
-        self.__maximum = tuple(calibration_profile.maximum_replica_configuration)
-        self.__initial = tuple(calibration_profile.minimum_replica_configuration)
-        self.__replica_costs = self.__normalize_replica_costs(replica_costs)
-        self.__structural_feasibility = structural_feasibility
-        if progress_callback is not None and not callable(progress_callback):
-            raise TypeError("progress_callback must be callable or None.")
-        self.__progress_callback = progress_callback
-        if len(self.__maximum) != self.__service_count:
-            raise ValueError("Calibration profile does not match service count.")
+        maximum = tuple(calibration_profile.maximum_replica_configuration)
+        initial = tuple(calibration_profile.minimum_replica_configuration)
+        super().__init__(
+            system,
+            initial,
+            maximum,
+            replica_costs=replica_costs,
+            structural_feasibility=structural_feasibility,
+            progress_callback=progress_callback,
+            invalid_configuration_message=(
+                "Configuration is outside calibrated replica bounds."
+            ),
+            exceeded_configuration_message=(
+                "Configuration is outside calibrated replica bounds."
+            ),
+        )
+        if any(high < low for low, high in zip(initial, maximum)):
+            raise ValueError("Calibration profile contains invalid replica bounds.")
         self.__evaluator = evaluator or CalibratedConfigurationEvaluator(
             system,
             calibration_profile,
             workers=simulation_workers,
             progress_callback=progress_callback,
         )
-        self.__evaluation_history = {}
         self.__search_order_cache = {}
-
-    def __normalize_replica_costs(self, replica_costs):
-        if replica_costs is None:
-            values = (1.0,) * self.__service_count
-        elif isinstance(replica_costs, (int, float)) and not isinstance(
-            replica_costs, bool
-        ):
-            values = (float(replica_costs),) * self.__service_count
-        else:
-            values = tuple(float(value) for value in replica_costs)
-        if len(values) != self.__service_count or any(
-            not math.isfinite(value) or value <= 0 for value in values
-        ):
-            raise ValueError(
-                "replica_costs must define one finite positive cost per service."
-            )
-        return values
-
-    @property
-    def configuration_evaluations(self):
-        """Return run evidence; entries are never reused as simulation cache."""
-        return dict(self.__evaluation_history)
-
-    def __report_evaluation(self, configuration, evaluation):
-        if self.__progress_callback is None:
-            return
-        classification = getattr(evaluation, "classification", None)
-        self.__progress_callback(
-            "replica_configuration_evaluated",
-            {
-                "configuration": tuple(configuration),
-                "completed_configurations": len(self.__evaluation_history),
-                "search_space_configurations": self.configuration_count(),
-                "classification": getattr(classification, "value", classification),
-            },
-        )
-
-    def __normalize(self, configuration):
-        configuration = tuple(configuration)
-        if (
-            len(configuration) != self.__service_count
-            or any(
-                isinstance(value, bool) or not isinstance(value, int) or value <= 0
-                for value in configuration
-            )
-            or any(
-                value > maximum for value, maximum in zip(configuration, self.__maximum)
-            )
-        ):
-            raise ValueError("Configuration is outside calibrated replica bounds.")
-        return configuration
-
-    def initial_state(self):
-        return self.__initial
-
-    def stable_configuration(self):
-        return self.__initial
-
-    def configuration_count(self):
-        return math.prod(
-            maximum - minimum + 1
-            for minimum, maximum in zip(self.__initial, self.__maximum)
-        )
-
-    def maximum_configuration(self):
-        return self.__maximum
-
-    def replica_costs(self):
-        return self.__replica_costs
-
-    def configuration_cost(self, configuration):
-        configuration = self.__normalize(configuration)
-        return sum(
-            count * cost for count, cost in zip(configuration, self.__replica_costs)
-        )
-
-    def candidate_is_structurally_feasible(self, configuration):
-        configuration = self.__normalize(configuration)
-        return (
-            True
-            if self.__structural_feasibility is None
-            else bool(self.__structural_feasibility(configuration))
-        )
-
-    def neighbors(self, state):
-        state = self.__normalize(state)
-        values = []
-        for service_id, replicas in enumerate(state):
-            if replicas >= self.__maximum[service_id]:
-                continue
-            neighbor = list(state)
-            neighbor[service_id] += 1
-            values.append(tuple(neighbor))
-        return tuple(values)
-
-    def step_cost(self, current, neighbor):
-        current = self.__normalize(current)
-        neighbor = self.__normalize(neighbor)
-        differences = tuple(right - left for left, right in zip(current, neighbor))
-        if differences.count(1) != 1 or any(
-            value not in (0, 1) for value in differences
-        ):
-            raise ValueError("A replica-sizing step must add exactly one replica.")
-        service_id = differences.index(1)
-        return self.__replica_costs[service_id]
 
     def search_tie_breaker(self, configuration):
         """Order equal-cost states by lower analytical bottleneck utilization."""
-        configuration = self.__normalize(configuration)
+        configuration = self._normalize(configuration)
         cached = self.__search_order_cache.get(configuration)
         if cached is not None:
             return cached
-        self.__system.configure_system_replicas(configuration)
-        analytical = self.__system.solve()
+        self._system.configure_system_replicas(configuration)
+        analytical = self._system.solve()
         utilizations = tuple(analytical.get_mean_utilizations())
         if not analytical.get_stability() or not utilizations:
             raise ValueError(
@@ -876,10 +460,10 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         return ordering
 
     def evaluate(self, configuration):
-        configuration = self.__normalize(configuration)
+        configuration = self._normalize(configuration)
         if not self.candidate_is_structurally_feasible(configuration):
-            self.__system.configure_system_replicas(configuration)
-            analytical = self.__system.solve()
+            self._system.configure_system_replicas(configuration)
+            analytical = self._system.solve()
             evaluation = ReplicaSizingEvaluation(
                 configuration=configuration,
                 feasible=False,
@@ -889,12 +473,10 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
                 simulation_metrics=None,
                 classification=(SimulationClassification.STRUCTURALLY_INFEASIBLE),
             )
-            self.__evaluation_history[configuration] = evaluation
-            self.__report_evaluation(configuration, evaluation)
-            return evaluation
+            return self._record_evaluation(configuration, evaluation)
         statistical = self.__evaluator.evaluate(configuration)
-        self.__system.configure_system_replicas(configuration)
-        analytical = self.__system.solve()
+        self._system.configure_system_replicas(configuration)
+        analytical = self._system.solve()
         intervals = statistical.intervals
         simulation_metrics = (
             Metrics(
@@ -930,8 +512,7 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
             classification=statistical.classification,
             configuration_evaluation=statistical,
         )
-        self.__evaluation_history[configuration] = evaluation
-        self.__report_evaluation(configuration, evaluation)
+        self._record_evaluation(configuration, evaluation)
         if statistical.classification in (
             SimulationClassification.SIMULATION_FAILURE,
             SimulationClassification.CALIBRATION_FAILURE,
@@ -942,10 +523,3 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
                 evaluation,
             )
         return evaluation
-
-    def evaluate_and_check(self, configuration):
-        evaluation = self.evaluate(configuration)
-        return evaluation, evaluation.feasible
-
-    def is_feasible(self, configuration):
-        return self.evaluate(configuration).feasible

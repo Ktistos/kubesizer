@@ -5,9 +5,11 @@ from calibration import CalibrationProfile, validate_profile_for_experiment
 from metrics import (
     ClusterBootstrapP95Interval,
     IndependentReplicationRateInterval,
-    independent_replication_rate_interval,
-    replication_cluster_bootstrap_mean,
-    replication_cluster_bootstrap_p95,
+)
+
+from .replication_evidence import (
+    calculate_replication_evidence,
+    replication_diagnostics,
 )
 
 
@@ -48,9 +50,7 @@ class SimulationUncertaintyDiagnostics:
     simulation_replication_count: int
     input_uncertainty_method: str | None
     sampled_input_block_starts: tuple[int, ...]
-    request_class_arrival_multiplier_ranges: tuple[
-        tuple[str, float, float], ...
-    ]
+    request_class_arrival_multiplier_ranges: tuple[tuple[str, float, float], ...]
     service_time_multiplier_ranges: tuple[tuple[int, float, float], ...]
     request_class_statistic_variance_components: tuple[
         tuple[str, float, float, float], ...
@@ -170,9 +170,7 @@ class CalibratedConfigurationEvaluator:
                 replication.input_arrival_rate_multipliers[request_class]
                 for replication in replications
             )
-            arrival_ranges.append(
-                (request_class, min(values), max(values))
-            )
+            arrival_ranges.append((request_class, min(values), max(values)))
         service_count = max(
             (
                 len(
@@ -212,8 +210,7 @@ class CalibratedConfigurationEvaluator:
                     upper = min(lower + 1, len(ordered) - 1)
                     weight = position - lower
                     statistic = (
-                        ordered[lower] * (1.0 - weight)
-                        + ordered[upper] * weight
+                        ordered[lower] * (1.0 - weight) + ordered[upper] * weight
                     )
                 statistics.append(statistic)
                 block = getattr(replication, "sampled_input_block_start", None)
@@ -221,15 +218,11 @@ class CalibratedConfigurationEvaluator:
             if len(statistics) < 2:
                 continue
             grand_mean = sum(statistics) / len(statistics)
-            total_sum_squares = sum(
-                (value - grand_mean) ** 2 for value in statistics
-            )
+            total_sum_squares = sum((value - grand_mean) ** 2 for value in statistics)
             within_sum_squares = 0.0
             for values in grouped.values():
                 group_mean = sum(values) / len(values)
-                within_sum_squares += sum(
-                    (value - group_mean) ** 2 for value in values
-                )
+                within_sum_squares += sum((value - group_mean) ** 2 for value in values)
             divisor = len(statistics) - 1
             total_variance = total_sum_squares / divisor
             within_contribution = within_sum_squares / divisor
@@ -248,16 +241,12 @@ class CalibratedConfigurationEvaluator:
         return SimulationUncertaintyDiagnostics(
             simulation_replication_count=len(replications),
             input_uncertainty_method=(
-                "aligned-moving-block-bootstrap"
-                if starts
-                else None
+                "aligned-moving-block-bootstrap" if starts else None
             ),
             sampled_input_block_starts=starts,
             request_class_arrival_multiplier_ranges=tuple(arrival_ranges),
             service_time_multiplier_ranges=tuple(service_ranges),
-            request_class_statistic_variance_components=tuple(
-                variance_components
-            ),
+            request_class_statistic_variance_components=tuple(variance_components),
             model_form_assumptions=tuple(
                 sorted(self.system.get_service_execution_models().items())
             ),
@@ -296,86 +285,19 @@ class CalibratedConfigurationEvaluator:
         replications,
         look_index,
     ):
-        intervals = []
-        counts = []
-        tail_alpha = self._tail_alpha()
-        for request_class, slo in self.profile.request_class_slos:
-            try:
-                clusters = tuple(
-                    tuple(replication.request_class_latencies[request_class])
-                    for replication in replications
-                )
-            except (AttributeError, KeyError, TypeError) as error:
-                raise ValueError(
-                    f"Replication output has no raw cohort for {request_class!r}."
-                ) from error
-            total = sum(len(cluster) for cluster in clusters)
-            nonempty = sum(bool(cluster) for cluster in clusters)
-            counts.append((request_class, total))
-            if total < self.profile.minimum_eligible_samples_per_request_class:
-                continue
-            if nonempty < self.profile.minimum_nonempty_replications_per_request_class:
-                continue
-            bootstrap = (
-                replication_cluster_bootstrap_mean
-                if self.profile.latency_slo_kind == "mean"
-                else replication_cluster_bootstrap_p95
-            )
-            interval = bootstrap(
-                clusters,
-                request_class=request_class,
-                slo=slo,
-                resample_count=self.profile.bootstrap_resample_count,
-                seed=self.profile.optimization_seed_policy.deterministic_seed(
-                    "bootstrap",
-                    "optimization-evaluation",
-                    self.profile.profile_fingerprint,
-                    configuration,
-                    request_class,
-                    look_index,
-                    len(replications),
-                ),
-                lower_tail_probability=tail_alpha,
-                upper_tail_probability=1.0 - tail_alpha,
-                minimum_tail_draws=self.profile.minimum_bootstrap_tail_draws,
-            )
-            intervals.append((request_class, interval))
-        failure_intervals = []
-        for request_class, slo in self.profile.request_class_failure_rate_slos:
-            try:
-                clusters = tuple(
-                    tuple(replication.request_class_failures[request_class])
-                    for replication in replications
-                )
-            except (AttributeError, KeyError, TypeError) as error:
-                raise ValueError(
-                    f"Replication output has no failure cohort for "
-                    f"{request_class!r}."
-                ) from error
-            latency_sizes = tuple(
-                len(replication.request_class_latencies[request_class])
-                for replication in replications
-            )
-            if tuple(len(cluster) for cluster in clusters) != latency_sizes:
-                raise ValueError(
-                    f"Failure and latency cohorts disagree for {request_class!r}."
-                )
-            if sum(bool(cluster) for cluster in clusters) < (
-                self.profile.minimum_nonempty_replications_per_request_class
-            ):
-                continue
-            failure_intervals.append(
-                (
-                    request_class,
-                    independent_replication_rate_interval(
-                        clusters,
-                        request_class=request_class,
-                        slo=slo,
-                        per_tail_alpha=tail_alpha,
-                    ),
-                )
-            )
-        return tuple(intervals), tuple(failure_intervals), tuple(counts)
+        evidence = calculate_replication_evidence(
+            self.profile,
+            configuration,
+            replications,
+            tail_alpha=self._tail_alpha(),
+            seed_scope="optimization-evaluation",
+            seed_suffix=(look_index, len(replications)),
+        )
+        return (
+            evidence.latency_intervals,
+            evidence.failure_intervals,
+            evidence.eligible_request_counts,
+        )
 
     @staticmethod
     def _classification(
@@ -467,11 +389,6 @@ class CalibratedConfigurationEvaluator:
             final_failure_intervals = ()
             final_counts = ()
             final_classification = SimulationClassification.INCONCLUSIVE
-            processed_events = 0
-            external_arrivals = 0
-            completed_requests = 0
-            failed_measured_requests = 0
-            maximum_stop_time = 0.0
             for look_index, replication_count in enumerate(
                 self._look_schedule(), start=1
             ):
@@ -535,30 +452,6 @@ class CalibratedConfigurationEvaluator:
                             self.profile.maximum_optimization_replications
                         ),
                     },
-                )
-                processed_events += sum(
-                    int(getattr(item, "processed_event_count", 0)) for item in batch
-                )
-                external_arrivals += sum(
-                    int(getattr(item, "external_arrival_count", 0)) for item in batch
-                )
-                completed_requests += sum(
-                    int(getattr(item, "completed_request_count", 0)) for item in batch
-                )
-                failed_measured_requests += sum(
-                    sum(
-                        int(value)
-                        for value in getattr(
-                            item,
-                            "failed_measured_request_counts",
-                            {},
-                        ).values()
-                    )
-                    for item in batch
-                )
-                maximum_stop_time = max(
-                    maximum_stop_time,
-                    *(float(getattr(item, "stop_time", 0.0)) for item in batch),
                 )
                 try:
                     (
@@ -630,18 +523,22 @@ class CalibratedConfigurationEvaluator:
                 calibration_profile_fingerprint=self.profile.profile_fingerprint,
                 sequential_tail_alpha=self._tail_alpha(),
                 looks=tuple(looks),
-                simulation_diagnostics=(
-                    ("processed_event_count", processed_events),
-                    ("external_arrival_count", external_arrivals),
-                    ("completed_request_count", completed_requests),
-                    ("failed_measured_request_count", failed_measured_requests),
-                    ("maximum_stop_time", maximum_stop_time),
+                simulation_diagnostics=replication_diagnostics(replications)
+                + (
+                    (
+                        "maximum_stop_time",
+                        max(
+                            (
+                                float(getattr(item, "stop_time", 0.0))
+                                for item in replications
+                            ),
+                            default=0.0,
+                        ),
+                    ),
                     ("replication_count", previous_count),
                 ),
                 failure_reason=failure_reason,
-                uncertainty_diagnostics=self._uncertainty_diagnostics(
-                    replications
-                ),
+                uncertainty_diagnostics=self._uncertainty_diagnostics(replications),
             )
             self._progress(
                 "configuration_evaluation_completed",

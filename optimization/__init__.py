@@ -6,7 +6,6 @@ from .feasibility import (
 )
 from .exceptions import (
     NoFeasibleConfigurationError,
-    RequestClassMetricsUnavailableError,
     StatisticalEvaluationError,
 )
 from .mode import (
@@ -27,9 +26,6 @@ from .simulation_evaluation import (
 from .replica_validation import (
     CalibratedFinalValidationResult,
     FinalValidationClassification,
-    FinalReplicaValidationError,
-    FinalReplicaValidationResult,
-    validate_selected_replica_configuration,
     validate_final_configuration,
 )
 from .result import OptimizationResult
@@ -39,7 +35,6 @@ from .replica_sizing import (
     AnalyticalReplicaSizingProblem,
     CalibratedReplicaSizingProblem,
     ReplicaSizingEvaluation,
-    ReplicaSizingProblem,
 )
 
 __all__ = [
@@ -57,18 +52,13 @@ __all__ = [
     "CalibratedReplicaSizingProblem",
     "CalibratedFinalValidationResult",
     "FinalValidationClassification",
-    "FinalReplicaValidationError",
-    "FinalReplicaValidationResult",
     "GraphSearchProblem",
     "NoFeasibleConfigurationError",
     "OptimizationProblem",
     "OptimizationResult",
     "Optimizer",
-    "RequestClassMetricsUnavailableError",
     "StatisticalEvaluationError",
     "ReplicaSizingEvaluation",
-    "ReplicaSizingProblem",
-    "validate_selected_replica_configuration",
     "validate_final_configuration",
     "CalibratedConfigurationEvaluator",
     "ConfigurationEvaluation",

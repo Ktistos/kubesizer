@@ -3,8 +3,7 @@ import json
 import math
 import os
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 
@@ -119,9 +118,9 @@ def _serialize_distribution(specification):
         "mean": specification.mean,
         "scv": specification.scv,
     }
-    for field in ("shape", "sampling", "block_duration"):
-        if field in parameters:
-            result[field] = parameters[field]
+    for name in ("shape", "sampling", "block_duration"):
+        if name in parameters:
+            result[name] = parameters[name]
     if specification.distribution == "custom":
         library = Path(parameters["library"])
         digest = hashlib.sha256()
@@ -206,9 +205,7 @@ class CppSimulationBackend:
         workflows = system.get_request_class_workflows()
         call_graphs = system.get_request_class_call_graphs()
         call_execution_modes = system.get_request_class_call_execution_modes()
-        overhead_specs = (
-            system.get_request_class_latency_overhead_distribution_specs()
-        )
+        overhead_specs = system.get_request_class_latency_overhead_distribution_specs()
         latency_components = getattr(
             system,
             "get_request_class_latency_component_distribution_specs",
@@ -231,9 +228,7 @@ class CppSimulationBackend:
         replica_queue_models = getattr(
             system,
             "get_service_replica_queue_models",
-            lambda: {
-                service.get_name(): "pooled" for service in services
-            },
+            lambda: {service.get_name(): "pooled" for service in services},
         )()
         joint_input_uncertainty = system.get_joint_input_uncertainty()
         for request_class in system.get_request_classes():
@@ -329,9 +324,7 @@ class CppSimulationBackend:
                 {
                     "name": service.get_name(),
                     "execution_model": execution_models[service.get_name()],
-                    "replica_queue_model": replica_queue_models[
-                        service.get_name()
-                    ],
+                    "replica_queue_model": replica_queue_models[service.get_name()],
                     "replicas": service.get_replicas(),
                     "capacity": (
                         service.get_replicas() * processing_slots[service.get_name()]
@@ -478,13 +471,13 @@ class CppSimulationBackend:
         service_count = len(system.get_services())
         try:
             metrics = result["metrics"]
-            for field in (
+            for name in (
                 "mean_utilizations",
                 "mean_latencies",
                 "p95_latencies",
                 "p99_latencies",
             ):
-                _numeric_tuple(metrics[field], f"metrics.{field}", length=service_count)
+                _numeric_tuple(metrics[name], f"metrics.{name}", length=service_count)
             if not isinstance(metrics["request_class_p95_latencies"], dict):
                 raise ValueError("request-class p95 values must be an object.")
             expected_classes = set(system.get_request_classes())
@@ -499,8 +492,8 @@ class CppSimulationBackend:
             if len(result["busy_replicas_at_end"]) != service_count:
                 raise ValueError("final busy vector has the wrong length.")
             if capture_state and any(
-                result[field] is None
-                for field in ("active_history", "queue_history", "busy_history")
+                result[name] is None
+                for name in ("active_history", "queue_history", "busy_history")
             ):
                 raise ValueError("captured state histories are missing.")
         except (KeyError, TypeError, ValueError) as error:
@@ -618,42 +611,26 @@ class CppSimulationBackend:
         maximum_drain_time = _finite_positive(maximum_drain_time, "maximum_drain_time")
         if isinstance(workers, bool) or not isinstance(workers, int) or workers <= 0:
             raise ValueError("workers must be a positive integer.")
-        serialized_workload = self.serialize_system(system)
-
-        def invoke_one(seed):
-            return self._invoke(
-                "measurement_replications",
-                system,
-                serialized_workload=serialized_workload,
-                seeds=(seed,),
-                warmup_duration=warmup_duration,
-                measurement_duration=measurement_duration,
-                maximum_drain_time=maximum_drain_time,
-                workers=1,
-            )
-
-        bounded_workers = min(workers, len(seeds))
-        if bounded_workers == 1:
-            native_results = tuple(invoke_one(seed) for seed in seeds)
-        else:
-            with ThreadPoolExecutor(max_workers=bounded_workers) as executor:
-                native_results = tuple(executor.map(invoke_one, seeds))
+        result = self._invoke(
+            "measurement_replications",
+            system,
+            seeds=seeds,
+            warmup_duration=warmup_duration,
+            measurement_duration=measurement_duration,
+            maximum_drain_time=maximum_drain_time,
+            workers=min(workers, len(seeds)),
+        )
 
         try:
             expected_configuration = tuple(system.get_system_replicas())
-            raw_replications = []
-            for expected_seed, result in zip(seeds, native_results):
-                configuration = tuple(
-                    int(value) for value in result["replica_configuration"]
-                )
-                if configuration != expected_configuration:
-                    raise ValueError("native configuration does not match request.")
-                batch = result["replications"]
-                if len(batch) != 1 or int(batch[0]["seed"]) != expected_seed:
-                    raise ValueError(
-                        "native single-replication batch identity is invalid."
-                    )
-                raw_replications.append(batch[0])
+            configuration = tuple(
+                int(value) for value in result["replica_configuration"]
+            )
+            raw_replications = result["replications"]
+            if configuration != expected_configuration:
+                raise ValueError("native configuration does not match request.")
+            if tuple(int(item["seed"]) for item in raw_replications) != seeds:
+                raise ValueError("native replication batch identity is invalid.")
             expected_classes = set(system.get_request_classes())
             replications = []
             for expected_seed, item in zip(seeds, raw_replications):
@@ -881,12 +858,9 @@ def slice_measurement_replication(replication, measurement_duration):
     p95 = {
         name: _percentile(values, 0.95) for name, values in latencies.items() if values
     }
-    return NativeMeasurementReplication(
-        seed=replication.seed,
-        replica_configuration=replication.replica_configuration,
-        warmup_duration=replication.warmup_duration,
+    return replace(
+        replication,
         measurement_duration=measurement_duration,
-        stop_time=replication.stop_time,
         measured_request_counts=counts,
         completed_measured_request_counts=dict(counts),
         failed_measured_request_counts={
@@ -896,19 +870,7 @@ def slice_measurement_replication(replication, measurement_duration):
         request_class_latencies=latencies,
         request_class_arrival_times=arrival_times,
         request_class_failures=failures,
-        processed_event_count=replication.processed_event_count,
-        external_arrival_count=replication.external_arrival_count,
-        completed_request_count=replication.completed_request_count,
-        active_requests_at_end=replication.active_requests_at_end,
-        queue_lengths_at_end=replication.queue_lengths_at_end,
-        busy_replicas_at_end=replication.busy_replicas_at_end,
-        tagged_requests_in_flight_at_end=replication.tagged_requests_in_flight_at_end,
-        maximum_drain_time=replication.maximum_drain_time,
-        sampled_input_block_start=replication.sampled_input_block_start,
-        input_arrival_rate_multipliers=dict(
-            replication.input_arrival_rate_multipliers
-        ),
-        input_service_time_multipliers=replication.input_service_time_multipliers,
+        input_arrival_rate_multipliers=dict(replication.input_arrival_rate_multipliers),
     )
 
 
