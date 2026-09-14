@@ -2,10 +2,7 @@ import pytest
 
 from optimization import (
     AnalyticalClassification,
-    OptimizationMode,
     ReplicaEvaluationMode,
-    ScalableReplicaSearchOptions,
-    normalize_optimization_mode,
 )
 from performance_models import QueueingNetworkType, System
 from statistical_workflow import (
@@ -108,7 +105,6 @@ def test_exact_analytical_search_finds_minimum_model_feasible_cost(monkeypatch):
         system,
         request_class_mean_latency_limits={"request": 0.12},
         maximum_replicas=3,
-        mode=OptimizationMode.EXACT,
     )
 
     assert result.configuration == (2,)
@@ -129,14 +125,12 @@ def test_analytical_search_reports_bounded_progress_without_simulation():
         _single_service_system(),
         request_class_mean_latency_limits={"request": 0.12},
         maximum_replicas=3,
-        mode=OptimizationMode.EXACT,
         progress_callback=lambda event, details: events.append((event, details)),
     )
 
     assert events[0] == (
         "replica_optimization_started",
         {
-            "selected_mode": "EXACT",
             "completed_configurations": 0,
             "total_configurations": 3,
             "search_space_configurations": 3,
@@ -151,42 +145,10 @@ def test_analytical_search_reports_bounded_progress_without_simulation():
     assert events[-1][0] == "replica_optimization_completed"
 
 
-def test_scalable_analytical_search_is_reproducible_and_not_globally_certified():
-    options = ScalableReplicaSearchOptions(
-        maximum_configuration_evaluations=8,
-        maximum_restarts=2,
-        maximum_no_improvement=1,
-        random_seed=42,
-    )
-
-    first = optimize_with_analytical_model(
-        _single_service_system(),
-        request_class_mean_latency_limits={"request": 0.12},
-        maximum_replicas=3,
-        mode="approximate",
-        scalable_options=options,
-    )
-    second = optimize_with_analytical_model(
-        _single_service_system(),
-        request_class_mean_latency_limits={"request": 0.12},
-        maximum_replicas=3,
-        mode=OptimizationMode.SCALABLE,
-        scalable_options=options,
-    )
-
-    assert first.configuration == second.configuration == (2,)
-    assert first.random_seed == second.random_seed == 42
-    assert first.simulation_replications == second.simulation_replications == 0
-    assert not first.global_optimal
-    assert first.solution_mode == "SCALABLE"
-    assert normalize_optimization_mode("approximate") == OptimizationMode.SCALABLE
-
-
 def test_analytical_search_defaults_to_workload_mean_slo_not_percentile_slo():
     result = optimize_with_analytical_model(
         _structured_single_service_system(),
         maximum_replicas=3,
-        mode=OptimizationMode.EXACT,
     )
 
     # One replica has mean latency 1 / (10 - 4) = 0.1667, so it fails the
@@ -201,7 +163,6 @@ def test_percentile_workload_cannot_use_strict_analytical_optimization():
             _structured_percentile_system(),
             request_class_mean_latency_limits={"request": 0.12},
             maximum_replicas=3,
-            mode=OptimizationMode.EXACT,
         )
 
 
@@ -214,7 +175,6 @@ def test_deadline_workload_cannot_silently_use_strict_analytical_optimization():
         optimize_with_analytical_model(
             system,
             maximum_replicas=3,
-            mode=OptimizationMode.EXACT,
         )
 
 
@@ -227,7 +187,6 @@ def test_workload_without_slos_optimizes_to_the_stable_vector():
     result = optimize_with_analytical_model(
         system,
         maximum_replicas=3,
-        mode=OptimizationMode.EXACT,
     )
 
     assert result.configuration == tuple(system.get_minimum_stable_replicas())
@@ -235,31 +194,28 @@ def test_workload_without_slos_optimizes_to_the_stable_vector():
     assert result.metrics.evaluation_basis == "ANALYTICAL_STABILITY"
 
 
-def test_public_dispatcher_keeps_evaluation_and_search_choices_independent():
+def test_public_dispatcher_selects_evaluation_evidence():
     result = optimize_replica_sizing(
         _single_service_system(),
         evaluation_mode=ReplicaEvaluationMode.ANALYTICAL,
-        mode=OptimizationMode.EXACT,
         request_class_mean_latency_limits={"request": 0.12},
         maximum_replicas=3,
     )
 
     assert result.configuration == (2,)
-    assert result.solution_mode == "EXACT"
+    assert result.method == "UNIFORM_COST_EXACT"
     assert result.simulation_replications == 0
 
     with pytest.raises(ValueError, match="calibration profile"):
         optimize_replica_sizing(
             _single_service_system(),
             evaluation_mode=ReplicaEvaluationMode.SIMULATION,
-            mode=OptimizationMode.EXACT,
         )
 
     with pytest.raises(ValueError, match="does not consume"):
         optimize_replica_sizing(
             _single_service_system(),
             evaluation_mode=ReplicaEvaluationMode.ANALYTICAL,
-            mode=OptimizationMode.EXACT,
             calibration_profile=object(),
             request_class_mean_latency_limits={"request": 0.12},
             maximum_replicas=3,

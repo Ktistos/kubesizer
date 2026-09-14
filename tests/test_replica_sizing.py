@@ -6,12 +6,10 @@ import pytest
 
 from metrics import Metrics
 from optimization import (
-    AnalyticalStabilityHeuristic,
     ReplicaSizingEvaluation,
     ReplicaSizingProblem,
     RequestClassMetricsUnavailableError,
     UniformCostReplicaOptimizer,
-    zero_heuristic,
 )
 
 
@@ -102,7 +100,6 @@ def make_problem(
     p95_function=lambda configuration: {"checkout": 0.5},
     slo=1.0,
     max_replicas=(4, 4),
-    heuristic=zero_heuristic,
 ):
     system = FakeSystem(arrival_rates, service_rates, p95_function)
     problem = ReplicaSizingProblem(
@@ -110,12 +107,11 @@ def make_problem(
         simulation_duration=10,
         request_class_slos={"checkout": slo},
         max_replicas=max_replicas,
-        heuristic=heuristic,
     )
     return system, problem
 
 
-def test_initial_state_is_all_ones_and_neighbors_add_one_replica():
+def test_initial_state_is_stable_and_neighbors_add_one_replica():
     _, problem = make_problem()
 
     initial = problem.initial_state()
@@ -131,17 +127,6 @@ def test_initial_state_is_all_ones_and_neighbors_add_one_replica():
         assert differences.count(1) == 1
         assert differences.count(0) == len(initial) - 1
         assert problem.step_cost(initial, neighbor) == 1
-
-
-def test_stability_heuristic_counts_strictly_required_replicas():
-    heuristic = AnalyticalStabilityHeuristic(
-        arrival_rates=(10, 9),
-        service_rates=(5, 10),
-    )
-
-    assert heuristic((1, 1)) == 2
-    assert heuristic((2, 1)) == 1
-    assert heuristic((3, 1)) == 0
 
 
 def test_unstable_configuration_does_not_invoke_simulator():
@@ -178,7 +163,7 @@ def test_stable_configuration_is_simulated_only_once_due_to_caching():
     assert system.simulate_calls[(1, 1)] == 1
 
 
-def test_optimizer_evaluation_runs_warmup_before_measurement_and_can_start_at_anchor():
+def test_optimizer_evaluation_runs_warmup_before_measurement():
     system = FakeSystem(
         (1, 1),
         (10, 10),
@@ -190,13 +175,11 @@ def test_optimizer_evaluation_runs_warmup_before_measurement_and_can_start_at_an
         warmup_duration=5.0,
         request_class_slos={"checkout": 1.0},
         max_replicas=(4, 4),
-        initial_configuration=(2, 1),
-        heuristic=zero_heuristic,
     )
 
     problem.evaluate(problem.initial_state())
 
-    assert problem.initial_state() == (2, 1)
+    assert problem.initial_state() == (1, 1)
     warmup, measurement, seeds, workers = system.simulation_timelines[0]
     assert warmup == 5.0
     assert measurement == 20.0
@@ -240,7 +223,6 @@ def test_configuration_is_feasible_only_when_every_request_class_slo_passes():
         simulation_duration=10,
         request_class_slos={"checkout": 1.0, "search": 2.0},
         max_replicas=(2, 2),
-        heuristic=zero_heuristic,
     )
 
     assert not problem.evaluate((1, 1)).feasible
@@ -251,7 +233,6 @@ def test_configuration_is_feasible_only_when_every_request_class_slo_passes():
         simulation_duration=10,
         request_class_slos={"checkout": 1.0, "search": 2.0},
         max_replicas=(2, 2),
-        heuristic=zero_heuristic,
     )
     evaluation = uncached_problem.evaluate((1, 1))
 
@@ -277,7 +258,6 @@ def test_replica_cost_precedes_latency_and_latency_breaks_only_equal_cost_ties()
         simulation_duration=10,
         request_class_slos={"checkout": 1.0},
         max_replicas=(2, 2),
-        heuristic=zero_heuristic,
     )
 
     smaller = problem.evaluate((1, 1))
@@ -307,7 +287,6 @@ def test_exact_search_uses_normalized_p95_only_to_break_equal_replica_ties():
         simulation_duration=10,
         request_class_slos={"checkout": 1.0},
         max_replicas=(2, 2),
-        heuristic=zero_heuristic,
     )
 
     result = UniformCostReplicaOptimizer().optimize(problem)
@@ -349,7 +328,7 @@ def test_configuration_seed_blocks_are_reproducible_and_disjoint():
     assert set(neighbor).isdisjoint(other_neighbor)
 
 
-def build_search_problem(heuristic):
+def build_search_problem():
     p95_function = lambda configuration: {
         "checkout": 1 / configuration[0] + 1 / configuration[1]
     }
@@ -359,40 +338,25 @@ def build_search_problem(heuristic):
         p95_function=p95_function,
         slo=0.9,
         max_replicas=(5, 3),
-        heuristic=heuristic,
     )
 
 
 def test_uniform_cost_returns_minimum_replica_configuration_and_full_path():
-    system = FakeSystem((10, 1), (5, 10), lambda configuration: {})
-    heuristic = AnalyticalStabilityHeuristic.from_system(system)
-    _, problem = build_search_problem(heuristic)
+    _, problem = build_search_problem()
 
     result = UniformCostReplicaOptimizer().optimize(problem)
 
     assert result.configuration == (3, 2)
-    assert result.cost == 3
+    assert result.cost == 1
     assert isinstance(result.metrics, ReplicaSizingEvaluation)
     assert result.metrics.cost == 5
     assert result.metrics.feasible
-    assert result.path[0] == (1, 1)
+    assert result.path[0] == (3, 1)
     assert result.path[-1] == result.configuration
     assert all(
         sum(next_value - value for value, next_value in zip(current, neighbor)) == 1
         for current, neighbor in zip(result.path, result.path[1:])
     )
-
-
-def test_zero_and_stability_heuristics_return_same_optimum():
-    zero_system, zero_problem = build_search_problem(zero_heuristic)
-    stability_heuristic = AnalyticalStabilityHeuristic.from_system(zero_system)
-    _, stability_problem = build_search_problem(stability_heuristic)
-
-    zero_result = UniformCostReplicaOptimizer().optimize(zero_problem)
-    stability_result = UniformCostReplicaOptimizer().optimize(stability_problem)
-
-    assert zero_result.configuration == stability_result.configuration == (3, 2)
-    assert zero_result.cost == stability_result.cost == 3
 
 
 def test_structural_infeasibility_skips_expensive_simulation():
@@ -406,7 +370,6 @@ def test_structural_infeasibility_skips_expensive_simulation():
         simulation_duration=10,
         request_class_slos={"checkout": 1.0},
         max_replicas=(3, 3),
-        heuristic=zero_heuristic,
         structural_feasibility=lambda configuration: sum(configuration) <= 2,
     )
 

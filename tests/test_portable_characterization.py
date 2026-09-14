@@ -14,10 +14,8 @@ from characterization import (
     measurement_methodology_contract,
     parse_portable_sizing_inputs,
     recommend_initial_replicas,
-    recommendation_initial_configuration,
 )
 from native_backend import get_native_backend
-from optimization import AnalyticalReplicaSizingProblem, ScalableReplicaOptimizer
 from performance_models import QueueingNetworkType, System
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
@@ -542,38 +540,6 @@ def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
     assert result.rate_source == "measured_workload"
     assert result.service_map["api"].workload_arrival_rate_rps == pytest.approx(20)
     assert result.service_map["database"].workload_arrival_rate_rps == pytest.approx(24)
-
-
-def test_recommendation_is_a_search_start_not_a_mandatory_replica_floor():
-    plan = load_and_prepare_initial_sizing(
-        EXAMPLE / "workload.yaml",
-        EXAMPLE / "measurements.yaml",
-    )
-    initial = recommendation_initial_configuration(
-        plan.recommendation,
-        ("api", "database"),
-    )
-    ((_, system),) = build_characterized_system_variants(
-        plan.inputs,
-        plan.characterization,
-    )
-    problem = AnalyticalReplicaSizingProblem(
-        system,
-        {},
-        max_replicas=(3, 3),
-        initial_configuration=initial,
-    )
-    result = ScalableReplicaOptimizer(
-        maximum_configuration_evaluations=20,
-        maximum_restarts=1,
-        random_seed=7,
-        collect_trace=True,
-    ).optimize(problem)
-
-    assert initial == (1, 1)
-    assert result.trace[0].configuration == initial
-    assert result.configuration == (1, 1)
-    assert plan.recommendation.method == "CONSERVATIVE_MULTI_BOUND_INITIAL_SIZING"
 
 
 def test_simulation_builder_uses_safe_aligned_demand_and_declared_call_semantics():

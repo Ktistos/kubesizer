@@ -253,8 +253,3 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
         services=tuple(recommendations),
         warnings=tuple(dict.fromkeys(overall_warnings)),
     )
-
-
-def recommendation_initial_configuration(recommendation, service_order):
-    """Return the heuristic construction seed in an optimizer's service order."""
-    return recommendation.configuration(tuple(service_order))

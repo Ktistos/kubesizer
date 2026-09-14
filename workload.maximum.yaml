@@ -62,10 +62,9 @@ request_classes:
 
 traffic_model:
   # HTTP probes between application pods provide round-trip observations.
-  # Normalize them to one-way values before exporting these two series. Before
-  # node placement is known, the probability is the observed/estimated share
-  # of service edges crossing nodes. A placement latency matrix supersedes this
-  # mixture once concrete nodes are selected.
+  # Normalize them to one-way values before exporting these two series. The
+  # probability is the observed or estimated share of service edges crossing
+  # nodes in the modeled deployment.
   communication_latency:
     same_node_one_way:
       distribution: empirical
@@ -77,7 +76,7 @@ traffic_model:
       source: examples/workloads/data/cross-node-one-way-times.csv
       column: latency_seconds
       sampling: iid_with_replacement
-    unplaced_cross_node_probability: 0.65
+    cross_node_probability: 0.65
 
   entry_services:
     interactive:

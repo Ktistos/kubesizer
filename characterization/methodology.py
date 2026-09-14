@@ -86,9 +86,8 @@ def measurement_methodology_contract():
             ),
             "normalization": "round_trip_seconds / 2",
             "outputs": ["same_node_one_way", "cross_node_one_way"],
-            "unplaced_probability": (
-                "observed or placement-derived fraction of service calls crossing "
-                "nodes"
+            "cross_node_probability": (
+                "observed or estimated fraction of service calls crossing nodes"
             ),
         },
         "optional_service_non_cpu_blocking_time": {

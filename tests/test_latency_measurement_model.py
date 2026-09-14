@@ -78,7 +78,7 @@ def test_http_probe_round_trips_become_one_way_empirical_distributions():
     result = communication_latency_from_round_trip_probes(
         same_node_round_trip_seconds=(0.0020, 0.0024),
         cross_node_round_trip_seconds=(0.0028, 0.0032),
-        unplaced_cross_node_probability=0.75,
+        cross_node_probability=0.75,
     )
 
     assert result == {
@@ -92,7 +92,7 @@ def test_http_probe_round_trips_become_one_way_empirical_distributions():
             "samples": [0.0014, 0.0016],
             "sampling": "iid_with_replacement",
         },
-        "unplaced_cross_node_probability": 0.75,
+        "cross_node_probability": 0.75,
     }
 
 
@@ -101,13 +101,13 @@ def test_network_probe_model_rejects_insufficient_or_invalid_evidence():
         communication_latency_from_round_trip_probes(
             same_node_round_trip_seconds=(0.002,),
             cross_node_round_trip_seconds=(0.003, 0.004),
-            unplaced_cross_node_probability=0.5,
+            cross_node_probability=0.5,
         )
     with pytest.raises(ValueError, match="cannot exceed one"):
         communication_latency_from_round_trip_probes(
             same_node_round_trip_seconds=(0.002, 0.003),
             cross_node_round_trip_seconds=(0.003, 0.004),
-            unplaced_cross_node_probability=1.1,
+            cross_node_probability=1.1,
         )
 
 

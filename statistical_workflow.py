@@ -18,17 +18,12 @@ from calibration import (
     validate_profile_for_experiment,
 )
 from optimization import (
-    DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
     AnalyticalReplicaSizingProblem,
     CalibratedConfigurationEvaluator,
     CalibratedReplicaSizingProblem,
-    OptimizationMode,
     ReplicaEvaluationMode,
-    ScalableReplicaOptimizer,
-    ScalableReplicaSearchOptions,
     UniformCostReplicaOptimizer,
     replica_configuration_count,
-    optimization_mode_decision,
     normalize_replica_evaluation_mode,
     optimize_replica_configuration as _optimize_replica_configuration,
     validate_final_configuration as _validate_final_configuration,
@@ -40,7 +35,6 @@ class CalibratedOptimizationResult:
     optimization_result: object
     configuration_evaluations: tuple[tuple[tuple[int, ...], object], ...]
     calibration_profile_fingerprint: str
-    runtime_limit_calibration: object | None = None
     predictive_validation_status: str = "NOT_PROVIDED"
     predictive_validation_certificate_fingerprint: str | None = None
 
@@ -83,29 +77,11 @@ class CalibratedOptimizationResult:
         )
 
     @property
-    def solution_mode(self):
-        return str(getattr(self.optimization_result, "solution_mode", "EXACT"))
-
-    @property
     def optimality_proven(self):
         return bool(
             getattr(
                 self.optimization_result,
                 "optimality_proven",
-                self.minimality_proven,
-            )
-        )
-
-    @property
-    def budget_exhausted(self):
-        return bool(getattr(self.optimization_result, "budget_exhausted", False))
-
-    @property
-    def locally_minimal(self):
-        return bool(
-            getattr(
-                self.optimization_result,
-                "locally_minimal",
                 self.minimality_proven,
             )
         )
@@ -159,24 +135,6 @@ class CalibratedOptimizationResult:
         return float(getattr(self.optimization_result, "runtime_seconds", 0.0))
 
     @property
-    def restart_count(self):
-        return int(getattr(self.optimization_result, "restart_count", 1))
-
-    @property
-    def random_seed(self):
-        return getattr(self.optimization_result, "random_seed", None)
-
-    @property
-    def deletion_local_certified(self):
-        return bool(
-            getattr(
-                self.optimization_result,
-                "deletion_local_certified",
-                self.locally_minimal,
-            )
-        )
-
-    @property
     def global_optimal(self):
         return bool(
             getattr(
@@ -197,15 +155,6 @@ class CalibratedOptimizationResult:
     @property
     def relative_bound_gap(self):
         return getattr(self.optimization_result, "relative_bound_gap", None)
-
-    @property
-    def trace(self):
-        return tuple(getattr(self.optimization_result, "trace", ()))
-
-    @property
-    def selection_reason(self):
-        return getattr(self.optimization_result, "selection_reason", None)
-
 
 @dataclass(frozen=True)
 class RequestClassRecommendationEvidence:
@@ -252,7 +201,7 @@ class ValidatedReplicaRecommendation:
     def recommendable(self):
         return self.status in {
             "VALIDATED_BOUNDED_MODEL_OPTIMUM",
-            "VALIDATED_FEASIBLE_HEURISTIC",
+            "VALIDATED_FEASIBLE_NOT_PROVEN",
         }
 
     @property
@@ -307,7 +256,8 @@ class ValidatedReplicaRecommendation:
             )
         if not self.bounded_model_optimal:
             warnings.append(
-                "search returned a validated heuristic; global minimum cost was not proven"
+                "exact search found a validated configuration, but minimum cost "
+                "was not proven"
             )
         unresolved = self.optimization.unresolved_lower_cost_states
         if unresolved:
@@ -319,7 +269,7 @@ class ValidatedReplicaRecommendation:
                 else (
                     "VALIDATED_BOUNDED_MODEL"
                     if self.bounded_model_optimal
-                    else "VALIDATED_HEURISTIC"
+                    else "VALIDATED_NOT_PROVEN"
                 )
             ),
             request_classes=tuple(request_classes),
@@ -575,74 +525,6 @@ def calibrate(
     )
 
 
-def calibrate_fixed_placement(
-    system,
-    configuration,
-    *,
-    request_class_slos=None,
-    options=None,
-    workers=1,
-    report_directory=None,
-    progress_callback=None,
-):
-    """Calibrate W and M for one placement-aware final-validation candidate."""
-    options = options or CalibrationOptions()
-    configuration = _maximum_configuration(system, tuple(configuration))
-    placement_model = getattr(
-        system,
-        "get_simulation_placement_model",
-        lambda: None,
-    )()
-    if placement_model is None:
-        raise ValueError("Fixed-placement calibration requires an attached placement.")
-    service_names = tuple(
-        service.get_name()
-        for service in sorted(
-            system.get_services().values(),
-            key=lambda service: service.get_id(),
-        )
-    )
-    placed_configuration = tuple(
-        sum(
-            placement_model["placement"][node][service_name]
-            for node in placement_model["node_names"]
-        )
-        for service_name in service_names
-    )
-    if placed_configuration != configuration:
-        raise ValueError(
-            "Attached placement replica totals do not match the final configuration."
-        )
-    system.configure_system_replicas(configuration)
-    declared_kind = _declared_latency_slo_kind(system)
-    latency_slo_kind = declared_kind or "percentile"
-    if request_class_slos is None:
-        request_class_slos = _workload_simulation_limits(system)
-    elif declared_kind in {"mean", "percentile"}:
-        declared_limits = _workload_simulation_limits(system)
-        if dict(request_class_slos) != declared_limits:
-            raise ValueError(
-                "Explicit simulation SLOs must match those declared by the workload."
-            )
-    validate_timeout_failure_rate_constraints(system, request_class_slos)
-    validate_failure_rate_replication_policy(
-        options,
-        request_class_slos,
-        getattr(system, "get_request_class_failure_rate_slos", lambda: {})(),
-    )
-    return _calibrate_one(
-        system,
-        request_class_slos=request_class_slos,
-        maximum_replicas=configuration,
-        options=options,
-        workers=workers,
-        report_directory=report_directory,
-        progress_callback=progress_callback,
-        minimum_configuration=configuration,
-        latency_slo_kind=latency_slo_kind,
-    )
-
-
 def evaluate_configuration(
     system,
     configuration,
@@ -670,28 +552,14 @@ def optimize_with_calibrated_simulation(
     system,
     calibration_profile,
     *,
-    optimizer=None,
-    heuristic=None,
     workers=1,
-    mode=OptimizationMode.AUTO,
-    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
-    scalable_options=None,
-    runtime_limit_calibration=None,
-    initial_configuration=None,
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
     predictive_validation=None,
     require_predictive_validation=False,
 ):
-    """Run exact or bounded scalable statistically controlled replica sizing.
-
-    AUTO uses the full bounded configuration count, not service count alone.
-    Both modes accept only statistically feasible configurations; scalable
-    mode changes search coverage, never the confidence-interval procedure.
-    ``initial_configuration`` seeds scalable construction without becoming a
-    hard replica floor.
-    """
+    """Run exact, statistically controlled uniform-cost replica sizing."""
     if predictive_validation is None:
         if require_predictive_validation:
             raise ValueError(
@@ -711,102 +579,31 @@ def optimize_with_calibrated_simulation(
         request_class_slos=calibration_profile.slos,
         maximum_configuration=calibration_profile.maximum_replica_configuration,
     )
-    configuration_count = (
-        replica_configuration_count(calibration_profile)
-        if optimizer is None or runtime_limit_calibration is not None
-        else None
-    )
-    if runtime_limit_calibration is not None:
-        if runtime_limit_calibration.calibration_profile_fingerprint != (
-            calibration_profile.profile_fingerprint
-        ):
-            raise ValueError(
-                "Runtime limit calibration belongs to a different "
-                "calibration profile."
-            )
-        if runtime_limit_calibration.configuration_count != configuration_count:
-            raise ValueError(
-                "Runtime limit calibration has a different replica search space."
-            )
-        exact_configuration_limit = min(
-            exact_configuration_limit,
-            runtime_limit_calibration.effective_configuration_limit,
-        )
+    configuration_count = replica_configuration_count(calibration_profile)
 
     problem = CalibratedReplicaSizingProblem(
         system,
         calibration_profile,
-        initial_configuration=initial_configuration,
-        heuristic=heuristic,
         simulation_workers=workers,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
     )
-    if optimizer is None:
-        selected_mode, selection_reason = optimization_mode_decision(
-            mode,
-            configuration_count,
-            exact_configuration_limit,
-        )
-        if selected_mode == OptimizationMode.EXACT:
-            optimizer = UniformCostReplicaOptimizer()
-            if hasattr(optimizer, "selection_reason"):
-                optimizer.selection_reason = selection_reason
-        else:
-            options = scalable_options or ScalableReplicaSearchOptions()
-            optimizer = ScalableReplicaOptimizer(
-                maximum_configuration_evaluations=(
-                    options.maximum_configuration_evaluations
-                ),
-                maximum_total_evaluator_calls=(options.maximum_total_evaluator_calls),
-                maximum_simulation_replications=(
-                    options.maximum_simulation_replications
-                ),
-                time_budget_seconds=options.time_budget_seconds,
-                candidate_width=options.candidate_width,
-                restricted_candidate_fraction=(options.restricted_candidate_fraction),
-                maximum_restarts=options.maximum_restarts,
-                maximum_no_improvement=options.maximum_no_improvement,
-                maximum_vns_neighborhood=(options.maximum_vns_neighborhood),
-                vns_attempts_per_neighborhood=(options.vns_attempts_per_neighborhood),
-                random_seed=options.random_seed,
-                removal_order=options.removal_order,
-                archive_equal_cost=options.archive_equal_cost,
-                collect_trace=options.collect_trace,
-                selection_reason=selection_reason,
-            )
-        evaluation_limit = (
-            configuration_count
-            if selected_mode == OptimizationMode.EXACT
-            else min(configuration_count, options.maximum_configuration_evaluations)
-        )
-        if progress_callback is not None:
-            progress_callback(
-                "replica_optimization_started",
-                {
-                    "selected_mode": selected_mode.value,
-                    "completed_configurations": 0,
-                    "total_configurations": evaluation_limit,
-                    "search_space_configurations": configuration_count,
-                },
-            )
-    elif progress_callback is not None:
+    if progress_callback is not None:
         progress_callback(
             "replica_optimization_started",
             {
-                "selected_mode": type(optimizer).__name__,
                 "completed_configurations": 0,
                 "total_configurations": configuration_count,
                 "search_space_configurations": configuration_count,
             },
         )
+    optimizer = UniformCostReplicaOptimizer()
     raw_result = optimizer.optimize(problem)
     if progress_callback is not None:
         progress_callback(
             "replica_optimization_completed",
             {
-                "selected_mode": getattr(raw_result, "solution_mode", "EXACT"),
                 "completed_configurations": len(problem.configuration_evaluations),
                 "search_space_configurations": configuration_count,
             },
@@ -817,7 +614,6 @@ def optimize_with_calibrated_simulation(
             sorted(problem.configuration_evaluations.items())
         ),
         calibration_profile_fingerprint=calibration_profile.profile_fingerprint,
-        runtime_limit_calibration=runtime_limit_calibration,
         predictive_validation_status=predictive_status,
         predictive_validation_certificate_fingerprint=predictive_fingerprint,
     )
@@ -844,25 +640,20 @@ def optimize_with_analytical_model(
     *,
     request_class_mean_latency_limits=None,
     maximum_replicas,
-    optimizer=None,
-    mode=OptimizationMode.AUTO,
-    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
-    scalable_options=None,
     minimum_configuration=None,
-    initial_configuration=None,
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
 ):
     """Optimize analytical stability and optional mean latency without simulation.
 
-    EXACT proves minimum weighted replica cost only for the bounded analytical
-    model. SCALABLE (also accepted as APPROXIMATE) is a budgeted heuristic.
+    Uniform-cost search proves minimum weighted replica cost only for the
+    bounded analytical model.
     With no declared mean SLO, the stable vector is the capacity target. Neither
-    mode estimates p95 latency or provides statistical SLO evidence.
+    analytical evaluation nor exact search estimates p95 latency or provides
+    statistical SLO evidence.
     ``minimum_configuration`` is a hard lower bound and must itself be at or
-    above analytical stability. ``initial_configuration`` seeds scalable
-    construction only.
+    above analytical stability.
     """
     declared_kind = _declared_latency_slo_kind(system)
     declared_timeouts = getattr(
@@ -905,18 +696,12 @@ def optimize_with_analytical_model(
         request_class_mean_latency_limits,
         maximum_replicas,
         minimum_configuration=minimum_configuration,
-        initial_configuration=initial_configuration,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
     )
-    if optimizer is not None:
-        return optimizer.optimize(problem)
     return _optimize_replica_configuration(
         problem,
-        mode=mode,
-        exact_configuration_limit=exact_configuration_limit,
-        scalable_options=scalable_options,
         progress_callback=progress_callback,
     )
 
@@ -925,17 +710,10 @@ def optimize_replica_sizing(
     system,
     *,
     evaluation_mode,
-    mode=OptimizationMode.AUTO,
     calibration_profile=None,
     request_class_mean_latency_limits=None,
     maximum_replicas=None,
-    optimizer=None,
-    heuristic=None,
     workers=1,
-    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
-    scalable_options=None,
-    runtime_limit_calibration=None,
-    initial_configuration=None,
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
@@ -948,7 +726,7 @@ def optimize_replica_sizing(
     constraints and performs no simulation. ``SIMULATION`` requires a frozen
     calibration profile and uses its confidence-bound classification for the
     declared mean or percentile statistic.
-    Both modes support AUTO, EXACT, and SCALABLE/APPROXIMATE search.
+    Both evaluation modes use exact uniform-cost replica search.
     """
     evaluation_mode = normalize_replica_evaluation_mode(evaluation_mode)
     if evaluation_mode == ReplicaEvaluationMode.ANALYTICAL:
@@ -964,11 +742,6 @@ def optimize_replica_sizing(
             system,
             request_class_mean_latency_limits=(request_class_mean_latency_limits),
             maximum_replicas=maximum_replicas,
-            optimizer=optimizer,
-            mode=mode,
-            exact_configuration_limit=exact_configuration_limit,
-            scalable_options=scalable_options,
-            initial_configuration=initial_configuration,
             replica_costs=replica_costs,
             structural_feasibility=structural_feasibility,
             progress_callback=progress_callback,
@@ -993,14 +766,7 @@ def optimize_replica_sizing(
     return optimize_with_calibrated_simulation(
         system,
         calibration_profile,
-        optimizer=optimizer,
-        heuristic=heuristic,
         workers=workers,
-        mode=mode,
-        exact_configuration_limit=exact_configuration_limit,
-        scalable_options=scalable_options,
-        runtime_limit_calibration=runtime_limit_calibration,
-        initial_configuration=initial_configuration,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
@@ -1047,12 +813,6 @@ def recommend_replicas_with_validated_simulation(
     predictive_validation,
     *,
     workers=1,
-    mode=OptimizationMode.AUTO,
-    optimizer=None,
-    heuristic=None,
-    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
-    scalable_options=None,
-    runtime_limit_calibration=None,
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
@@ -1067,13 +827,7 @@ def recommend_replicas_with_validated_simulation(
         system,
         calibration_profile,
         predictive_validation,
-        optimizer=optimizer,
-        heuristic=heuristic,
         workers=workers,
-        mode=mode,
-        exact_configuration_limit=exact_configuration_limit,
-        scalable_options=scalable_options,
-        runtime_limit_calibration=runtime_limit_calibration,
         replica_costs=replica_costs,
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
@@ -1112,10 +866,11 @@ def recommend_replicas_with_validated_simulation(
             "bounds for a simulator that passed held-out predictive validation."
         )
     else:
-        status = "VALIDATED_FEASIBLE_HEURISTIC"
+        status = "VALIDATED_FEASIBLE_NOT_PROVEN"
         guarantee = (
             "The plan passed held-out model validation and fresh final SLO "
-            "validation; global minimum replica cost was not proven."
+            "validation; minimum replica cost was not proven because lower-cost "
+            "configurations remained statistically unresolved."
         )
     return ValidatedReplicaRecommendation(
         service_replicas=service_replicas,

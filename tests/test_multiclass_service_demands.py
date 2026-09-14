@@ -4,7 +4,6 @@ import pytest
 
 from calibration.profile import experiment_fingerprints
 from performance_models import QueueingNetworkType, System, parse_workload_spec
-from optimization import OptimizationMode
 from statistical_workflow import optimize_with_analytical_model
 
 
@@ -114,7 +113,6 @@ def test_analytical_optimizer_enforces_every_class_specific_mean_slo():
     result = optimize_with_analytical_model(
         system,
         maximum_replicas=3,
-        mode=OptimizationMode.EXACT,
     )
 
     assert result.configuration == (2,)

@@ -115,7 +115,8 @@ service demands, call semantics, capacity semantics, and simulator version.
 `recommend_replicas_with_validated_simulation` requires an accepted
 certificate, runs calibrated optimization, and then performs the separate
 fresh-seed Stage C validation. This yields either a validated bounded-model
-optimum, a validated feasible heuristic, or no recommendation. “Bounded-model
+optimum, a validated feasible result whose minimum cost remains unproven due to
+statistically unresolved cheaper states, or no recommendation. “Bounded-model
 optimum” never means globally optimal for unmeasured live-cluster behavior.
 
 The simulation-ready workload can represent an ordered workflow or a
@@ -202,7 +203,7 @@ The selected configuration is locked and rerun once at a fixed replication
 count using only the final-validation seed namespace. No optimization samples
 are reused and the holdout does not stop early. Its familywise interval uses
 `overall_alpha / (2 * request_class_count)` per tail. The final claim passes
-only when every fresh upper bound meets its SLO; placement is blocked otherwise.
+only when every fresh upper bound meets its SLO.
 
 ## Evidence and limitations
 

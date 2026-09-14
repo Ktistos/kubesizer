@@ -172,55 +172,6 @@ def test_processor_sharing_pool_limit_queues_excess_concurrency():
     ) == pytest.approx([0.1, 0.2])
 
 
-def test_placement_adds_directional_call_latency_and_node_slowdown():
-    workload = {
-        "request_classes": {
-            "request": {
-                "concurrency_weight": 1.0,
-                "calls": {"api": {"db": 1.0}},
-                "call_execution": "sequential",
-            }
-        },
-        "traffic_model": {
-            "entry_services": {
-                "request": {
-                    "api": {"distribution": "deterministic", "rate": 2.0}
-                }
-            },
-            "service_times": {
-                service: {"distribution": "deterministic", "mean": 0.1}
-                for service in ("api", "db")
-            },
-        },
-    }
-    system = System("placed-calls", workload, QueueingNetworkType.OPEN)
-    baseline = system.simulate_measurement_replications(
-        warmup_duration=0.0,
-        measurement_duration=1.0,
-        seeds=(44,),
-    )[0]
-    system.configure_simulation_placement(
-        placement={
-            "node-a": {"api": 1, "db": 0},
-            "node-b": {"api": 0, "db": 1},
-        },
-        communication_latency_seconds={
-            "node-a": {"node-b": 0.02},
-            "node-b": {"node-a": 0.03},
-        },
-        execution_time_multipliers={"node-a": 2.0, "node-b": 1.0},
-    )
-    placed = system.simulate_measurement_replications(
-        warmup_duration=0.0,
-        measurement_duration=1.0,
-        seeds=(44,),
-    )[0]
-
-    assert baseline.request_class_latencies["request"] == pytest.approx((0.2,))
-    assert placed.request_class_latencies["request"] == pytest.approx((0.35,))
-    assert placed.placement_model_applied is True
-
-
 def test_uncertainty_diagnostics_do_not_merge_input_and_monte_carlo_sources():
     evaluator = CalibratedConfigurationEvaluator.__new__(
         CalibratedConfigurationEvaluator
@@ -240,7 +191,6 @@ def test_uncertainty_diagnostics_do_not_merge_input_and_monte_carlo_sources():
                     "input_arrival_rate_multipliers": {"request": 0.8},
                     "input_service_time_multipliers": (1.2,),
                     "request_class_latencies": {"request": (0.8, 1.0, 1.2)},
-                    "placement_model_applied": False,
                 },
             )(),
             type(
@@ -251,7 +201,6 @@ def test_uncertainty_diagnostics_do_not_merge_input_and_monte_carlo_sources():
                     "input_arrival_rate_multipliers": {"request": 1.3},
                     "input_service_time_multipliers": (0.9,),
                     "request_class_latencies": {"request": (1.1, 1.3, 1.5)},
-                    "placement_model_applied": True,
                 },
             )(),
         )
@@ -265,7 +214,6 @@ def test_uncertainty_diagnostics_do_not_merge_input_and_monte_carlo_sources():
     )
     assert diagnostics.service_time_multiplier_ranges == ((0, 0.9, 1.2),)
     assert diagnostics.model_form_assumptions == (("api", "processor_sharing"),)
-    assert diagnostics.placement_effects_applied is True
     assert diagnostics.request_class_statistic_variance_components[0][0] == (
         "request"
     )

@@ -1,5 +1,11 @@
 # Independent Implementation and Experiment Audit
 
+> **Archived implementation snapshot.** This audit documents an earlier
+> revision that included node-placement and approximate replica optimization.
+> Kubesizer 0.4 removed those subsystems, their mode/resource inputs, and their
+> output metadata. Historical placement and scalable-search sections below are
+> retained only as audit context and do not describe the current API.
+
 **Repository audited:** `/home/ktistos/work/Kubesizer`  
 **Original audit date:** 29 August 2026
 

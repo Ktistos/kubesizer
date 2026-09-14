@@ -209,9 +209,7 @@ def _communication_latency_specification(specification):
         "cross_node_one_way": duration_distribution_to_workload_mapping(
             specification.cross_node_one_way
         ),
-        "unplaced_cross_node_probability": (
-            specification.unplaced_cross_node_probability
-        ),
+        "cross_node_probability": specification.cross_node_probability,
     }
 
 

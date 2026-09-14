@@ -106,9 +106,9 @@ separate request-class latency clusters and arrival timestamps required for:
 
 Common random numbers use the same simulation seed for replication index `r`
 across configurations. Calibration, optimization, bootstrap and final
-validation occupy disjoint deterministic namespaces. When resources are
-supplied, node placement runs before fresh final validation so the final p95
-bounds include directional network delay and explicitly measured node slowdown.
+validation occupy disjoint deterministic namespaces. Final validation applies
+the communication-delay mixture declared in the workload and does not perform
+or consume a node-placement decision.
 
 Aligned measurement-window arrival and CPU-demand multipliers are sampled
 jointly with a moving-block bootstrap once per replication. Raw arrival
@@ -182,19 +182,18 @@ request_classes:
 ```
 
 For service calls, HTTP round-trip probes between application pods can be
-normalized to one-way same-node and cross-node series. Before placement is
-known, the measured/estimated cross-node call fraction selects between them.
-After placement is attached, its explicit directional matrix is authoritative.
+normalized to one-way same-node and cross-node series. The measured or
+estimated cross-node call fraction selects between them.
 
 ```yaml
 traffic_model:
   communication_latency:
     same_node_one_way: {distribution: deterministic, mean: 0.0011}
     cross_node_one_way: {distribution: deterministic, mean: 0.0015}
-    unplaced_cross_node_probability: 0.6
+    cross_node_probability: 0.6
 ```
 
-Synchronous request/response pairs reuse the same sampled unplaced probe path,
+Synchronous request/response pairs reuse the same sampled probe path,
 preserving the empirical round-trip distribution. Analytical mean evaluation
 uses the component means and expected call round trips; simulation samples the
 full component distributions. Mean differences may be derived from aligned
@@ -222,8 +221,7 @@ successive visits to separate per-replica queues. `independent_random`
 independently selects a replica for every visit. `pooled` represents one ideal
 central queue feeding all replica capacity and must be requested explicitly.
 The selected replica owns that visit's admission queue, concurrency capacity,
-processing queue or processor-sharing scheduler, and placement node until the
-visit completes.
+and processing queue or processor-sharing scheduler until the visit completes.
 
 Independent queues are often the more faithful model for Kubernetes pods. They
 can be slower than a pooled queue because an idle pod cannot take a request
@@ -327,8 +325,7 @@ samplers statistically before relying on analytical optimization.
 - pooled or independently dispatched FIFO admission and processing queues for
   fixed-slot services;
 - fixed probabilistic routing, exits, revisits, and loops;
-- optional fixed node placement with directional one-way transit delays and
-  measured node execution-time multipliers;
+- a deployment-level same-node/cross-node communication-delay mixture;
 - ordered workflows for simulation-ready sequential visit models;
 - synchronous call graphs with an explicit per-class `call_execution` mode:
   sibling calls run either in declared sequence or in parallel, while parents

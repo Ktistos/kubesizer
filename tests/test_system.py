@@ -3,7 +3,6 @@ import random
 import pytest
 
 from performance_models import QueueingNetworkType, System
-from optimization import AnalyticalStabilityHeuristic
 
 
 def test_get_service_by_id_returns_matching_service_or_none():
@@ -81,9 +80,6 @@ def test_combined_request_class_load_determines_stability():
     class_rates = system.get_request_class_effective_arrival_rates()
     assert class_rates["read"] == pytest.approx([6.0])
 
-    heuristic = AnalyticalStabilityHeuristic.from_system(system)
-    assert heuristic((1,)) == 1
-    assert heuristic((2,)) == 0
     assert class_rates["write"] == pytest.approx([6.0])
     assert system.get_effective_arrival_rates() == pytest.approx([12.0])
 

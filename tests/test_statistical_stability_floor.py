@@ -176,7 +176,6 @@ def test_analytical_search_cannot_delete_below_statistical_floor():
         {},
         max_replicas=(3, 3),
         minimum_configuration=(2, 1),
-        initial_configuration=(3, 2),
     )
 
     result = UniformCostReplicaOptimizer().optimize(problem)

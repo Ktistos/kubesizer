@@ -3,7 +3,6 @@ import copy
 import pytest
 
 from calibration.profile import experiment_fingerprints
-from optimization import OptimizationMode
 from performance_models import QueueingNetworkType, System, parse_workload_spec
 from statistical_workflow import optimize_with_analytical_model
 
@@ -250,7 +249,6 @@ def test_analytical_optimizer_uses_visit_ratio_load_and_latency():
     result = optimize_with_analytical_model(
         system,
         maximum_replicas=4,
-        mode=OptimizationMode.EXACT,
     )
 
     assert result.configuration == (1, 2)

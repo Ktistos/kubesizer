@@ -24,7 +24,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 12;
+constexpr int kProtocolVersion = 13;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 constexpr int kDeadlinePriority = 2;
@@ -129,12 +129,9 @@ struct Workload {
     std::vector<ExternalStream> external_streams;
     std::vector<InputEpoch> input_epochs;
     std::size_t input_block_length{};
-    std::vector<std::vector<int>> service_replica_counts_by_node;
-    std::vector<std::vector<double>> node_communication_latencies;
-    std::vector<double> node_execution_time_multipliers;
     std::optional<Distribution> same_node_one_way_latency;
     std::optional<Distribution> cross_node_one_way_latency;
-    double unplaced_cross_node_probability{};
+    double cross_node_probability{};
 };
 
 struct Request {
@@ -155,7 +152,6 @@ struct Request {
 struct Visit {
     Request* request{};
     int service{-1};
-    int node{-1};
     int replica{-1};
     Visit* parent{};
     std::size_t ownership_index{};
@@ -994,7 +990,6 @@ class Kernel {
         visits_[ownership_index] = std::make_unique<Visit>(Visit{
             request,
             service,
-            choose_node(service, replica),
             replica,
             parent,
             ownership_index,
@@ -1041,40 +1036,10 @@ class Kernel {
         return choose(random_);
     }
 
-    int choose_node(int service, int replica) {
-        if (workload_.service_replica_counts_by_node.empty()) return -1;
-        const auto& counts = workload_.service_replica_counts_by_node[service];
-        if (replica >= 0) {
-            int offset = replica;
-            for (std::size_t node = 0; node < counts.size(); ++node) {
-                if (offset < counts[node]) return static_cast<int>(node);
-                offset -= counts[node];
-            }
-            throw std::runtime_error("could not map service replica to a node");
-        }
-        int total = 0;
-        for (int count : counts) total += count;
-        if (total <= 0) {
-            throw std::runtime_error("placed service has no replicas");
-        }
-        std::uniform_int_distribution<int> choose(0, total - 1);
-        int draw = choose(random_);
-        for (std::size_t node = 0; node < counts.size(); ++node) {
-            if (draw < counts[node]) return static_cast<int>(node);
-            draw -= counts[node];
-        }
-        throw std::runtime_error("could not select a placed service replica");
-    }
-
-    double network_delay(int source_node, int destination_node) {
-        if (source_node >= 0 && destination_node >= 0) {
-            return workload_.node_communication_latencies[
-                source_node
-            ][destination_node];
-        }
+    double network_delay() {
         if (!workload_.same_node_one_way_latency.has_value()) return 0.0;
         std::bernoulli_distribution cross_node(
-            workload_.unplaced_cross_node_probability
+            workload_.cross_node_probability
         );
         const bool cross = cross_node(random_);
         return sample(
@@ -1095,15 +1060,8 @@ class Kernel {
     }
 
     double sample_service_time(Visit* visit) {
-        double node_multiplier = 1.0;
-        if (visit->node >= 0) {
-            node_multiplier = workload_.node_execution_time_multipliers[
-                visit->node
-            ];
-        }
         return sample(service_time(visit->request, visit->service))
-            * input_service_time_multipliers_[visit->service]
-            * node_multiplier;
+            * input_service_time_multipliers_[visit->service];
     }
 
     std::optional<double> sample_blocking_time(Visit* visit) {
@@ -1389,15 +1347,8 @@ class Kernel {
             now
         );
         ++parent->pending_children;
-        const double outbound_delay = network_delay(
-            parent->node,
-            child_visit->node
-        );
-        child_visit->return_network_delay = (
-            parent->node < 0 || child_visit->node < 0
-                ? outbound_delay
-                : network_delay(child_visit->node, parent->node)
-        );
+        const double outbound_delay = network_delay();
+        child_visit->return_network_delay = outbound_delay;
         const double arrival_time = now + outbound_delay;
         child_visit->arrival_time = arrival_time;
         schedule(
@@ -1533,10 +1484,7 @@ class Kernel {
         const int target = choose_route(request, service);
         if (target >= 0) {
             Visit* next = create_visit(request, target, nullptr, now);
-            const double arrival_time = now + network_delay(
-                visit->node,
-                next->node
-            );
+            const double arrival_time = now + network_delay();
             next->arrival_time = arrival_time;
             schedule(
                 arrival_time,
@@ -2489,14 +2437,14 @@ Workload parse_workload(json_t* raw) {
             required(raw_communication, "cross_node_one_way"),
             false
         );
-        workload.unplaced_cross_node_probability = json_number(
+        workload.cross_node_probability = json_number(
             raw_communication,
-            "unplaced_cross_node_probability"
+            "cross_node_probability"
         );
-        if (workload.unplaced_cross_node_probability < 0.0
-            || workload.unplaced_cross_node_probability > 1.0) {
+        if (workload.cross_node_probability < 0.0
+            || workload.cross_node_probability > 1.0) {
             throw std::runtime_error(
-                "unplaced_cross_node_probability must lie in [0, 1]"
+                "cross_node_probability must lie in [0, 1]"
             );
         }
     }
@@ -2582,132 +2530,6 @@ Workload parse_workload(json_t* raw) {
         }
     }
 
-    json_t* raw_placement = json_object_get(raw, "placement_model");
-    if (raw_placement != nullptr) {
-        if (!json_is_object(raw_placement)) {
-            throw std::runtime_error("placement_model must be an object");
-        }
-        json_t* raw_node_names = required(raw_placement, "node_names");
-        const std::size_t node_count = json_array_size(raw_node_names);
-        if (!json_is_array(raw_node_names) || node_count == 0) {
-            throw std::runtime_error("placement_model needs at least one node");
-        }
-        std::size_t node_index;
-        json_t* raw_node_name;
-        json_array_foreach(raw_node_names, node_index, raw_node_name) {
-            if (!json_is_string(raw_node_name)
-                || std::string(json_string_value(raw_node_name)).empty()) {
-                throw std::runtime_error("placement node names must be nonempty strings");
-            }
-        }
-
-        json_t* raw_counts = required(raw_placement, "service_replica_counts");
-        if (!json_is_array(raw_counts)
-            || json_array_size(raw_counts) != workload.services.size()) {
-            throw std::runtime_error(
-                "service_replica_counts must have one row per service"
-            );
-        }
-        std::size_t service_index;
-        json_t* raw_count_row;
-        json_array_foreach(raw_counts, service_index, raw_count_row) {
-            if (!json_is_array(raw_count_row)
-                || json_array_size(raw_count_row) != node_count) {
-                throw std::runtime_error(
-                    "service replica count row has the wrong node count"
-                );
-            }
-            std::vector<int> count_row;
-            int total = 0;
-            json_t* raw_count;
-            json_array_foreach(raw_count_row, node_index, raw_count) {
-                if (!json_is_integer(raw_count)
-                    || json_integer_value(raw_count) < 0
-                    || json_integer_value(raw_count) > 1'000'000) {
-                    throw std::runtime_error(
-                        "placed replica counts must be non-negative integers"
-                    );
-                }
-                const int count = static_cast<int>(json_integer_value(raw_count));
-                count_row.push_back(count);
-                total += count;
-            }
-            if (total != workload.services[service_index].replicas) {
-                throw std::runtime_error(
-                    "placed replica total does not match service replicas"
-                );
-            }
-            workload.service_replica_counts_by_node.push_back(
-                std::move(count_row)
-            );
-        }
-
-        json_t* raw_latencies = required(
-            raw_placement,
-            "communication_latency_seconds"
-        );
-        if (!json_is_array(raw_latencies)
-            || json_array_size(raw_latencies) != node_count) {
-            throw std::runtime_error(
-                "communication latency matrix has the wrong row count"
-            );
-        }
-        json_t* raw_latency_row;
-        json_array_foreach(raw_latencies, node_index, raw_latency_row) {
-            if (!json_is_array(raw_latency_row)
-                || json_array_size(raw_latency_row) != node_count) {
-                throw std::runtime_error(
-                    "communication latency row has the wrong length"
-                );
-            }
-            std::vector<double> latency_row;
-            std::size_t destination_index;
-            json_t* raw_latency;
-            json_array_foreach(
-                raw_latency_row,
-                destination_index,
-                raw_latency
-            ) {
-                if (!json_is_number(raw_latency)) {
-                    throw std::runtime_error("node latency must be numeric");
-                }
-                const double latency = json_number_value(raw_latency);
-                if (!std::isfinite(latency) || latency < 0.0) {
-                    throw std::runtime_error(
-                        "node latency must be finite and non-negative"
-                    );
-                }
-                latency_row.push_back(latency);
-            }
-            workload.node_communication_latencies.push_back(
-                std::move(latency_row)
-            );
-        }
-
-        json_t* raw_multipliers = required(
-            raw_placement,
-            "execution_time_multipliers"
-        );
-        if (!json_is_array(raw_multipliers)
-            || json_array_size(raw_multipliers) != node_count) {
-            throw std::runtime_error(
-                "execution_time_multipliers has the wrong node count"
-            );
-        }
-        json_t* raw_multiplier;
-        json_array_foreach(raw_multipliers, node_index, raw_multiplier) {
-            if (!json_is_number(raw_multiplier)) {
-                throw std::runtime_error("node execution multiplier must be numeric");
-            }
-            const double multiplier = json_number_value(raw_multiplier);
-            if (!std::isfinite(multiplier) || multiplier <= 0.0) {
-                throw std::runtime_error(
-                    "node execution multiplier must be finite and positive"
-                );
-            }
-            workload.node_execution_time_multipliers.push_back(multiplier);
-        }
-    }
     return workload;
 }
 
@@ -3213,11 +3035,6 @@ json_t* run_measurement_replications(json_t* request, const Workload& workload) 
             item,
             "input_service_time_multipliers",
             json_doubles(output.input_service_time_multipliers)
-        );
-        json_object_set_new(
-            item,
-            "placement_model_applied",
-            json_boolean(!workload.service_replica_counts_by_node.empty())
         );
         json_object_set_new(item, "processed_event_count", json_integer(output.summary.processed_event_count));
         json_object_set_new(item, "external_arrival_count", json_integer(output.summary.external_arrival_count));

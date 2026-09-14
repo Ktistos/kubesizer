@@ -37,7 +37,3 @@ class GraphSearchProblem(OptimizationProblem):
     @abstractmethod
     def step_cost(self, current, neighbor):
         """Return the actual incremental cost of a state transition."""
-
-    @abstractmethod
-    def heuristic(self, state):
-        """Return a lower bound on remaining path cost."""

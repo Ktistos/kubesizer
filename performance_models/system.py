@@ -122,7 +122,6 @@ class System:
         self.__class_specific_service_times = False
         self.__joint_input_uncertainty = None
         self.__communication_latency_spec = None
-        self.__simulation_placement_model = None
         if structured:
             parsed = parse_workload_spec(
                 workload,
@@ -1258,7 +1257,7 @@ class System:
         }
 
     def get_communication_latency_distribution_spec(self):
-        """Return same/cross-node one-way evidence used before placement."""
+        """Return the measured same/cross-node one-way latency evidence."""
         return self.__communication_latency_spec
 
     def get_request_class_end_to_end_timeouts(self):
@@ -1417,112 +1416,6 @@ class System:
     def get_joint_input_uncertainty(self):
         """Return aligned input-window uncertainty sampled once per replication."""
         return self.__joint_input_uncertainty
-
-    def configure_simulation_placement(
-        self,
-        placement,
-        communication_latency_seconds,
-        execution_time_multipliers=None,
-    ):
-        """Attach a fixed placement to subsequent native simulations.
-
-        Communication latency is directional and interpreted as one-way delay.
-        Synchronous calls pay both the request and response directions.  Node
-        execution multipliers are optional measured relative slowdowns; a
-        missing multiplier means one, not an inferred contention penalty.
-        """
-        if not isinstance(placement, dict) or not placement:
-            raise ValueError("placement must be a nonempty node mapping.")
-        node_names = tuple(placement)
-        service_names = tuple(self.__services)
-        if any(not isinstance(name, str) or not name for name in node_names):
-            raise ValueError("placement node names must be nonempty strings.")
-        normalized_placement = {}
-        totals = {name: 0 for name in service_names}
-        for node_name in node_names:
-            raw_counts = placement[node_name]
-            if not isinstance(raw_counts, dict):
-                raise ValueError("each placement node must map services to counts.")
-            unknown = set(raw_counts) - set(service_names)
-            if unknown:
-                raise ValueError(f"placement contains unknown services: {unknown}.")
-            counts = {}
-            for service_name in service_names:
-                value = raw_counts.get(service_name, 0)
-                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                    raise ValueError("placement replica counts must be non-negative integers.")
-                counts[service_name] = value
-                totals[service_name] += value
-            normalized_placement[node_name] = counts
-        expected = {
-            name: service.get_replicas()
-            for name, service in self.__services.items()
-        }
-        if totals != expected:
-            raise ValueError(
-                "placement replica totals do not match the configured system replicas."
-            )
-        if not isinstance(communication_latency_seconds, dict):
-            raise ValueError("communication_latency_seconds must be a node mapping.")
-        latency_matrix = {}
-        for source in node_names:
-            raw_row = communication_latency_seconds.get(source)
-            if not isinstance(raw_row, dict):
-                raise ValueError(f"missing communication latency row for {source!r}.")
-            row = {}
-            for destination in node_names:
-                raw_value = raw_row.get(destination)
-                if raw_value is None and source == destination:
-                    raw_value = 0.0
-                if raw_value is None:
-                    raise ValueError(
-                        f"missing communication latency {source!r}->{destination!r}."
-                    )
-                value = float(raw_value)
-                if not math.isfinite(value) or value < 0.0:
-                    raise ValueError("communication latencies must be finite and non-negative.")
-                row[destination] = value
-            latency_matrix[source] = row
-        raw_multipliers = execution_time_multipliers or {}
-        unknown_multiplier_nodes = set(raw_multipliers) - set(node_names)
-        if unknown_multiplier_nodes:
-            raise ValueError(
-                "execution multipliers contain nodes outside the placement."
-            )
-        multipliers = {}
-        for node_name in node_names:
-            value = float(raw_multipliers.get(node_name, 1.0))
-            if not math.isfinite(value) or value <= 0.0:
-                raise ValueError("node execution multipliers must be finite and positive.")
-            multipliers[node_name] = value
-        self.__simulation_placement_model = {
-            "node_names": node_names,
-            "placement": normalized_placement,
-            "communication_latency_seconds": latency_matrix,
-            "execution_time_multipliers": multipliers,
-        }
-
-    def clear_simulation_placement(self):
-        self.__simulation_placement_model = None
-
-    def get_simulation_placement_model(self):
-        if self.__simulation_placement_model is None:
-            return None
-        model = self.__simulation_placement_model
-        return {
-            "node_names": tuple(model["node_names"]),
-            "placement": {
-                node: dict(counts)
-                for node, counts in model["placement"].items()
-            },
-            "communication_latency_seconds": {
-                node: dict(row)
-                for node, row in model["communication_latency_seconds"].items()
-            },
-            "execution_time_multipliers": dict(
-                model["execution_time_multipliers"]
-            ),
-        }
 
     def get_effective_service_capacities(self):
         """Return total processing slots in service-ID order."""
@@ -1685,36 +1578,10 @@ class System:
         }
 
     def __mean_one_way_latency(self, source_name, target_name):
-        placement = self.__simulation_placement_model
-        if placement is not None:
-            source_counts = {
-                node: placement["placement"][node][source_name]
-                for node in placement["node_names"]
-            }
-            target_counts = {
-                node: placement["placement"][node][target_name]
-                for node in placement["node_names"]
-            }
-            source_total = sum(source_counts.values())
-            target_total = sum(target_counts.values())
-            if source_total <= 0 or target_total <= 0:
-                raise ValueError("Placed services must have at least one replica.")
-            expected = 0.0
-            for source_node, source_count in source_counts.items():
-                for target_node, target_count in target_counts.items():
-                    probability = (
-                        source_count
-                        * target_count
-                        / (source_total * target_total)
-                    )
-                    expected += probability * placement[
-                        "communication_latency_seconds"
-                    ][source_node][target_node]
-            return expected
         specification = self.__communication_latency_spec
         if specification is None:
             return 0.0
-        probability = specification.unplaced_cross_node_probability
+        probability = specification.cross_node_probability
         return (
             (1.0 - probability) * specification.same_node_one_way.mean
             + probability * specification.cross_node_one_way.mean

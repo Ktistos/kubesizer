@@ -7,12 +7,11 @@ class OptimizationResult:
     """Algorithm-independent optimization result.
 
     The meaning of ``cost`` is defined by the selected problem and algorithm.
-    Its meaning is method-specific; use objective_value when a richer exact or
-    heuristic result exposes it.
+    Its meaning is method-specific; exact replica search also exposes the
+    complete configuration objective as ``objective_value``.
 
-    ``path`` is algorithm-specific. Placement methods normally return only
-    the chosen configuration because they do not construct a replica-sizing
-    transition path.
+    ``path`` is algorithm-specific and records the replica-sizing transitions
+    when the selected optimizer exposes them.
     """
 
     configuration: Hashable

@@ -21,38 +21,44 @@ class ReplicaOptimizationResult(OptimizationResult):
 
     minimality_proven: bool
     unresolved_lower_cost_states: tuple
-    method: str
     objective_value: float
-    feasibility_status: FeasibilityStatus
-    termination_reason: TerminationReason
-    evaluation_count: int
-    unique_evaluation_count: int
     simulation_replications: int
     runtime_seconds: float
-    restart_count: int
-    random_seed: int | None
-    budget_exhausted: bool
-    deletion_local_certified: bool
-    relocation_local_certified: bool
-    swap_local_certified: bool
-    global_optimal: bool
     lower_bound: float | None
     absolute_bound_gap: float | None
     relative_bound_gap: float | None
-    trace: tuple
-    selection_reason: str | None
 
     @property
     def optimality_proven(self):
-        return self.global_optimal
+        return self.minimality_proven
 
     @property
-    def solution_mode(self):
-        return "EXACT"
+    def global_optimal(self):
+        return self.minimality_proven
 
     @property
-    def locally_minimal(self):
-        return self.deletion_local_certified
+    def method(self):
+        return "UNIFORM_COST_EXACT"
+
+    @property
+    def feasibility_status(self):
+        return FeasibilityStatus.FEASIBLE
+
+    @property
+    def termination_reason(self):
+        return (
+            TerminationReason.LOWER_BOUND_MATCHED
+            if self.minimality_proven
+            else TerminationReason.STATISTICALLY_UNRESOLVED
+        )
+
+    @property
+    def evaluation_count(self):
+        return self.explored_states
+
+    @property
+    def unique_evaluation_count(self):
+        return self.explored_states
 
 
 class UniformCostReplicaOptimizer(Optimizer):
@@ -66,8 +72,7 @@ class UniformCostReplicaOptimizer(Optimizer):
 
     _UNRESOLVED_CLASSIFICATIONS = {"CONTINUE_SAMPLING", "INCONCLUSIVE"}
 
-    def __init__(self, *, selection_reason=None, clock=None):
-        self.selection_reason = selection_reason
+    def __init__(self, *, clock=None):
         self._clock = clock or time.perf_counter
 
     def optimize(self, problem: GraphSearchProblem) -> ReplicaOptimizationResult:
@@ -183,30 +188,12 @@ class UniformCostReplicaOptimizer(Optimizer):
             path=path,
             minimality_proven=proven,
             unresolved_lower_cost_states=unresolved_lower,
-            method="UNIFORM_COST_EXACT",
             objective_value=objective,
-            feasibility_status=FeasibilityStatus.FEASIBLE,
-            termination_reason=(
-                TerminationReason.LOWER_BOUND_MATCHED
-                if proven
-                else TerminationReason.STATISTICALLY_UNRESOLVED
-            ),
-            evaluation_count=explored_states,
-            unique_evaluation_count=explored_states,
             simulation_replications=simulation_replications,
             runtime_seconds=max(0.0, self._clock() - started),
-            restart_count=1,
-            random_seed=None,
-            budget_exhausted=False,
-            deletion_local_certified=proven,
-            relocation_local_certified=False,
-            swap_local_certified=False,
-            global_optimal=proven,
             lower_bound=(objective if proven else lower_bound),
             absolute_bound_gap=absolute_gap,
             relative_bound_gap=relative_gap,
-            trace=(),
-            selection_reason=self.selection_reason,
         )
 
     @staticmethod

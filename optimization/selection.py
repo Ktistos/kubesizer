@@ -1,16 +1,5 @@
 import math
 
-from .branch_and_bound_node_placement import BranchAndBoundNodePlacementOptimizer
-from .mode import (
-    DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT,
-    DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
-    OptimizationMode,
-    ScalablePlacementSearchOptions,
-    ScalableReplicaSearchOptions,
-    normalize_optimization_mode,
-)
-from .scalable_node_placement import ScalableNodePlacementOptimizer
-from .scalable_replica import ScalableReplicaOptimizer
 from .uniform_cost import UniformCostReplicaOptimizer
 
 
@@ -24,70 +13,12 @@ def replica_configuration_count(calibration_profile):
     )
 
 
-def optimization_mode_decision(mode, search_space_size, exact_limit):
-    mode = normalize_optimization_mode(mode)
-    if (
-        isinstance(search_space_size, bool)
-        or not isinstance(search_space_size, int)
-        or search_space_size <= 0
-    ):
-        raise ValueError("search_space_size must be a positive integer.")
-    if (
-        isinstance(exact_limit, bool)
-        or not isinstance(exact_limit, int)
-        or exact_limit <= 0
-    ):
-        raise ValueError("exact_limit must be a positive integer.")
-
-    if mode == OptimizationMode.AUTO:
-        selected = (
-            OptimizationMode.EXACT
-            if search_space_size <= exact_limit
-            else OptimizationMode.SCALABLE
-        )
-        comparator = "<=" if selected == OptimizationMode.EXACT else ">"
-        reason = (
-            f"AUTO selected {selected.value}: estimated search space "
-            f"{search_space_size:,} {comparator} exact threshold "
-            f"{exact_limit:,}."
-        )
-        return selected, reason
-    return mode, f"Caller explicitly selected {mode.value} mode."
-
-
-def resolve_optimization_mode(mode, search_space_size, exact_limit):
-    return optimization_mode_decision(mode, search_space_size, exact_limit)[0]
-
-
-def _scalable_replica_optimizer(options, selection_reason):
-    return ScalableReplicaOptimizer(
-        maximum_configuration_evaluations=options.maximum_configuration_evaluations,
-        maximum_total_evaluator_calls=options.maximum_total_evaluator_calls,
-        maximum_simulation_replications=options.maximum_simulation_replications,
-        time_budget_seconds=options.time_budget_seconds,
-        candidate_width=options.candidate_width,
-        restricted_candidate_fraction=options.restricted_candidate_fraction,
-        maximum_restarts=options.maximum_restarts,
-        maximum_no_improvement=options.maximum_no_improvement,
-        maximum_vns_neighborhood=options.maximum_vns_neighborhood,
-        vns_attempts_per_neighborhood=options.vns_attempts_per_neighborhood,
-        random_seed=options.random_seed,
-        removal_order=options.removal_order,
-        archive_equal_cost=options.archive_equal_cost,
-        collect_trace=options.collect_trace,
-        selection_reason=selection_reason,
-    )
-
-
 def optimize_replica_configuration(
     problem,
     *,
-    mode=OptimizationMode.AUTO,
-    exact_configuration_limit=DEFAULT_EXACT_REPLICA_CONFIGURATION_LIMIT,
-    scalable_options=None,
     progress_callback=None,
 ):
-    """Select exact uniform-cost or bounded multi-start/VNS replica search."""
+    """Run exact uniform-cost replica search over the configured bounds."""
     if progress_callback is not None and not callable(progress_callback):
         raise TypeError("progress_callback must be callable or None.")
     count_method = getattr(problem, "configuration_count", None)
@@ -104,122 +35,28 @@ def optimize_replica_configuration(
             for low, maximum in zip(minimum, problem.maximum_configuration())
         )
     else:
-        raise TypeError(
-            "AUTO replica selection requires a configuration-count or bounds API."
-        )
-    selected, reason = optimization_mode_decision(
-        mode, search_space_size, exact_configuration_limit
-    )
-    options = scalable_options or ScalableReplicaSearchOptions()
-    evaluation_limit = (
-        search_space_size
-        if selected == OptimizationMode.EXACT
-        else min(search_space_size, options.maximum_configuration_evaluations)
-    )
+        raise TypeError("Exact replica search requires a configuration-count or bounds API.")
     if progress_callback is not None:
         progress_callback(
             "replica_optimization_started",
             {
-                "selected_mode": selected.value,
                 "completed_configurations": 0,
-                "total_configurations": evaluation_limit,
+                "total_configurations": search_space_size,
                 "search_space_configurations": search_space_size,
             },
         )
-    if selected == OptimizationMode.EXACT:
-        optimizer = UniformCostReplicaOptimizer()
-        optimizer.selection_reason = reason
-        result = optimizer.optimize(problem)
-    else:
-        result = _scalable_replica_optimizer(options, reason).optimize(problem)
+    result = UniformCostReplicaOptimizer().optimize(problem)
     if progress_callback is not None:
         progress_callback(
             "replica_optimization_completed",
             {
-                "selected_mode": selected.value,
                 "completed_configurations": getattr(
                     result,
                     "unique_evaluation_count",
                     getattr(result, "explored_states", 0),
                 ),
-                "total_configurations": evaluation_limit,
+                "total_configurations": search_space_size,
                 "search_space_configurations": search_space_size,
-            },
-        )
-    return result
-
-
-def optimize_node_placement(
-    problem,
-    *,
-    mode=OptimizationMode.AUTO,
-    exact_configuration_limit=DEFAULT_EXACT_PLACEMENT_CONFIGURATION_LIMIT,
-    scalable_options=None,
-    progress_callback=None,
-):
-    """Select exact branch-and-bound or bounded beam/VNS/LNS placement."""
-    if progress_callback is not None and not callable(progress_callback):
-        raise TypeError("progress_callback must be callable or None.")
-    configuration_count = problem.configuration_count()
-    selected, reason = optimization_mode_decision(
-        mode,
-        configuration_count,
-        exact_configuration_limit,
-    )
-    options = scalable_options or ScalablePlacementSearchOptions()
-    if progress_callback is not None:
-        details = {
-            "selected_mode": selected.value,
-            "completed_configurations": 0,
-            "total_configurations": configuration_count,
-        }
-        if selected == OptimizationMode.SCALABLE:
-            details = {
-                "selected_mode": selected.value,
-                "completed_search_states": 0,
-                "total_search_states": (
-                    options.maximum_partial_states
-                    + options.maximum_complete_evaluations
-                ),
-                "search_space_configurations": configuration_count,
-            }
-        progress_callback("placement_search_started", details)
-    if selected == OptimizationMode.EXACT:
-        optimizer = BranchAndBoundNodePlacementOptimizer(
-            progress_callback=progress_callback,
-        )
-        optimizer.selection_reason = reason
-        result = optimizer.optimize(problem)
-    else:
-        result = ScalableNodePlacementOptimizer(
-            beam_width=options.beam_width,
-            diversity_per_signature=options.diversity_per_signature,
-            candidate_distributions_per_service=(
-                options.candidate_distributions_per_service
-            ),
-            maximum_partial_states=options.maximum_partial_states,
-            maximum_complete_evaluations=options.maximum_complete_evaluations,
-            maximum_total_evaluator_calls=options.maximum_total_evaluator_calls,
-            maximum_simulation_replications=(options.maximum_simulation_replications),
-            maximum_local_iterations=options.maximum_local_iterations,
-            time_budget_seconds=options.time_budget_seconds,
-            maximum_restarts=options.maximum_restarts,
-            maximum_no_improvement=options.maximum_no_improvement,
-            random_seed=options.random_seed,
-            lns_neighborhood_sizes=options.lns_neighborhood_sizes,
-            lns_subset_attempts=options.lns_subset_attempts,
-            lns_subproblem_budget=options.lns_subproblem_budget,
-            collect_trace=options.collect_trace,
-            selection_reason=reason,
-            progress_callback=progress_callback,
-        ).optimize(problem)
-    if progress_callback is not None:
-        progress_callback(
-            "placement_search_completed",
-            {
-                "selected_mode": selected.value,
-                "completed_configurations": getattr(result, "complete_states", 0),
-                "total_configurations": configuration_count,
             },
         )
     return result

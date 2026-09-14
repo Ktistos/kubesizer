@@ -98,7 +98,7 @@ def test_validated_recommendation_exposes_margin_and_prediction_risk():
     )
     result = statistical_workflow.ValidatedReplicaRecommendation(
         service_replicas=(("api", 2),),
-        status="VALIDATED_FEASIBLE_HEURISTIC",
+        status="VALIDATED_FEASIBLE_NOT_PROVEN",
         optimization=SimpleNamespace(unresolved_lower_cost_states=((1,),)),
         final_validation=SimpleNamespace(
             request_class_intervals=(("browse", interval),)
@@ -108,13 +108,13 @@ def test_validated_recommendation_exposes_margin_and_prediction_risk():
             cases=(SimpleNamespace(diagnostics=(diagnostic,)),),
         ),
         bounded_model_optimal=False,
-        guarantee="validated heuristic",
+        guarantee="validated but not proven",
     )
 
     summary = result.evidence_summary
     request = summary.request_classes[0]
 
-    assert summary.status == "VALIDATED_HEURISTIC"
+    assert summary.status == "VALIDATED_NOT_PROVEN"
     assert request.simultaneous_slo_margin_seconds == pytest.approx(0.005)
     assert request.maximum_absolute_relative_predictive_error == pytest.approx(0.08)
     assert any("less than 5%" in warning for warning in summary.warnings)

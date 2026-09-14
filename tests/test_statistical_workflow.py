@@ -113,37 +113,6 @@ def test_public_calibrate_runs_warmup_then_measurement_and_freezes_profile(monke
     )
 
 
-def test_fixed_placement_calibration_uses_only_the_selected_configuration(
-    monkeypatch,
-):
-    system = make_system()
-    system.configure_system_replicas((2,))
-    system.configure_simulation_placement(
-        placement={"node-a": {"api": 2}},
-        communication_latency_seconds={"node-a": {"node-a": 0.0}},
-    )
-    expected = object()
-    observed = {}
-
-    def calibrate_one(selected_system, **kwargs):
-        observed.update(kwargs)
-        assert selected_system is system
-        return expected
-
-    monkeypatch.setattr(statistical_workflow, "_calibrate_one", calibrate_one)
-
-    result = statistical_workflow.calibrate_fixed_placement(
-        system,
-        (2,),
-        request_class_slos={"checkout": 1.0},
-        options=options(),
-    )
-
-    assert result is expected
-    assert observed["minimum_configuration"] == (2,)
-    assert observed["maximum_replicas"] == (2,)
-
-
 def test_global_warmup_bucket_budget_scales_down_for_large_topologies():
     large_system = SimpleNamespace(
         get_services=lambda: {str(index): object() for index in range(20)}
@@ -278,6 +247,9 @@ def test_public_optimize_returns_all_run_classifications(monkeypatch):
             self.configuration_evaluations = evaluations
 
     class FakeOptimizer:
+        def __init__(self, **_kwargs):
+            pass
+
         def optimize(self, problem):
             return raw_result
 
@@ -291,8 +263,14 @@ def test_public_optimize_returns_all_run_classifications(monkeypatch):
         "CalibratedReplicaSizingProblem",
         FakeProblem,
     )
+    monkeypatch.setattr(
+        statistical_workflow,
+        "UniformCostReplicaOptimizer",
+        FakeOptimizer,
+    )
     profile = SimpleNamespace(
         slos={"checkout": 1.0},
+        minimum_replica_configuration=(1,),
         maximum_replica_configuration=(2,),
         profile_fingerprint="profile",
     )
@@ -300,7 +278,6 @@ def test_public_optimize_returns_all_run_classifications(monkeypatch):
     result = statistical_workflow.optimize_with_calibrated_simulation(
         object(),
         profile,
-        optimizer=FakeOptimizer(),
     )
 
     assert result.configuration == (2,)

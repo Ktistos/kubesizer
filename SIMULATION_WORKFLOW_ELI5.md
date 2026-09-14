@@ -35,8 +35,6 @@ Try different replica configurations
 Choose a statistically feasible configuration
             ↓
 Test the chosen configuration again with fresh randomness
-            ↓
-Only then continue to node placement
 ```
 
 There are three separate stages:
@@ -423,7 +421,8 @@ The final result passes only when:
 every fresh request-class upper bound <= its SLO
 ```
 
-If final validation fails, the program does not report the configuration as SLO-feasible, and node placement does not start.
+If final validation fails, the program does not report the configuration as
+SLO-feasible.
 
 ---
 
@@ -431,13 +430,12 @@ If final validation fails, the program does not report the configuration as SLO-
 
 The command performs the following steps:
 
-1. Reads `workload.yaml` and `resources.yaml`.
+1. Reads `workload.yaml` and optional portable `measurements.yaml` evidence.
 2. Builds the queueing network.
 3. For simulation evaluation, calibrates an in-memory profile.
-4. Runs replica optimization using the selected evaluation and search modes.
+4. Runs exact replica optimization using the selected evaluation model.
 5. Runs fresh final validation after simulation-based optimization.
-6. Runs node placement when resources are supplied and placement is not skipped.
-7. Prints only the service recommendations to standard output.
+6. Prints the per-service replica recommendations to standard output.
 
 The command does not load a previous calibration profile and does not create
 calibration files. It writes the final result only when `--out` is supplied.

@@ -1013,55 +1013,9 @@ def experiment_fingerprints(system):
             "cross_node_one_way": _distribution_fingerprint(
                 communication_latency.cross_node_one_way
             ),
-            "unplaced_cross_node_probability": (
-                communication_latency.unplaced_cross_node_probability
+            "cross_node_probability": (
+                communication_latency.cross_node_probability
             ),
-        }
-    placement_model = getattr(
-        system,
-        "get_simulation_placement_model",
-        lambda: None,
-    )()
-    if placement_model is not None:
-        node_names = tuple(sorted(placement_model["placement"]))
-        topology["simulation_placement_model"] = {
-            "nodes": [
-                {
-                    "name": node_name,
-                    "service_replica_counts": [
-                        {
-                            "service": service.get_name(),
-                            "replicas": int(
-                                placement_model["placement"][node_name][
-                                    service.get_name()
-                                ]
-                            ),
-                        }
-                        for service in services
-                    ],
-                    "execution_time_multiplier": float(
-                        placement_model["execution_time_multipliers"][node_name]
-                    ),
-                }
-                for node_name in node_names
-            ],
-            "communication_latency_seconds": [
-                {
-                    "source": source,
-                    "destinations": [
-                        {
-                            "destination": destination,
-                            "seconds": float(
-                                placement_model["communication_latency_seconds"][
-                                    source
-                                ][destination]
-                            ),
-                        }
-                        for destination in node_names
-                    ],
-                }
-                for source in node_names
-            ],
         }
     return _fingerprint(topology), _fingerprint(workload)
 

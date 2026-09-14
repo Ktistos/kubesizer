@@ -5,7 +5,6 @@ This guide describes the **portable evidence workflow**, where a DevOps engineer
 ```text
 workload.yaml     What traffic means and what must be achieved
 measurements.yaml Where the observed workload and capacity data are stored
-resources.yaml    Optional node communication data for placement
 ```
 
 The command is:
@@ -14,9 +13,7 @@ The command is:
 kubesizer \
   --workload workload.yaml \
   --measurements measurements.yaml \
-  --replica-evaluation simulation \
-  --replica-search auto \
-  --skip-placement
+  --replica-evaluation simulation
 ```
 
 ## Example `workload.yaml`
@@ -134,7 +131,7 @@ service_blocking_times:
     mean: 0.006
     scv: 1.5
 
-# Optional pre-placement communication model. Values are one-way seconds.
+# Optional communication model. Values are one-way seconds.
 communication_latency:
   same_node_one_way:
     distribution: deterministic
@@ -143,7 +140,7 @@ communication_latency:
     distribution: lognormal
     mean: 0.0015
     scv: 0.4
-  unplaced_cross_node_probability: 0.60
+  cross_node_probability: 0.60
 ```
 
 ## What the workload fields mean
@@ -154,7 +151,7 @@ communication_latency:
 | `services.<name>.namespace` | Kubernetes namespace used to validate service/pod attribution. |
 | `services.<name>.cpu_request_cores` | CPU reservation used to convert measured CPU-seconds/request into an elapsed execution-time estimate. |
 | `services.<name>.cpu_limit_cores` | Optional reported CPU ceiling; it is not treated as guaranteed capacity. |
-| `services.<name>.memory_*` | Optional retained measurement context; not currently a placement-packing proof. |
+| `services.<name>.memory_*` | Optional retained measurement context; not used to claim Kubernetes schedulability. |
 | `services.<name>.concurrency_limit_per_replica` | Optional measured/configured finite worker, thread, connection, or admission pool. |
 | `request_classes` | Logical operations whose latencies and SLOs are evaluated separately. |
 | `concurrency_weight` | Expected share of external requests belonging to the class. All class weights must sum to `1.0`. It is checked against the measured class mix. |
@@ -167,7 +164,7 @@ communication_latency:
 | `load_forecast` | Multipliers for future traffic. Kubesizer plans for the largest declared value. |
 | `sizing_policy.maximum_capacity_utilization` | Maximum fraction of confidence-bounded healthy request capacity that the stability floor may use. It must be greater than zero and less than one; the default is `0.85`. |
 | `service_blocking_times` | Non-CPU wait that still occupies a service concurrency slot. This requires the rich simulation semantics. |
-| `communication_latency` | Same-node and cross-node network-delay distributions before a concrete placement is selected. |
+| `communication_latency` | Same-node and cross-node network-delay distributions plus the measured or estimated cross-node call probability. |
 
 ### Where are the arrival rates?
 
@@ -316,14 +313,9 @@ Keeping these facts in the workload fingerprint makes it possible to detect that
 
 `workload.services` describes one replica's measured execution context. It does not provide the recommended replica count. The replica count is the output of the stability and SLO optimization.
 
-It also does not replace `resources.yaml`:
-
-| File | Scope |
-|---|---|
-| `workload.yaml` | Services, request topology, SLOs, sizing policy, and measurement context |
-| `resources.yaml` | Optional node identities, node-to-node latency, and execution multipliers for placement |
-
-The current CLI node-placement flow does not enforce CPU/memory packing because it does not yet pass per-service placement demands into the placement problem. Therefore deployment CPU/memory values currently characterize service execution; they are not a Kubernetes scheduling proof.
+Deployment CPU and memory values characterize the execution environment in
+which the evidence was collected. They do not drive node assignment, resource
+packing, or a Kubernetes scheduling proof.
 
 ## Minimum practical portable package
 
@@ -358,6 +350,8 @@ The easiest way to remember the files is:
 >
 > `measurements.yaml` points to the evidence observed for that workload.
 >
-> `resources.yaml` optionally describes nodes for placement.
->
 > Kubesizer produces the replica answer.
+
+Kubesizer does not require a node-resource file and does not produce a node
+assignment. Apply the resulting replica counts through the normal Kubernetes
+scheduler and deployment policies.

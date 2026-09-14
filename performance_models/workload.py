@@ -44,11 +44,11 @@ class JointInputUncertaintySpec:
 
 @dataclass(frozen=True)
 class CommunicationLatencySpec:
-    """Measured one-way service-call latency used before placement is known."""
+    """Measured one-way service-call latency for the modeled deployment."""
 
     same_node_one_way: DistributionSpec
     cross_node_one_way: DistributionSpec
-    unplaced_cross_node_probability: float
+    cross_node_probability: float
 
 
 @dataclass(frozen=True)
@@ -730,12 +730,12 @@ def _parse_communication_latency(value, label, *, base_path=None):
     expected = {
         "same_node_one_way",
         "cross_node_one_way",
-        "unplaced_cross_node_probability",
+        "cross_node_probability",
     }
     if not isinstance(value, Mapping) or set(value) != expected:
         raise ValueError(
             f"{label} must contain exactly same_node_one_way, "
-            "cross_node_one_way, and unplaced_cross_node_probability."
+            "cross_node_one_way, and cross_node_probability."
         )
     return CommunicationLatencySpec(
         same_node_one_way=parse_duration_distribution(
@@ -748,9 +748,9 @@ def _parse_communication_latency(value, label, *, base_path=None):
             f"{label}.cross_node_one_way",
             base_path=base_path,
         ),
-        unplaced_cross_node_probability=_finite_probability(
-            value["unplaced_cross_node_probability"],
-            f"{label}.unplaced_cross_node_probability",
+        cross_node_probability=_finite_probability(
+            value["cross_node_probability"],
+            f"{label}.cross_node_probability",
         ),
     )
 

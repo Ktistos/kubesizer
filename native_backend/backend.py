@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 12
+PROTOCOL_VERSION = 13
 SIMULATOR_SEMANTICS_VERSION = (
     "native-event-kernel-joint-input-blocks-burst-traces-concurrency-"
     "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-"
-    "ps-replica-queues-measured-latency-components-non-cpu-blocking-v13"
+    "ps-replica-queues-measured-latency-components-non-cpu-blocking-v14"
 )
 
 
@@ -64,7 +64,6 @@ class NativeMeasurementReplication:
     sampled_input_block_start: int | None = None
     input_arrival_rate_multipliers: dict[str, float] = field(default_factory=dict)
     input_service_time_multipliers: tuple[float, ...] = ()
-    placement_model_applied: bool = False
 
 
 def _finite_positive(value, label):
@@ -237,7 +236,6 @@ class CppSimulationBackend:
             },
         )()
         joint_input_uncertainty = system.get_joint_input_uncertainty()
-        placement_model = system.get_simulation_placement_model()
         for request_class in system.get_request_classes():
             routing = []
             for service in services:
@@ -401,36 +399,9 @@ class CppSimulationBackend:
                 "cross_node_one_way": _serialize_distribution(
                     communication_latency.cross_node_one_way
                 ),
-                "unplaced_cross_node_probability": (
-                    communication_latency.unplaced_cross_node_probability
+                "cross_node_probability": (
+                    communication_latency.cross_node_probability
                 ),
-            }
-        if placement_model is not None:
-            node_names = tuple(placement_model["node_names"])
-            result["placement_model"] = {
-                "node_names": list(node_names),
-                "service_replica_counts": [
-                    [
-                        placement_model["placement"][node_name][
-                            service.get_name()
-                        ]
-                        for node_name in node_names
-                    ]
-                    for service in services
-                ],
-                "communication_latency_seconds": [
-                    [
-                        placement_model["communication_latency_seconds"][source][
-                            destination
-                        ]
-                        for destination in node_names
-                    ]
-                    for source in node_names
-                ],
-                "execution_time_multipliers": [
-                    placement_model["execution_time_multipliers"][node_name]
-                    for node_name in node_names
-                ],
             }
         return result
 
@@ -815,9 +786,6 @@ class CppSimulationBackend:
                 input_arrival_multipliers = dict(
                     zip(system.get_request_classes(), input_arrival_multipliers_values)
                 )
-                placement_model_applied = item["placement_model_applied"]
-                if not isinstance(placement_model_applied, bool):
-                    raise ValueError("placement model diagnostic must be boolean.")
                 if (
                     active_requests < 0
                     or len(queue_lengths) != len(configuration)
@@ -860,7 +828,6 @@ class CppSimulationBackend:
                         sampled_input_block_start=raw_block_start,
                         input_arrival_rate_multipliers=input_arrival_multipliers,
                         input_service_time_multipliers=input_service_multipliers,
-                        placement_model_applied=placement_model_applied,
                     )
                 )
         except (KeyError, TypeError, ValueError) as error:
@@ -942,7 +909,6 @@ def slice_measurement_replication(replication, measurement_duration):
             replication.input_arrival_rate_multipliers
         ),
         input_service_time_multipliers=replication.input_service_time_multipliers,
-        placement_model_applied=replication.placement_model_applied,
     )
 
 

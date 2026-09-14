@@ -56,7 +56,6 @@ class SimulationUncertaintyDiagnostics:
         tuple[str, float, float, float], ...
     ] = ()
     model_form_assumptions: tuple[tuple[str, str], ...] = ()
-    placement_effects_applied: bool = False
 
 
 @dataclass(frozen=True)
@@ -261,10 +260,6 @@ class CalibratedConfigurationEvaluator:
             ),
             model_form_assumptions=tuple(
                 sorted(self.system.get_service_execution_models().items())
-            ),
-            placement_effects_applied=any(
-                getattr(replication, "placement_model_applied", False)
-                for replication in replications
             ),
         )
 

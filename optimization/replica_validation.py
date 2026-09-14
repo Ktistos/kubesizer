@@ -480,16 +480,6 @@ def validate_final_configuration(
                     for item in replications
                 ),
             ),
-            (
-                "placement_model_applied",
-                int(
-                    bool(replications)
-                    and all(
-                        getattr(item, "placement_model_applied", False)
-                        for item in replications
-                    )
-                ),
-            ),
         )
         return CalibratedFinalValidationResult(
             replica_configuration=configuration,

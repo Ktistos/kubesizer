@@ -53,7 +53,7 @@ def _call_workload(*, cross_probability=1.0):
                     "distribution": "deterministic",
                     "mean": 0.004,
                 },
-                "unplaced_cross_node_probability": cross_probability,
+                "cross_node_probability": cross_probability,
             },
         },
     }
@@ -134,7 +134,7 @@ def test_latency_component_and_network_evidence_change_workload_fingerprint():
     assert len({value[1] for value in fingerprints}) == 3
 
 
-def test_native_simulator_samples_components_and_unplaced_network_latency():
+def test_native_simulator_samples_components_and_network_latency_mixture():
     cross = System("cross", _call_workload(), QueueingNetworkType.OPEN)
     same_workload = _call_workload(cross_probability=0.0)
     same = System("same", same_workload, QueueingNetworkType.OPEN)
@@ -176,35 +176,7 @@ def test_synchronous_request_and_response_reuse_one_empirical_probe_path():
     assert network_round_trips == {0.002, 0.01}
 
 
-def test_attached_placement_matrix_overrides_unplaced_network_mixture():
-    system = System("placed", _call_workload(), QueueingNetworkType.OPEN)
-    system.configure_simulation_placement(
-        placement={
-            "node-a": {"api": 1, "db": 0},
-            "node-b": {"api": 0, "db": 1},
-        },
-        communication_latency_seconds={
-            "node-a": {"node-b": 0.02},
-            "node-b": {"node-a": 0.03},
-        },
-    )
-
-    result = system.simulate_measurement_replications(
-        warmup_duration=0.0,
-        measurement_duration=1.0,
-        seeds=(8002,),
-    )[0]
-
-    assert result.request_class_latencies["request"] == pytest.approx((0.28,))
-    assert system.get_request_class_mean_latencies()["request"] == pytest.approx(
-        system.solve().get_mean_latencies()[0]
-        + system.solve().get_mean_latencies()[1]
-        + 0.03
-        + 0.05
-    )
-
-
-def test_routing_transition_uses_one_way_analytical_and_simulated_delay():
+def test_routing_transition_uses_one_way_communication_delay():
     workload = {
         "request_classes": {
             "request": {
@@ -222,19 +194,20 @@ def test_routing_transition_uses_one_way_analytical_and_simulated_delay():
                 service: {"distribution": "deterministic", "mean": 0.1}
                 for service in ("api", "db")
             },
+            "communication_latency": {
+                "same_node_one_way": {
+                    "distribution": "deterministic",
+                    "mean": 0.02,
+                },
+                "cross_node_one_way": {
+                    "distribution": "deterministic",
+                    "mean": 0.02,
+                },
+                "cross_node_probability": 1.0,
+            },
         },
     }
-    system = System("placed-routing", workload, QueueingNetworkType.OPEN)
-    system.configure_simulation_placement(
-        placement={
-            "node-a": {"api": 1, "db": 0},
-            "node-b": {"api": 0, "db": 1},
-        },
-        communication_latency_seconds={
-            "node-a": {"node-b": 0.02},
-            "node-b": {"node-a": 0.03},
-        },
-    )
+    system = System("routing-delay", workload, QueueingNetworkType.OPEN)
 
     replication = system.simulate_measurement_replications(
         warmup_duration=0.0,
@@ -248,22 +221,6 @@ def test_routing_transition_uses_one_way_analytical_and_simulated_delay():
         + system.solve().get_mean_latencies()[1]
         + 0.02
     )
-
-
-def test_attached_placement_can_preserve_measured_same_node_delay():
-    system = System("same-node-placed", _call_workload(), QueueingNetworkType.OPEN)
-    system.configure_simulation_placement(
-        placement={"node-a": {"api": 1, "db": 1}},
-        communication_latency_seconds={"node-a": {"node-a": 0.007}},
-    )
-
-    result = system.simulate_measurement_replications(
-        warmup_duration=0.0,
-        measurement_duration=1.0,
-        seeds=(8003,),
-    )[0]
-
-    assert result.request_class_latencies["request"] == pytest.approx((0.244,))
 
 
 def test_portable_workload_preserves_measured_components_and_network_model():

@@ -20,82 +20,6 @@ from .simulation_evaluation import (
     SimulationClassification,
 )
 
-
-def zero_heuristic(configuration):
-    """Return a neutral remaining-cost estimate for graph-search problems."""
-    return 0
-
-
-class AnalyticalStabilityHeuristic:
-    """Lower bound on replicas still needed for strict analytical stability."""
-
-    def __init__(self, arrival_rates, service_rates, replica_costs=None):
-        if len(arrival_rates) != len(service_rates):
-            raise ValueError("Arrival and service rate vectors must have equal length.")
-        if any(service_rate <= 0 for service_rate in service_rates):
-            raise ValueError("Service rates must be greater than zero.")
-
-        required_replicas = tuple(
-            math.floor(arrival_rate / service_rate) + 1
-            for arrival_rate, service_rate in zip(arrival_rates, service_rates)
-        )
-        self.__initialize(required_replicas, replica_costs)
-
-    def __initialize(self, required_replicas, replica_costs):
-        if not required_replicas or any(
-            isinstance(value, bool) or not isinstance(value, int) or value < 1
-            for value in required_replicas
-        ):
-            raise ValueError("Required replicas must be positive integers.")
-        self.__required_replicas = tuple(required_replicas)
-        self.__replica_costs = (
-            (1.0,) * len(self.__required_replicas)
-            if replica_costs is None
-            else tuple(float(value) for value in replica_costs)
-        )
-        if len(self.__replica_costs) != len(self.__required_replicas) or any(
-            not math.isfinite(value) or value <= 0 for value in self.__replica_costs
-        ):
-            raise ValueError(
-                "replica_costs must contain one finite positive value per service."
-            )
-
-    @classmethod
-    def from_required_replicas(cls, required_replicas, replica_costs=None):
-        """Build the lower bound from an already solved robust requirement."""
-        instance = cls.__new__(cls)
-        instance.__initialize(tuple(required_replicas), replica_costs)
-        return instance
-
-    @classmethod
-    def from_system(cls, system, replica_costs=None):
-        stable_method = getattr(system, "get_minimum_stable_replicas", None)
-        if stable_method is not None:
-            return cls.from_required_replicas(
-                stable_method(),
-                replica_costs=replica_costs,
-            )
-        services = tuple(system.get_services().values())
-        service_rates = tuple(service.get_mu() for service in services)
-        return cls(
-            system.get_effective_arrival_rates(),
-            service_rates,
-            replica_costs=replica_costs,
-        )
-
-    def __call__(self, configuration):
-        if len(configuration) != len(self.__required_replicas):
-            raise ValueError("Configuration size does not match the model.")
-        return sum(
-            max(0, required - replicas) * cost
-            for required, replicas, cost in zip(
-                self.__required_replicas,
-                configuration,
-                self.__replica_costs,
-            )
-        )
-
-
 class AnalyticalClassification(str, Enum):
     """Deterministic classifications from the configured analytical model."""
 
@@ -174,12 +98,10 @@ class ReplicaSizingEvaluation:
 class AnalyticalReplicaSizingProblem(GraphSearchProblem):
     """Bounded replica sizing using stability and optional mean constraints.
 
-    Exact/scalable describes search coverage. It does not change the queueing
-    formulas selected by the system, and neither search mode turns analytical
-    mean latency into a p95 or a statistical feasibility claim.
+    Exact search does not change the queueing formulas selected by the system
+    or turn analytical mean latency into a p95/statistical feasibility claim.
     ``minimum_configuration`` can raise the hard lower bound above the
-    analytical vector. ``initial_configuration`` only seeds scalable
-    construction; exact search starts at the hard lower bound.
+    analytical vector.
     """
 
     def __init__(
@@ -189,7 +111,6 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         max_replicas,
         *,
         minimum_configuration=None,
-        initial_configuration=None,
         replica_costs=None,
         structural_feasibility=None,
         progress_callback=None,
@@ -226,19 +147,6 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             raise ValueError(
                 "Maximum replica bounds cannot be below the required stable "
                 "configuration."
-            )
-        self.__construction_start = (
-            self.__stable
-            if initial_configuration is None
-            else self.__normalize_configuration(initial_configuration)
-        )
-        if any(
-            value < minimum
-            for value, minimum in zip(self.__construction_start, self.__stable)
-        ):
-            raise ValueError(
-                "initial_configuration cannot be below the required stability "
-                "floor."
             )
         self.__replica_costs = self.__normalize_replica_costs(replica_costs)
         self.__structural_feasibility = structural_feasibility
@@ -322,9 +230,6 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
     def stable_configuration(self):
         return self.__stable
 
-    def construction_start_configuration(self):
-        return self.__construction_start
-
     def maximum_configuration(self):
         return self.__maximum
 
@@ -372,10 +277,6 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
             raise ValueError("A replica-sizing step must add exactly one replica.")
         return self.__replica_costs[differences.index(1)]
 
-    def heuristic(self, state):
-        self.__normalize_configuration(state)
-        return 0.0
-
     def _request_class_means(self):
         values = self.__system.get_request_class_mean_latencies()
         return tuple(
@@ -414,14 +315,6 @@ class AnalyticalReplicaSizingProblem(GraphSearchProblem):
         if not math.isfinite(value) or value < 0:
             raise ValueError("Analytical mean-latency ranking must be finite.")
         return value
-
-    def rank_replica_addition(self, current, candidate):
-        added_cost = self.configuration_cost(candidate) - self.configuration_cost(
-            current
-        )
-        return (
-            self.search_tie_breaker(current) - self.search_tie_breaker(candidate)
-        ) / added_cost
 
     def evaluate(self, configuration):
         configuration = self.__normalize_configuration(configuration)
@@ -499,9 +392,7 @@ class ReplicaSizingProblem(GraphSearchProblem):
         simulation_duration,
         request_class_slos,
         max_replicas,
-        heuristic=None,
         warmup_duration=0.0,
-        initial_configuration=None,
         replication_count=30,
         simulation_workers=1,
         evaluation_seed_start=300_000,
@@ -536,19 +427,6 @@ class ReplicaSizingProblem(GraphSearchProblem):
         self.__stable_configuration = self.__normalize_configuration(
             stable_configuration
         )
-        self.__initial_state = self.__normalize_configuration(
-            tuple(1 for _ in range(self.__service_count))
-            if initial_configuration is None
-            else initial_configuration
-        )
-        self.__heuristic = (
-            heuristic
-            if heuristic is not None
-            else AnalyticalStabilityHeuristic.from_system(
-                system, replica_costs=self.__replica_costs
-            )
-        )
-
         if (
             not math.isfinite(self.__measurement_duration)
             or self.__measurement_duration <= 0
@@ -648,22 +526,19 @@ class ReplicaSizingProblem(GraphSearchProblem):
         return tuple(first_seed + offset for offset in range(self.__replication_count))
 
     def initial_state(self):
-        return self.__initial_state
+        return self.__stable_configuration
 
     def stable_configuration(self):
         return self.__stable_configuration
 
-    def construction_start_configuration(self):
-        return tuple(
-            max(initial, stable)
-            for initial, stable in zip(
-                self.__initial_state,
+    def configuration_count(self):
+        return math.prod(
+            maximum - minimum + 1
+            for minimum, maximum in zip(
                 self.__stable_configuration,
+                self.__max_replicas,
             )
         )
-
-    def configuration_count(self):
-        return math.prod(self.__max_replicas)
 
     def maximum_configuration(self):
         return self.__max_replicas
@@ -702,14 +577,6 @@ class ReplicaSizingProblem(GraphSearchProblem):
         self.__search_order_cache[configuration] = value
         return value
 
-    def rank_replica_addition(self, current, candidate):
-        added_cost = self.configuration_cost(candidate) - self.configuration_cost(
-            current
-        )
-        return (
-            self.search_tie_breaker(current) - self.search_tie_breaker(candidate)
-        ) / added_cost
-
     def neighbors(self, state):
         state = self.__normalize_configuration(state)
         neighbors = []
@@ -734,10 +601,6 @@ class ReplicaSizingProblem(GraphSearchProblem):
             raise ValueError("A replica-sizing step must add exactly one replica.")
         service_id = differences.index(1)
         return self.__replica_costs[service_id]
-
-    def heuristic(self, state):
-        state = self.__normalize_configuration(state)
-        return self.__heuristic(state)
 
     def evaluate(self, configuration):
         configuration = self.__normalize_configuration(configuration)
@@ -854,19 +717,13 @@ class ReplicaSizingProblem(GraphSearchProblem):
 
 
 class CalibratedReplicaSizingProblem(GraphSearchProblem):
-    """Bounded graph search driven exclusively by calibrated simulation results.
-
-    ``initial_configuration`` is a heuristic construction seed. Statistical
-    deletion may remove its replicas down to the calibrated stability vector.
-    """
+    """Bounded exact search driven by calibrated simulation results."""
 
     def __init__(
         self,
         system,
         calibration_profile,
         *,
-        initial_configuration=None,
-        heuristic=None,
         simulation_workers=1,
         evaluator=None,
         replica_costs=None,
@@ -885,22 +742,6 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
         self.__progress_callback = progress_callback
         if len(self.__maximum) != self.__service_count:
             raise ValueError("Calibration profile does not match service count.")
-        self.__construction_start = (
-            self.__initial
-            if initial_configuration is None
-            else self.__normalize(initial_configuration)
-        )
-        if any(
-            value < minimum
-            for value, minimum in zip(self.__construction_start, self.__initial)
-        ):
-            raise ValueError(
-                "initial_configuration cannot be below calibrated stability."
-            )
-        # The calibrated anchor is already strictly stable, so stability adds
-        # no remaining-cost information. Keep a zero heuristic for callers that
-        # provide a custom ranking heuristic.
-        self.__heuristic = heuristic if heuristic is not None else zero_heuristic
         self.__evaluator = evaluator or CalibratedConfigurationEvaluator(
             system,
             calibration_profile,
@@ -967,9 +808,6 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
     def stable_configuration(self):
         return self.__initial
 
-    def construction_start_configuration(self):
-        return self.__construction_start
-
     def configuration_count(self):
         return math.prod(
             maximum - minimum + 1
@@ -996,14 +834,6 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
             else bool(self.__structural_feasibility(configuration))
         )
 
-    def rank_replica_addition(self, current, candidate):
-        added_cost = self.configuration_cost(candidate) - self.configuration_cost(
-            current
-        )
-        return (
-            self.search_tie_breaker(current) - self.search_tie_breaker(candidate)
-        ) / added_cost
-
     def neighbors(self, state):
         state = self.__normalize(state)
         values = []
@@ -1025,10 +855,6 @@ class CalibratedReplicaSizingProblem(GraphSearchProblem):
             raise ValueError("A replica-sizing step must add exactly one replica.")
         service_id = differences.index(1)
         return self.__replica_costs[service_id]
-
-    def heuristic(self, state):
-        """Return the caller-provided remaining-cost estimate."""
-        return self.__heuristic(self.__normalize(state))
 
     def search_tie_breaker(self, configuration):
         """Order equal-cost states by lower analytical bottleneck utilization."""

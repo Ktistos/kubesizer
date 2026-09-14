@@ -139,7 +139,7 @@ def communication_latency_from_round_trip_probes(
     *,
     same_node_round_trip_seconds,
     cross_node_round_trip_seconds,
-    unplaced_cross_node_probability,
+    cross_node_probability,
 ):
     """Build the simulator input from ordinary sidecar-aware HTTP probes.
 
@@ -156,11 +156,11 @@ def communication_latency_from_round_trip_probes(
         "cross_node_round_trip_seconds",
     )
     probability = _finite_nonnegative(
-        unplaced_cross_node_probability,
-        "unplaced_cross_node_probability",
+        cross_node_probability,
+        "cross_node_probability",
     )
     if probability > 1.0:
-        raise ValueError("unplaced_cross_node_probability cannot exceed one.")
+        raise ValueError("cross_node_probability cannot exceed one.")
     return {
         "same_node_one_way": {
             "distribution": "empirical",
@@ -172,7 +172,7 @@ def communication_latency_from_round_trip_probes(
             "samples": [value / 2.0 for value in cross],
             "sampling": "iid_with_replacement",
         },
-        "unplaced_cross_node_probability": probability,
+        "cross_node_probability": probability,
     }
 
 

@@ -1,5 +1,11 @@
 # Kubesizer: implementation, testing, and experiment handoff
 
+> **Archived implementation snapshot.** This report documents an earlier
+> revision that included node-placement and approximate replica optimization.
+> Kubesizer 0.4 removed those subsystems, their mode/resource inputs, and their
+> output metadata. Historical placement and scalable-search sections below are
+> retained only as experiment context and do not describe the current API.
+
 Date: 28 August 2026
 
 This report explains, in simple language, what Kubesizer is trying to do, why the first versions were not reliable enough, what was changed, what was tested, and what is still running. It is also a handoff document for continuing the work from another computer.

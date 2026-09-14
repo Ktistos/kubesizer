@@ -69,10 +69,7 @@ from .simulation import (
     build_characterized_system_variants,
     build_simulation_workload_variants,
 )
-from .sizing import (
-    recommend_initial_replicas,
-    recommendation_initial_configuration,
-)
+from .sizing import recommend_initial_replicas
 from .stability import estimate_statistical_stability_floor
 from .workflow import load_and_prepare_initial_sizing, prepare_initial_sizing
 
@@ -135,6 +132,5 @@ __all__ = [
     "parse_workload_definition",
     "prepare_initial_sizing",
     "recommend_initial_replicas",
-    "recommendation_initial_configuration",
     "run_closed_loop_experiments",
 ]

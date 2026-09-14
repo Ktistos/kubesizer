@@ -707,7 +707,7 @@ def parse_workload_definition(value, *, base_path=None):
         expected = {
             "same_node_one_way",
             "cross_node_one_way",
-            "unplaced_cross_node_probability",
+            "cross_node_probability",
         }
         if (
             not isinstance(raw_communication, Mapping)
@@ -715,16 +715,16 @@ def parse_workload_definition(value, *, base_path=None):
         ):
             raise ValueError(
                 "communication_latency must contain exactly same_node_one_way, "
-                "cross_node_one_way, and unplaced_cross_node_probability."
+                "cross_node_one_way, and cross_node_probability."
             )
         probability = _finite(
-            raw_communication["unplaced_cross_node_probability"],
-            "communication_latency.unplaced_cross_node_probability",
+            raw_communication["cross_node_probability"],
+            "communication_latency.cross_node_probability",
             nonnegative=True,
         )
         if probability > 1.0:
             raise ValueError(
-                "communication_latency.unplaced_cross_node_probability cannot "
+                "communication_latency.cross_node_probability cannot "
                 "exceed one."
             )
         communication_latency = CommunicationLatencySpec(
@@ -738,7 +738,7 @@ def parse_workload_definition(value, *, base_path=None):
                 "communication_latency.cross_node_one_way",
                 base_path=base_path,
             ),
-            unplaced_cross_node_probability=probability,
+            cross_node_probability=probability,
         )
     service_blocking_times = ()
     if "service_blocking_times" in value:

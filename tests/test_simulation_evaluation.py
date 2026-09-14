@@ -297,7 +297,6 @@ def test_optimizer_accepts_only_statistically_feasible_goal_and_retains_inconclu
     problem = CalibratedReplicaSizingProblem(
         wrapped,
         profile,
-        heuristic=lambda _configuration: 0,
     )
 
     result = UniformCostReplicaOptimizer().optimize(problem)
@@ -327,7 +326,6 @@ def test_optimizer_aborts_instead_of_treating_simulation_failure_as_infeasible()
     problem = CalibratedReplicaSizingProblem(
         system,
         profile,
-        heuristic=lambda _configuration: 0,
         evaluator=FailedEvaluator(),
     )
 
