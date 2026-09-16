@@ -5,6 +5,7 @@ from characterization import (
     communication_latency_from_round_trip_probes,
     decompose_aligned_latency_means,
     estimate_low_load_service_blocking_time,
+    fit_leaf_blocking_variability,
 )
 
 
@@ -140,3 +141,57 @@ def test_service_blocking_estimate_rejects_load_and_boundary_mismatch():
             downstream_response_mean_seconds=0.040,
             maximum_observed_cpu_utilization=0.10,
         )
+
+
+def test_leaf_blocking_fit_preserves_the_independent_mean_and_residual_median():
+    result = fit_leaf_blocking_variability(
+        blocking_mean_seconds=0.016,
+        observed_response_median_seconds=0.030,
+        accounted_median_seconds=0.020,
+    )
+
+    assert result == {
+        "distribution": "lognormal",
+        "mean": pytest.approx(0.016),
+        "scv": pytest.approx(1.56),
+    }
+
+
+def test_leaf_blocking_fit_uses_deterministic_fallback_without_right_skew():
+    result = fit_leaf_blocking_variability(
+        blocking_mean_seconds=0.010,
+        observed_response_median_seconds=0.020,
+        accounted_median_seconds=0.005,
+    )
+
+    assert result == {
+        "distribution": "deterministic",
+        "mean": pytest.approx(0.010),
+    }
+
+
+def test_leaf_blocking_fit_caps_unidentifiable_extreme_spread():
+    result = fit_leaf_blocking_variability(
+        blocking_mean_seconds=0.100,
+        observed_response_median_seconds=0.001,
+        accounted_median_seconds=0.0,
+        maximum_scv=20.0,
+    )
+
+    assert result["distribution"] == "lognormal"
+    assert result["scv"] == pytest.approx(20.0)
+
+
+def test_leaf_blocking_fit_caps_spread_before_exponentiation_can_overflow():
+    result = fit_leaf_blocking_variability(
+        blocking_mean_seconds=1.0,
+        observed_response_median_seconds=1e-155,
+        accounted_median_seconds=0.0,
+        maximum_scv=20.0,
+    )
+
+    assert result == {
+        "distribution": "lognormal",
+        "mean": 1.0,
+        "scv": 20.0,
+    }

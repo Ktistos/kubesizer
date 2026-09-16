@@ -68,9 +68,16 @@ def select_warmup_pilot_parameters(
     )
     service_names = tuple(service.get_name() for service in services)
     request_class_names = tuple(system.get_request_classes())
-    service_rates = tuple(float(service.get_mu()) for service in services)
-    if any(not math.isfinite(rate) or rate <= 0 for rate in service_rates):
+    per_slot_service_rates = tuple(float(service.get_mu()) for service in services)
+    if any(
+        not math.isfinite(rate) or rate <= 0 for rate in per_slot_service_rates
+    ):
         raise ValueError("All service rates must be finite and greater than zero.")
+    processing_slots = system.get_service_processing_slots_per_replica()
+    service_rates = tuple(
+        rate * processing_slots[service.get_name()]
+        for service, rate in zip(services, per_slot_service_rates)
+    )
 
     external_arrival_rates_by_class = tuple(
         tuple(float(service.get_gamma(request_class)) for service in services)
@@ -181,7 +188,9 @@ def select_warmup_pilot_parameters(
     if any(utilization >= 1.0 for utilization in utilizations):
         raise ValueError("The minimum replica configuration must be strictly stable.")
 
-    slowest_mean_service_time = max(1.0 / rate for rate in service_rates)
+    # Bucket widths describe the duration of an individual service visit, not
+    # aggregate per-replica capacity. Keep them based on the per-slot rate.
+    slowest_mean_service_time = max(1.0 / rate for rate in per_slot_service_rates)
     initial_bucket_width = 5.0 * slowest_mean_service_time
     bucket_width_candidates = (
         initial_bucket_width / 2.0,

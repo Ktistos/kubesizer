@@ -12,6 +12,7 @@ from .latency import (
     communication_latency_from_round_trip_probes,
     decompose_aligned_latency_means,
     estimate_low_load_service_blocking_time,
+    fit_leaf_blocking_variability,
 )
 from .methodology import measurement_methodology_contract
 from .models import (
@@ -66,6 +67,7 @@ from .readiness import (
     assess_initial_sizing_risk,
 )
 from .simulation import (
+    build_analytical_workload_variants,
     build_characterized_system_variants,
     build_simulation_workload_variants,
 )
@@ -113,6 +115,7 @@ __all__ = [
     "UncertaintyDimension",
     "WorkloadDefinition",
     "assess_initial_sizing_risk",
+    "build_analytical_workload_variants",
     "build_characterized_system_variants",
     "build_simulation_workload_variants",
     "characterize_deployment",
@@ -120,6 +123,7 @@ __all__ = [
     "communication_latency_from_round_trip_probes",
     "decompose_aligned_latency_means",
     "estimate_low_load_service_blocking_time",
+    "fit_leaf_blocking_variability",
     "estimate_statistical_stability_floor",
     "evaluate_closed_loop_recommendation",
     "load_and_prepare_initial_sizing",

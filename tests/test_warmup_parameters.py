@@ -77,6 +77,46 @@ def test_capacity_slack_term_can_determine_and_round_pilot_horizon():
     assert parameters.pilot_horizon % max(parameters.bucket_width_candidates) == pytest.approx(0.0)
 
 
+def test_capacity_slack_includes_processing_slots_per_replica():
+    system = System(
+        "multi-slot",
+        {
+            "request_classes": {
+                "read": {
+                    "concurrency_weight": 1.0,
+                    "calls": {},
+                    "call_execution": "sequential",
+                    "end_to_end_latency_slos": {"mean_seconds": 1.0},
+                }
+            },
+            "traffic_model": {
+                "entry_services": {
+                    "read": {
+                        "api": {"distribution": "exponential", "rate": 15.0}
+                    }
+                },
+                "service_times": {
+                    "api": {
+                        "distribution": "deterministic",
+                        "mean": 0.1,
+                        "processing_slots_per_replica": 2,
+                        "concurrency_limit_per_replica": 2,
+                    }
+                },
+            },
+        },
+        QueueingNetworkType.OPEN,
+    )
+
+    parameters = select_warmup_pilot_parameters(system)
+
+    assert parameters.minimum_replica_configuration == (1,)
+    assert parameters.service_rates == pytest.approx((20.0,))
+    assert parameters.minimum_configuration_utilizations == pytest.approx((0.75,))
+    assert parameters.capacity_slacks == pytest.approx((5.0,))
+    assert parameters.slowest_mean_service_time == pytest.approx(0.1)
+
+
 def test_external_arrival_term_can_determine_pilot_horizon():
     system = System(
         "test",

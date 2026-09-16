@@ -245,3 +245,57 @@ def estimate_low_load_service_blocking_time(
         "distribution": "deterministic",
         "mean": residual,
     }
+
+
+def fit_leaf_blocking_variability(
+    *,
+    blocking_mean_seconds,
+    observed_response_median_seconds,
+    accounted_median_seconds,
+    maximum_scv=100.0,
+):
+    """Fit the retained lognormal leaf-blocking model from mean and p50.
+
+    Only the residual median is fitted: observed service p50 minus processing
+    and other already-accounted median time. A non-positive or non-right-skewed
+    residual cannot identify positive lognormal spread, so the fitted method
+    retains the independently estimated blocking mean deterministically.
+    """
+    blocking_mean = _finite_nonnegative(
+        blocking_mean_seconds,
+        "blocking_mean_seconds",
+    )
+    observed_median = _finite_nonnegative(
+        observed_response_median_seconds,
+        "observed_response_median_seconds",
+    )
+    accounted_median = _finite_nonnegative(
+        accounted_median_seconds,
+        "accounted_median_seconds",
+    )
+    maximum_scv = _finite_nonnegative(maximum_scv, "maximum_scv")
+    if maximum_scv <= 0.0:
+        raise ValueError("maximum_scv must be greater than zero.")
+    if blocking_mean == 0.0:
+        return None
+
+    residual_median = max(0.0, observed_median - accounted_median)
+    if residual_median <= 0.0 or residual_median >= blocking_mean:
+        return {"distribution": "deterministic", "mean": blocking_mean}
+
+    # Work in the log domain and compare with the cap before exponentiating.
+    # Both inputs may be finite while their ratio, or exp(sigma_squared), is not.
+    sigma_squared = 2.0 * (math.log(blocking_mean) - math.log(residual_median))
+    maximum_sigma_squared = math.log1p(maximum_scv)
+    scv = (
+        maximum_scv
+        if sigma_squared >= maximum_sigma_squared
+        else math.expm1(sigma_squared)
+    )
+    if scv <= 1e-9:
+        return {"distribution": "deterministic", "mean": blocking_mean}
+    return {
+        "distribution": "lognormal",
+        "mean": blocking_mean,
+        "scv": scv,
+    }

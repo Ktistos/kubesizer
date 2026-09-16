@@ -117,6 +117,7 @@ def _load_workflow_system(args):
     variants = build_characterized_system_variants(
         plan.inputs,
         plan.characterization,
+        evaluation_mode=getattr(args, "replica_evaluation", "simulation"),
     )
     if len(variants) != 1:
         names = [variant.name for variant, _system in variants]
@@ -601,16 +602,13 @@ def _run_replica_workflow(
         raise CliUsageError(
             "Percentile latency SLOs require --replica-evaluation simulation."
         )
-    if (
-        evaluation_mode == ReplicaEvaluationMode.ANALYTICAL
-        and any(
-            value > 0.0
-            for value in getattr(
-                system,
-                "get_request_class_end_to_end_timeouts",
-                lambda: {},
-            )().values()
-        )
+    if evaluation_mode == ReplicaEvaluationMode.ANALYTICAL and any(
+        value > 0.0
+        for value in getattr(
+            system,
+            "get_request_class_end_to_end_timeouts",
+            lambda: {},
+        )().values()
     ):
         raise CliUsageError(
             "Request-class end-to-end deadlines require --replica-evaluation "
@@ -625,9 +623,7 @@ def _run_replica_workflow(
         if incompatibilities:
             raise CliUsageError(
                 "The workload contains semantics that require "
-                "--replica-evaluation simulation: "
-                + "; ".join(incompatibilities)
-                + "."
+                "--replica-evaluation simulation: " + "; ".join(incompatibilities) + "."
             )
     if kind is None and evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         raise CliUsageError("Simulation optimization requires workload latency SLOs.")
@@ -692,9 +688,7 @@ def _command_run(args):
             "The selected replica configuration failed final validation"
             + (f": {reason}" if reason else ".")
         )
-    return {
-        "services": _service_recommendations(system, result.configuration)
-    }
+    return {"services": _service_recommendations(system, result.configuration)}
 
 
 def _add_output_arguments(parser):

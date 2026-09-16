@@ -22,10 +22,16 @@ The public evaluation choices are:
 | Option | Meaning |
 |---|---|
 | `--replica-evaluation analytical` | Fast analytical stability and supported mean-latency evaluation |
-| `--replica-evaluation simulation` | Calibrated independent simulation for supported mean or p95 SLOs |
+| `--replica-evaluation simulation` | Fitted-variability characterization followed by calibrated independent simulation for supported mean or p95 SLOs |
 
 Replica optimization always uses exact uniform-cost search. There is no search
 mode, placement mode, resource-file argument, or hybrid mode.
+
+The removal of the weaker simulation variants does not remove the analytical
+queueing path. Analytical evaluation remains available for compatible mean-SLO
+workloads, and analytical stability is still used to screen simulation
+candidates. The simulation path has one characterization method: fitted
+variability.
 
 ## Files supplied by an operator
 
@@ -36,7 +42,8 @@ interpret measurements:
 
 - service names and namespaces;
 - per-replica CPU request/limit context;
-- optional concurrency or execution-model declarations;
+- execution-model declarations and per-replica concurrency limits for services
+  whose positive blocking residual will be modeled;
 - request classes, entry services, call graph, and call execution semantics;
 - latency boundary and explicitly measured latency components;
 - mean or percentile end-to-end SLOs;
@@ -58,7 +65,7 @@ evidence, these can include:
 | Service-class intervals | Request-class-specific demand and flow attribution |
 | External intervals | External class rates and observed end-to-end means |
 | Service edges | Calls per source request and the directed service graph |
-| Service latency histograms | Service response distributions and blocking residual evidence |
+| Service latency histograms | Per-service response mean/p50 used to infer blocking residuals and fit leaf-service variability |
 | External latency histograms | Observed end-to-end latency statistics |
 | External arrival samples | Burst-preserving arrival traces |
 | Capacity observations | Confidence-bounded empirical replica floor and forecast envelope |
@@ -81,8 +88,9 @@ Characterization freezes operator evidence into one simulation workload:
 |---|---|---|
 | External interarrival process | External counts and optional timestamp traces | Generates external requests |
 | CPU service-time mean | CPU-seconds divided by completed requests | Processing work per visit |
-| Service-time variability | Class/service measurements or declared distribution | Samples processing duration |
-| Non-CPU blocking time | Low-load residual after CPU, downstream, and communication time | Holds concurrency while releasing CPU |
+| CPU service time | CPU-seconds/request divided by declared CPU capacity | Deterministic processor-sharing work per visit |
+| Non-CPU blocking mean | Low-load service-response mean minus CPU, downstream, and communication means | Holds declared concurrency while releasing CPU |
+| Leaf blocking variability | Blocking mean plus the compatible service-response p50 residual | Fits one capped lognormal SCV; falls back to the same mean deterministically when right-skew cannot be identified |
 | Call graph and call counts | Service-edge counters or declared topology | Creates downstream visits |
 | Processing/concurrency capacity | Explicit portable service declarations | Controls queue admission and execution |
 | Latency components | Aligned boundary measurements or explicit distributions | Adds ingress/client/residual latency once |
@@ -98,7 +106,8 @@ must author.
 load workload and optional portable evidence
                     |
                     v
-characterize and freeze the simulation model
+characterize and freeze either the analytical CPU model
+or the fitted-variability simulation model
                     |
                     v
 calibrate warm-up and measurement durations (simulation mode)

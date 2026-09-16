@@ -33,6 +33,7 @@ def _system_and_order(plan):
     ((_, system),) = build_characterized_system_variants(
         plan.inputs,
         plan.characterization,
+        evaluation_mode="analytical",
     )
     order = tuple(
         item.get_name()

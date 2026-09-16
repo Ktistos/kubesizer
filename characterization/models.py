@@ -383,8 +383,7 @@ class ServiceStabilityAssessment:
         ):
             return None
         return self.arrival_rate_upper_bound_rps / (
-            self.required_replicas
-            * self.service_rate_lower_bound_rps_per_replica
+            self.required_replicas * self.service_rate_lower_bound_rps_per_replica
         )
 
 
@@ -486,6 +485,11 @@ class SimulationWorkloadVariant:
     workload: dict
     assumptions: tuple[str, ...]
     uncertainty_dimensions: tuple[UncertaintyDimension, ...] = ()
+    model_issues: tuple[str, ...] = ()
+
+    @property
+    def model_complete(self):
+        return not self.model_issues
 
 
 @dataclass(frozen=True)

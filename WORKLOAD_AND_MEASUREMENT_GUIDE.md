@@ -35,6 +35,7 @@ services:
   database:
     namespace: data
     cpu_request_cores: 1.0
+    concurrency_limit_per_replica: 16
 
   cache:
     namespace: production
@@ -152,7 +153,7 @@ communication_latency:
 | `services.<name>.cpu_request_cores` | CPU reservation used to convert measured CPU-seconds/request into an elapsed execution-time estimate. |
 | `services.<name>.cpu_limit_cores` | Optional reported CPU ceiling; it is not treated as guaranteed capacity. |
 | `services.<name>.memory_*` | Optional retained measurement context; not used to claim Kubernetes schedulability. |
-| `services.<name>.concurrency_limit_per_replica` | Optional measured/configured finite worker, thread, connection, or admission pool. |
+| `services.<name>.concurrency_limit_per_replica` | Measured/configured finite worker, thread, connection, or admission pool. It is required when the portable simulation path infers a positive blocking residual for that service. |
 | `request_classes` | Logical operations whose latencies and SLOs are evaluated separately. |
 | `concurrency_weight` | Expected share of external requests belonging to the class. All class weights must sum to `1.0`. It is checked against the measured class mix. |
 | `entry_services` | How the class's measured external arrival rate is divided among application entry services. The weights for one class must sum to `1.0`. |
@@ -163,7 +164,7 @@ communication_latency:
 | `end_to_end_latency_slos` | The mean or p95 latency limit used to decide whether a replica configuration is acceptable. |
 | `load_forecast` | Multipliers for future traffic. Kubesizer plans for the largest declared value. |
 | `sizing_policy.maximum_capacity_utilization` | Maximum fraction of confidence-bounded healthy request capacity that the stability floor may use. It must be greater than zero and less than one; the default is `0.85`. |
-| `service_blocking_times` | Non-CPU wait that still occupies a service concurrency slot. This requires the rich simulation semantics. |
+| `service_blocking_times` | Optional direct evidence override for non-CPU wait that still occupies a service concurrency slot. Otherwise the sole simulation method requires an identifiable low-load residual for every non-negligible service component; production simulation fails closed when that fit is incomplete. |
 | `communication_latency` | Same-node and cross-node network-delay distributions plus the measured or estimated cross-node call probability. |
 
 ### Where are the arrival rates?
@@ -301,7 +302,12 @@ The CPU limit is retained as a ceiling and diagnostic. Kubesizer does not treat 
 
 This matters when a request performs CPU work and then waits for I/O or a downstream service. The CPU may be free, but the request can still occupy one of the application's finite slots. Without this field, the simulator cannot represent that particular bottleneck explicitly.
 
-The field is optional because it is not reliably available for every application. If it is omitted, Kubesizer must use the less specific service model and the limitation should be acknowledged.
+The field can be omitted for the analytical CPU model or when no positive
+blocking residual is inferred. If portable simulation identifies a positive
+residual, Kubesizer rejects the model until the limit is supplied; it does not
+silently invent a worker-pool size. A directly supplied blocking distribution
+can still represent additive I/O delay without a finite limit, but then it does
+not claim a finite worker-pool bottleneck.
 
 ### 5. It records the resource conditions under which measurements are valid
 
@@ -325,7 +331,8 @@ For a deployment-informed recommendation, provide at least:
 workload.yaml
   - every modeled service
   - namespace and CPU request for every service
-  - optional resource context and concurrency limits
+  - optional resource context
+  - concurrency limits for services whose non-CPU blocking is modeled
   - every request class
   - concurrency weight for every class
   - entry-service weights
@@ -340,7 +347,13 @@ measurements.yaml and retained CSVs
   - independent healthy fixed-replica capacity runs
 ```
 
-Latency histograms, arrival traces, network measurements, blocking-time evidence, errors, throttling, memory, and concurrency limits enrich the model when they can be extracted reliably.
+Response-duration sums provide the request-weighted mean, while latency
+histograms provide the p50 needed by fitted variability. Histogram buckets must
+be unique, cumulative, use one boundary grid per subject, end in `+Inf`, and
+have a final count that matches the corresponding completed-request count.
+Arrival traces, network measurements, direct blocking-time evidence, errors,
+throttling, memory, and concurrency limits enrich or constrain the model when
+they can be extracted reliably.
 
 ## Key distinction
 

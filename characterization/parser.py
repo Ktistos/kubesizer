@@ -203,9 +203,7 @@ def _validate_service_interval_grid(rows):
 
 
 def _validate_interval_alignment(measurements):
-    service_windows = {
-        (row.start, row.end) for row in measurements.service_intervals
-    }
+    service_windows = {(row.start, row.end) for row in measurements.service_intervals}
     interval_sources = (
         ("service_class_intervals", measurements.service_class_intervals),
         ("external_intervals", measurements.external_intervals),
@@ -243,6 +241,44 @@ def _validate_interval_alignment(measurements):
             f"pod-attributed service total: {overcounts}."
         )
 
+    external_totals = {}
+    for row in measurements.external_intervals:
+        key = (row.start, row.end, row.request_class)
+        external_totals[key] = external_totals.get(key, 0.0) + row.request_count
+
+    histogram_sources = (
+        (
+            "service_latency_histograms",
+            measurements.service_latency_histograms,
+            service_totals,
+        ),
+        (
+            "external_latency_histograms",
+            measurements.external_latency_histograms,
+            external_totals,
+        ),
+    )
+    for label, buckets, totals in histogram_sources:
+        for bucket in buckets:
+            if not math.isinf(bucket.upper_bound_seconds):
+                continue
+            key = (bucket.start, bucket.end, bucket.subject)
+            expected = totals.get(key)
+            if expected is None:
+                raise ValueError(
+                    f"{label} has no matching completed-request count for {key}."
+                )
+            if not math.isclose(
+                bucket.cumulative_count,
+                expected,
+                rel_tol=0.01,
+                abs_tol=1.0,
+            ):
+                raise ValueError(
+                    f"{label} +Inf count disagrees with completed requests for "
+                    f"{key}: histogram={bucket.cumulative_count}, requests={expected}."
+                )
+
 
 def _parse_workload_services(raw_services):
     """Validate service execution facts embedded in the workload."""
@@ -267,9 +303,7 @@ def _parse_workload_services(raw_services):
         required = {"namespace", "cpu_request_cores"}
         missing = required - set(raw)
         if missing:
-            raise ValueError(
-                f"workload.services.{name} is missing {sorted(missing)}."
-            )
+            raise ValueError(f"workload.services.{name} is missing {sorted(missing)}.")
         cpu_request = _finite(
             raw["cpu_request_cores"],
             f"workload.services.{name}.cpu_request_cores",
@@ -572,9 +606,8 @@ def parse_workload_definition(value, *, base_path=None):
                     f"request_classes.{name}.latency_components contains "
                     f"unsupported components {sorted(unknown)}."
                 )
-            if (
-                latency_boundary == "ingress"
-                and ({"client_to_ingress", "client_to_entry"} & set(raw_components))
+            if latency_boundary == "ingress" and (
+                {"client_to_ingress", "client_to_entry"} & set(raw_components)
             ):
                 raise ValueError(
                     f"request_classes.{name} cannot include a client path "
@@ -661,10 +694,7 @@ def parse_workload_definition(value, *, base_path=None):
     if not isinstance(raw_forecast, Mapping) or set(raw_forecast) != {"multipliers"}:
         raise ValueError("load_forecast must contain exactly multipliers.")
     raw_multipliers = raw_forecast["multipliers"]
-    if (
-        not isinstance(raw_multipliers, (list, tuple))
-        or not raw_multipliers
-    ):
+    if not isinstance(raw_multipliers, (list, tuple)) or not raw_multipliers:
         raise ValueError("load_forecast.multipliers must be a nonempty array.")
     multipliers = tuple(
         _finite(
@@ -680,11 +710,7 @@ def parse_workload_definition(value, *, base_path=None):
         )
     raw_sizing_policy = value.get(
         "sizing_policy",
-        {
-            "maximum_capacity_utilization": (
-                DEFAULT_MAXIMUM_CAPACITY_UTILIZATION
-            )
-        },
+        {"maximum_capacity_utilization": (DEFAULT_MAXIMUM_CAPACITY_UTILIZATION)},
     )
     if not isinstance(raw_sizing_policy, Mapping) or set(raw_sizing_policy) != {
         "maximum_capacity_utilization"
@@ -724,8 +750,7 @@ def parse_workload_definition(value, *, base_path=None):
         )
         if probability > 1.0:
             raise ValueError(
-                "communication_latency.cross_node_probability cannot "
-                "exceed one."
+                "communication_latency.cross_node_probability cannot " "exceed one."
             )
         communication_latency = CommunicationLatencySpec(
             same_node_one_way=parse_duration_distribution(
@@ -860,9 +885,7 @@ def _parse_service_class_intervals(path):
             start=start,
             end=end,
             service=_name(row.get("service"), f"{label}.service"),
-            request_class=_name(
-                row.get("request_class"), f"{label}.request_class"
-            ),
+            request_class=_name(row.get("request_class"), f"{label}.request_class"),
             request_count=_finite(
                 row.get("request_count"),
                 f"{label}.request_count",
@@ -979,8 +1002,15 @@ def _parse_histograms(path, subject_column, label):
             )
         )
     groups = {}
+    identities = set()
     for bucket in result:
-        groups.setdefault((bucket.start, bucket.end, bucket.subject), []).append(bucket)
+        group = (bucket.start, bucket.end, bucket.subject)
+        identity = (*group, bucket.upper_bound_seconds)
+        if identity in identities:
+            raise ValueError(f"{label} contains a duplicate bucket for {identity}.")
+        identities.add(identity)
+        groups.setdefault(group, []).append(bucket)
+    boundaries_by_subject = {}
     for key, buckets in groups.items():
         ordered = sorted(buckets, key=lambda item: item.upper_bound_seconds)
         if any(
@@ -988,6 +1018,15 @@ def _parse_histograms(path, subject_column, label):
             for left, right in pairwise(ordered)
         ):
             raise ValueError(f"{label} cumulative counts decrease for {key}.")
+        if not math.isinf(ordered[-1].upper_bound_seconds):
+            raise ValueError(f"{label} must contain a +Inf bucket for {key}.")
+        boundaries = tuple(bucket.upper_bound_seconds for bucket in ordered)
+        previous = boundaries_by_subject.setdefault(key[2], boundaries)
+        if boundaries != previous:
+            raise ValueError(
+                f"{label} uses inconsistent bucket boundaries for subject "
+                f"{key[2]!r}."
+            )
     return tuple(result)
 
 
@@ -1069,22 +1108,22 @@ def _parse_capacity(path):
         if throttling_ratio > 1.0:
             raise ValueError(f"{label}.cpu_throttling_ratio cannot exceed one.")
         observation = CapacityObservation(
-                run_id=_name(row.get("run_id"), f"{label}.run_id"),
-                service=_name(row.get("service"), f"{label}.service"),
-                replicas=replicas,
-                offered_rate_rps=_finite(
-                    row.get("offered_rate_rps"),
-                    f"{label}.offered_rate_rps",
-                    positive=True,
-                ),
-                completed_rate_rps=_finite(
-                    row.get("completed_rate_rps"),
-                    f"{label}.completed_rate_rps",
-                    nonnegative=True,
-                ),
-                error_rate=error_rate,
-                healthy=_boolean(row.get("healthy"), f"{label}.healthy"),
-                cpu_throttling_ratio=throttling_ratio,
+            run_id=_name(row.get("run_id"), f"{label}.run_id"),
+            service=_name(row.get("service"), f"{label}.service"),
+            replicas=replicas,
+            offered_rate_rps=_finite(
+                row.get("offered_rate_rps"),
+                f"{label}.offered_rate_rps",
+                positive=True,
+            ),
+            completed_rate_rps=_finite(
+                row.get("completed_rate_rps"),
+                f"{label}.completed_rate_rps",
+                nonnegative=True,
+            ),
+            error_rate=error_rate,
+            healthy=_boolean(row.get("healthy"), f"{label}.healthy"),
+            cpu_throttling_ratio=throttling_ratio,
         )
         identity = (observation.service, observation.replicas, observation.run_id)
         if identity in identities:

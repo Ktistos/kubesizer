@@ -11,7 +11,14 @@ from performance_models import (
     duration_distribution_to_workload_mapping,
 )
 
+from .latency import (
+    estimate_low_load_service_blocking_time,
+    fit_leaf_blocking_variability,
+)
 from .models import SimulationWorkloadVariant, UncertaintyDimension
+
+
+MAXIMUM_BLOCKING_FIT_CPU_UTILIZATION = 0.20
 
 
 def _thaw(value):
@@ -213,14 +220,234 @@ def _communication_latency_specification(specification):
     }
 
 
-def build_simulation_workload_variants(
+def _communication_round_trip_mean(specification):
+    if specification is None:
+        return 0.0
+    one_way = (
+        (1.0 - specification.cross_node_probability)
+        * specification.same_node_one_way.mean
+        + specification.cross_node_probability * specification.cross_node_one_way.mean
+    )
+    return 2.0 * one_way
+
+
+def _response_aligned_cpu_execution_mean(inputs, service, cpu_capacity_cores):
+    """Return pooled CPU work/request for the same rows as the response mean."""
+    rows = tuple(
+        row
+        for row in inputs.measurements.service_intervals
+        if row.service == service and row.response_duration_sum_seconds is not None
+    )
+    completed_requests = sum(row.request_count for row in rows)
+    if completed_requests <= 0.0:
+        return None
+    cpu_demand = sum(row.cpu_seconds for row in rows) / completed_requests
+    return cpu_demand / cpu_capacity_cores
+
+
+def _downstream_response_mean(
+    source,
+    *,
+    class_calls,
+    class_modes,
+    visits_by_class,
+    observed_class_rates,
+    service_response_means,
+    communication_round_trip_mean,
+):
+    weighted_durations = []
+    for request_class, calls_by_source in class_calls.items():
+        calls = calls_by_source.get(source, {})
+        if not calls:
+            continue
+        if class_modes[request_class] == "parallel":
+            return (
+                None,
+                "parallel downstream duration cannot be identified from child "
+                "means alone",
+            )
+        if any(
+            service_response_means.get(target) is None
+            for target, mean_calls in calls.items()
+            if float(mean_calls) > 0.0
+        ):
+            return None, "a downstream response mean is unavailable"
+        durations = tuple(
+            float(mean_calls)
+            * (service_response_means[target] + communication_round_trip_mean)
+            for target, mean_calls in calls.items()
+            if float(mean_calls) > 0.0
+        )
+        if not durations:
+            continue
+        duration = sum(durations)
+        source_visits = visits_by_class.get(request_class, {}).get(source, 0.0)
+        weight = observed_class_rates[request_class] * source_visits
+        if weight > 0.0:
+            weighted_durations.append((weight, duration))
+    if not weighted_durations:
+        return 0.0, None
+    total_weight = sum(weight for weight, _duration in weighted_durations)
+    return (
+        sum(weight * duration for weight, duration in weighted_durations)
+        / total_weight,
+        None,
+    )
+
+
+def _fit_service_blocking_times(
     inputs,
     characterization,
     *,
+    class_calls,
+    class_modes,
+    visits_by_class,
+):
+    """Return the one supported measurement-derived blocking model."""
+    explicit = dict(inputs.workload.service_blocking_times)
+    fitted = {
+        service: duration_distribution_to_workload_mapping(specification)
+        for service, specification in explicit.items()
+    }
+    assumptions = []
+    uncertainty_dimensions = []
+    model_issues = []
+    observed_class_rates = {
+        item.request_class: float(item.observed_arrival_rate_rps or 0.0)
+        for item in characterization.external_request_classes
+    }
+    response_means = {
+        service.service: service.latency.mean_seconds
+        for service in characterization.services
+    }
+    round_trip_mean = _communication_round_trip_mean(
+        inputs.workload.communication_latency
+    )
+
+    for deployment_service in inputs.workload.services:
+        name = deployment_service.name
+        if name in fitted:
+            assumptions.append(
+                f"{name} uses its explicitly supplied blocking distribution"
+            )
+            continue
+        evidence = characterization.service_map[name]
+        observed_mean = response_means[name]
+        observed_median = evidence.latency.p50_seconds
+        cpu_samples = evidence.observed_cpu_usage_cores_per_replica
+        cpu_mean = _response_aligned_cpu_execution_mean(
+            inputs,
+            name,
+            deployment_service.cpu_capacity_cores,
+        )
+        if observed_mean is None or not cpu_samples or cpu_mean is None:
+            issue = (
+                f"{name} blocking cannot be fitted because aligned response or "
+                "CPU evidence is unavailable"
+            )
+            assumptions.append(issue)
+            model_issues.append(issue)
+            continue
+        maximum_cpu_utilization = max(cpu_samples) / (
+            deployment_service.cpu_capacity_cores
+        )
+        if maximum_cpu_utilization > MAXIMUM_BLOCKING_FIT_CPU_UTILIZATION:
+            issue = (
+                f"{name} blocking cannot be fitted because characterization CPU "
+                f"utilization exceeds {MAXIMUM_BLOCKING_FIT_CPU_UTILIZATION:.0%}"
+            )
+            assumptions.append(issue)
+            model_issues.append(issue)
+            continue
+
+        downstream, downstream_issue = _downstream_response_mean(
+            name,
+            class_calls=class_calls,
+            class_modes=class_modes,
+            visits_by_class=visits_by_class,
+            observed_class_rates=observed_class_rates,
+            service_response_means=response_means,
+            communication_round_trip_mean=round_trip_mean,
+        )
+        if downstream_issue is not None:
+            issue = f"{name} blocking cannot be fitted because {downstream_issue}"
+            assumptions.append(issue)
+            model_issues.append(issue)
+            continue
+        try:
+            residual = estimate_low_load_service_blocking_time(
+                observed_response_mean_seconds=observed_mean,
+                cpu_execution_mean_seconds=cpu_mean,
+                downstream_response_mean_seconds=downstream,
+                communication_round_trip_mean_seconds=0.0,
+                maximum_observed_cpu_utilization=maximum_cpu_utilization,
+                maximum_allowed_cpu_utilization=(MAXIMUM_BLOCKING_FIT_CPU_UTILIZATION),
+            )
+        except ValueError as error:
+            if "boundaries are incompatible" not in str(error):
+                raise
+            issue = (
+                f"{name} blocking cannot be fitted because its latency boundaries "
+                "cannot be separated reliably"
+            )
+            assumptions.append(issue)
+            model_issues.append(issue)
+            continue
+        if residual is None:
+            assumptions.append(
+                f"{name} blocking is omitted because its residual is negligible"
+            )
+            continue
+        if deployment_service.concurrency_limit_per_replica is None:
+            raise ValueError(
+                f"Fitted blocking for service {name!r} requires "
+                f"services.{name}.concurrency_limit_per_replica."
+            )
+
+        is_leaf = not any(
+            calls_by_source.get(name) for calls_by_source in class_calls.values()
+        )
+        blocking = residual
+        treatment = "deterministic_nonleaf_residual"
+        if is_leaf and observed_median is not None:
+            blocking = fit_leaf_blocking_variability(
+                blocking_mean_seconds=residual["mean"],
+                observed_response_median_seconds=observed_median,
+                accounted_median_seconds=cpu_mean,
+            )
+            treatment = (
+                "lognormal_mean_p50_fit"
+                if blocking["distribution"] == "lognormal"
+                else "deterministic_non_skewed_residual"
+            )
+        elif is_leaf:
+            treatment = "deterministic_missing_p50_residual"
+        fitted[name] = blocking
+        assumptions.append(f"{name} blocking uses {treatment}")
+        uncertainty_dimensions.append(
+            UncertaintyDimension(
+                kind="model_form",
+                name=f"{name}.blocking_distribution",
+                treatment=treatment,
+            )
+        )
+    return (
+        fitted,
+        tuple(assumptions),
+        tuple(uncertainty_dimensions),
+        tuple(model_issues),
+    )
+
+
+def _build_characterized_workload_variants(
+    inputs,
+    characterization,
+    *,
+    include_fitted_blocking,
     maximum_ambiguity_variants=64,
     input_uncertainty_block_length=2,
 ):
-    """Build executable workload variants without inventing call semantics.
+    """Build workload variants without inventing call semantics.
 
     Aggregate edge counters reveal call multiplicity but not whether sibling
     calls are sequential or parallel. When the target marks execution as
@@ -246,11 +473,10 @@ def build_simulation_workload_variants(
     ]
     if missing_rates:
         raise ValueError(
-            "Simulation requires a positive measured external arrival rate for "
+            "Characterization requires a positive measured external arrival rate for "
             f"every request class; missing {missing_rates}."
         )
     total_measured_rate = sum(measured_class_rates.values())
-    service_blocking_times = dict(inputs.workload.service_blocking_times)
     joint_uncertainty, joint_service_demand_means = _joint_input_uncertainty(
         characterization,
         block_length=input_uncertainty_block_length,
@@ -310,15 +536,19 @@ def build_simulation_workload_variants(
     variants = []
     for variant_name, uncertain_modes in mode_variants:
         assumptions = []
-        uncertainty_dimensions = [
-            UncertaintyDimension(
-                kind="simulation",
-                name="event_process",
-                treatment="independent_replications",
+        uncertainty_dimensions = []
+        model_issues = []
+        if include_fitted_blocking:
+            uncertainty_dimensions.append(
+                UncertaintyDimension(
+                    kind="simulation",
+                    name="event_process",
+                    treatment="independent_replications",
+                )
             )
-        ]
         request_classes = {}
         entry_services = {}
+        resolved_modes = {}
         for request_class in inputs.workload.request_classes:
             mode = declared_modes[request_class.name]
             if mode == "uncertain":
@@ -332,6 +562,7 @@ def build_simulation_workload_variants(
                         values=(mode,),
                     )
                 )
+            resolved_modes[request_class.name] = mode
             request_classes[request_class.name] = _request_class_specification(
                 request_class,
                 class_calls[request_class.name],
@@ -370,26 +601,38 @@ def build_simulation_workload_variants(
                     if service.concurrency_limit_per_replica is not None
                     else {}
                 ),
-                **(
-                    {
-                        "non_cpu_blocking_time": (
-                            duration_distribution_to_workload_mapping(
-                                service_blocking_times[service.name]
-                            )
-                        )
-                    }
-                    if service.name in service_blocking_times
-                    else {}
-                ),
             }
             for service in inputs.workload.services
         }
+        if include_fitted_blocking:
+            (
+                blocking_times,
+                blocking_assumptions,
+                blocking_uncertainty,
+                blocking_issues,
+            ) = _fit_service_blocking_times(
+                inputs,
+                characterization,
+                class_calls=class_calls,
+                class_modes=resolved_modes,
+                visits_by_class=visits_by_class,
+            )
+            for service_name, blocking_time in blocking_times.items():
+                service_times[service_name]["non_cpu_blocking_time"] = blocking_time
+            assumptions.extend(blocking_assumptions)
+            uncertainty_dimensions.extend(blocking_uncertainty)
+            model_issues.extend(blocking_issues)
+        else:
+            assumptions.append(
+                "non-CPU blocking variability is excluded from the analytical "
+                "model because its finite-concurrency semantics require simulation"
+            )
         if joint_uncertainty is None:
             assumptions.append(
                 "the p90 of aligned U/X windows is used as deterministic CPU work; "
                 "per-request service-demand tails are not observable from counters"
             )
-        else:
+        elif include_fitted_blocking:
             assumptions.append(
                 "aligned arrival-rate and U/X windows are sampled jointly as "
                 "moving blocks once per replication"
@@ -404,6 +647,11 @@ def build_simulation_workload_variants(
                         joint_uncertainty["block_length"],
                     ),
                 )
+            )
+        else:
+            assumptions.append(
+                "aligned arrival-rate and U/X windows are pooled into fixed "
+                "analytical mean inputs"
             )
         if inputs.workload.load_forecast_multipliers != (1.0,):
             assumptions.append(
@@ -449,16 +697,51 @@ def build_simulation_workload_variants(
                         ),
                         **(
                             {"input_uncertainty": joint_uncertainty}
-                            if joint_uncertainty is not None
+                            if include_fitted_blocking and joint_uncertainty is not None
                             else {}
                         ),
                     },
                 },
                 assumptions=tuple(dict.fromkeys(assumptions)),
                 uncertainty_dimensions=tuple(uncertainty_dimensions),
+                model_issues=tuple(dict.fromkeys(model_issues)),
             )
         )
     return tuple(variants)
+
+
+def build_simulation_workload_variants(
+    inputs,
+    characterization,
+    *,
+    maximum_ambiguity_variants=64,
+    input_uncertainty_block_length=2,
+):
+    """Build the sole supported fitted-variability simulation model."""
+    return _build_characterized_workload_variants(
+        inputs,
+        characterization,
+        include_fitted_blocking=True,
+        maximum_ambiguity_variants=maximum_ambiguity_variants,
+        input_uncertainty_block_length=input_uncertainty_block_length,
+    )
+
+
+def build_analytical_workload_variants(
+    inputs,
+    characterization,
+    *,
+    maximum_ambiguity_variants=64,
+    input_uncertainty_block_length=2,
+):
+    """Build the retained CPU queueing model for analytical evaluation."""
+    return _build_characterized_workload_variants(
+        inputs,
+        characterization,
+        include_fitted_blocking=False,
+        maximum_ambiguity_variants=maximum_ambiguity_variants,
+        input_uncertainty_block_length=input_uncertainty_block_length,
+    )
 
 
 def build_characterized_system_variants(
@@ -467,17 +750,41 @@ def build_characterized_system_variants(
     *,
     recommendation=None,
     name="characterized-deployment",
+    evaluation_mode="simulation",
     maximum_ambiguity_variants=64,
     input_uncertainty_block_length=2,
 ):
     """Construct current ``System`` objects for every ambiguity variant."""
-    results = []
-    for variant in build_simulation_workload_variants(
+    if evaluation_mode not in {"analytical", "simulation"}:
+        raise ValueError("evaluation_mode must be analytical or simulation.")
+    builder = (
+        build_simulation_workload_variants
+        if evaluation_mode == "simulation"
+        else build_analytical_workload_variants
+    )
+    variants = builder(
         inputs,
         characterization,
         maximum_ambiguity_variants=maximum_ambiguity_variants,
         input_uncertainty_block_length=input_uncertainty_block_length,
-    ):
+    )
+    if evaluation_mode == "simulation":
+        incomplete = tuple(
+            (variant.name, issue)
+            for variant in variants
+            for issue in variant.model_issues
+        )
+        if incomplete:
+            details = "; ".join(
+                f"{variant_name}: {issue}" for variant_name, issue in incomplete
+            )
+            raise ValueError(
+                "Cannot construct a production simulation from an incomplete "
+                f"fitted-variability model: {details}. Supply explicit blocking "
+                "evidence or collect an eligible low-load characterization."
+            )
+    results = []
+    for variant in variants:
         system = System(name, variant.workload, QueueingNetworkType.OPEN)
         if recommendation is not None:
             order = tuple(

@@ -1,5 +1,9 @@
 # Retained-Data Validation of Richer Simulation Semantics
 
+Historical selected-subset report. The [7 September corrected-code replay](corrected-replay-20260907.md)
+reproduces its classifications but cannot recover excluded experiments. These
+results do not establish unbiased safety or validate the corrected campaign.
+
 ## Conclusion
 
 The new non-CPU blocking mechanism works, but **a blocking mean inferred from

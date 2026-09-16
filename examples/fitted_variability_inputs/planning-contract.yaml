@@ -1,0 +1,37 @@
+# Required planning declarations. These are portable across environments but
+# are a contract supplied by the operator, not values learned from latency.
+sizing_policy:
+  maximum_capacity_utilization: 0.8
+
+request_classes:
+  network_request:
+    end_to_end_latency_slos:
+      mean_seconds: 0.13
+    calls:
+      network-front:
+        network-mid: 1.0
+      network-mid:
+        network-leaf: 1.0
+    call_execution: sequential
+
+traffic_model:
+  entry_services:
+    network_request:
+      network-front:
+        distribution: exponential
+        # Characterization replaces this with the observed request rate;
+        # recommendation evaluation replaces it with the forecast target rate.
+        rate: 10.0
+  service_times:
+    network-front:
+      execution_model: processor_sharing
+      processing_slots_per_replica: 1
+      replica_queue_model: independent_random
+    network-mid:
+      execution_model: processor_sharing
+      processing_slots_per_replica: 1
+      replica_queue_model: independent_random
+    network-leaf:
+      execution_model: processor_sharing
+      processing_slots_per_replica: 1
+      replica_queue_model: independent_random

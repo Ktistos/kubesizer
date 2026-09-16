@@ -366,11 +366,13 @@ def test_simulation_workflow_always_runs_internal_final_validation(monkeypatch):
         workers=1,
         skip_final_validation=False,
     )
+
     def run_calibration(*args, **kwargs):
         observed["minimum_configuration"] = kwargs["minimum_configuration"]
         return profile
 
     monkeypatch.setattr(kubesizer_cli, "_run_calibration", run_calibration)
+
     def optimize(*args, **kwargs):
         return result
 
@@ -499,18 +501,24 @@ def test_portable_workflow_refuses_to_claim_stability_without_capacity_runs(
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 1
     assert output["ok"] is False
-    assert (
-        "No statistically controlled stability floor"
-        in output["error"]["message"]
-    )
+    assert "No statistically controlled stability floor" in output["error"]["message"]
 
 
 def test_portable_measurements_seed_the_internal_simulation_optimizer(
+    tmp_path,
     capsys,
     monkeypatch,
 ):
     evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
     observed = {}
+    with (evidence / "workload.yaml").open(encoding="utf-8") as stream:
+        workload = yaml.safe_load(stream)
+    workload["service_blocking_times"] = {
+        "api": {"distribution": "deterministic", "mean": 0.001},
+        "database": {"distribution": "deterministic", "mean": 0.001},
+    }
+    workload_path = tmp_path / "workload.yaml"
+    workload_path.write_text(yaml.safe_dump(workload), encoding="utf-8")
 
     def run_replica_workflow(
         system,
@@ -534,7 +542,7 @@ def test_portable_measurements_seed_the_internal_simulation_optimizer(
     exit_code = kubesizer_cli.main(
         [
             "--workload",
-            str(evidence / "workload.yaml"),
+            str(workload_path),
             "--measurements",
             str(evidence / "measurements.with-capacity.yaml"),
             "--replica-evaluation",
@@ -550,6 +558,28 @@ def test_portable_measurements_seed_the_internal_simulation_optimizer(
         "request_classes": ("browse",),
         "minimum_configuration": (1, 1),
     }
+
+
+def test_portable_simulation_rejects_an_incomplete_fitted_model(capsys):
+    evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
+
+    exit_code = kubesizer_cli.main(
+        [
+            "--workload",
+            str(evidence / "workload.yaml"),
+            "--measurements",
+            str(evidence / "measurements.with-capacity.yaml"),
+            "--replica-evaluation",
+            "simulation",
+            "--json",
+            "--quiet",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert output["ok"] is False
+    assert "incomplete fitted-variability model" in output["error"]["message"]
 
 
 def test_portable_workflow_uses_statistical_floor_not_legacy_sizing_seed(
@@ -585,11 +615,10 @@ def test_portable_workflow_uses_statistical_floor_not_legacy_sizing_seed(
         workload=str(evidence / "workload.yaml"),
         measurements=str(evidence / "measurements.with-capacity.yaml"),
         max_replicas=4,
+        replica_evaluation="analytical",
     )
 
-    _system, _workload_path, minimum = (
-        kubesizer_cli._load_workflow_system(arguments)
-    )
+    _system, _workload_path, minimum = kubesizer_cli._load_workflow_system(arguments)
 
     assert minimum == (1, 1)
 
@@ -605,11 +634,10 @@ def test_portable_cli_honors_declared_maximum_capacity_utilization(tmp_path):
         workload=str(workload_path),
         measurements=str(evidence / "measurements.with-capacity.yaml"),
         max_replicas=4,
+        replica_evaluation="analytical",
     )
 
-    _system, _path, minimum = kubesizer_cli._load_workflow_system(
-        arguments
-    )
+    _system, _path, minimum = kubesizer_cli._load_workflow_system(arguments)
 
     assert minimum == (2, 2)
 

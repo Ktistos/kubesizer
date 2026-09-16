@@ -55,6 +55,12 @@ def measurement_methodology_contract():
             "metric": "istio_request_duration_milliseconds_bucket",
             "aggregation": "sum_histogram_buckets_before_quantiles",
             "unit_after_normalization": "seconds",
+            "bucket_grid": "identical_per_subject_across_observed_windows",
+            "terminal_bucket": "positive_infinity_required",
+            "count_consistency": (
+                "terminal cumulative count matches completed requests within "
+                "one_percent_or_one_request"
+            ),
         },
         "optional_latency_boundary_components": {
             "external_client": {
@@ -100,15 +106,27 @@ def measurement_methodology_contract():
                 "execution mean, modeled downstream response, and measured "
                 "communication round trips"
             ),
+            "cohort_alignment": (
+                "response mean and CPU execution mean use the same "
+                "response-bearing service interval rows"
+            ),
             "low_load_gate": "maximum observed CPU utilization at most 0.20",
-            "output": "service_blocking_times.<service>",
+            "output": "traffic_model.service_times.<service>.non_cpu_blocking_time",
             "uncertainty": (
-                "the counter-derived result is an inferred mean residual; do "
-                "not claim an empirical tail distribution without paired "
-                "per-request observations"
+                "the counter-derived result is an inferred mean residual; for "
+                "eligible leaf services, mean and p50 parameterize a capped "
+                "lognormal assumption but do not prove that distribution family"
             ),
             "double_counting_rule": (
                 "exclude downstream and communication latency already modeled"
+            ),
+            "parallel_calls": (
+                "aggregate child means cannot identify parent wait for parallel "
+                "calls; explicit blocking evidence is required"
+            ),
+            "failure_semantics": (
+                "production simulation rejects missing, high-load, or "
+                "incompatible blocking evidence instead of assuming zero"
             ),
         },
         "optional_errors": {
@@ -213,6 +231,7 @@ def measurement_methodology_contract():
                 "excessive_5xx_rate",
                 "excessive_cpu_throttling",
                 "load_dependent_extrapolation",
+                "incomplete_simulation_blocking_characterization",
             ],
             "conditional_conditions": [
                 "missing_request_class_arrival_trace",
