@@ -8,7 +8,6 @@ from characterization import (
     SizingPolicy,
     build_analytical_workload_variants,
     build_characterized_system_variants,
-    build_simulation_workload_variants,
     characterize_deployment,
     load_and_prepare_initial_sizing,
     load_portable_sizing_inputs,
@@ -16,7 +15,6 @@ from characterization import (
     parse_portable_sizing_inputs,
     recommend_initial_replicas,
 )
-from native_backend import get_native_backend
 from performance_models import QueueingNetworkType, System
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
@@ -436,30 +434,6 @@ def test_capacity_run_ids_must_be_unique_per_service_and_replica(tmp_path):
         )
 
 
-def test_cpu_demand_is_derived_from_time_aligned_cpu_and_request_counters():
-    manifest = _loaded_yaml("measurements.yaml")
-    inputs = parse_portable_sizing_inputs(
-        _loaded_yaml("workload.yaml"),
-        manifest,
-        base_path=EXAMPLE,
-    )
-
-    characterization = characterize_deployment(inputs)
-
-    assert characterization.service_map[
-        "api"
-    ].cpu_demand_window_means_seconds == pytest.approx((0.0080, 0.0082, 0.0084))
-    assert characterization.service_map[
-        "database"
-    ].cpu_demand_window_means_seconds == pytest.approx(
-        (28.1 / 7200, 28.8 / 7200, 30.2 / 7200)
-    )
-    variants = build_simulation_workload_variants(inputs, characterization)
-    assert "aligned arrival-rate and U/X windows" in " ".join(variants[0].assumptions)
-    assert variants[0].model_complete is False
-    assert variants[0].model_issues
-
-
 def test_optional_evidence_can_be_omitted_without_blocking_initial_sizing():
     manifest = {
         "measurement_id": "minimal-observation",
@@ -505,30 +479,6 @@ def test_sizing_is_idempotent_and_workload_semantics_change_the_fingerprint():
     assert characterize_deployment(changed).rate_source == "measured_workload"
 
 
-def test_portable_workflow_preserves_clustered_latency_overhead_evidence():
-    target = _loaded_yaml("workload.yaml")
-    target["request_classes"]["browse"]["latency_overhead"] = {
-        "distribution": "empirical",
-        "clusters": [[0.01, 0.02], [0.10, 0.20]],
-        "sampling": "cluster_bootstrap",
-    }
-    inputs = parse_portable_sizing_inputs(
-        target,
-        _loaded_yaml("measurements.yaml"),
-        base_path=EXAMPLE,
-    )
-    characterization = characterize_deployment(inputs)
-
-    (variant,) = build_simulation_workload_variants(inputs, characterization)
-    overhead = variant.workload["request_classes"]["browse"]["latency_overhead"]
-
-    assert overhead == {
-        "distribution": "empirical",
-        "clusters": [[0.01, 0.02], [0.1, 0.2]],
-        "sampling": "cluster_bootstrap",
-    }
-
-
 def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
     target = _loaded_yaml("workload.yaml")
     target["request_classes"]["browse"].pop("calls")
@@ -544,98 +494,6 @@ def test_measured_workload_uses_observed_rates_with_inferred_service_visits():
     assert result.rate_source == "measured_workload"
     assert result.service_map["api"].workload_arrival_rate_rps == pytest.approx(20)
     assert result.service_map["database"].workload_arrival_rate_rps == pytest.approx(24)
-
-
-def test_simulation_builder_uses_safe_aligned_demand_and_declared_call_semantics():
-    inputs = _inputs()
-    characterization = characterize_deployment(inputs)
-    variants = build_simulation_workload_variants(inputs, characterization)
-
-    assert [variant.name for variant in variants] == ["declared"]
-    workload = variants[0].workload
-    assert workload["request_classes"]["browse"]["call_execution"] == "sequential"
-    assert workload["request_classes"]["browse"]["calls"] == {"api": {"database": 1.2}}
-    api_distribution = workload["traffic_model"]["service_times"]["api"]
-    assert api_distribution["distribution"] == "deterministic"
-    assert api_distribution["mean"] == pytest.approx(0.0082 / 0.5)
-    assert (
-        workload["traffic_model"]["service_times"]["api"]["execution_model"]
-        == "processor_sharing"
-    )
-    system = System(
-        "measured-workload",
-        workload,
-        QueueingNetworkType.OPEN,
-    )
-    assert system.get_service_replica_queue_models()["api"] == (
-        "independent_round_robin"
-    )
-    arrival = workload["traffic_model"]["entry_services"]["browse"]["api"]
-    assert arrival["distribution"] == "arrival_trace"
-    assert arrival["sampling"] == "block_bootstrap"
-    assert workload["traffic_model"]["input_uncertainty"]["sampling"] == (
-        "moving_block_bootstrap"
-    )
-    epochs = workload["traffic_model"]["input_uncertainty"]["epochs"]
-    assert len(epochs) == len(characterization.aligned_input_windows)
-    assert epochs[0]["arrival_rate_multipliers"]["browse"] == pytest.approx(1.0)
-    assert epochs[0]["service_time_multipliers"]["api"] == pytest.approx(
-        0.0080 / 0.0082
-    )
-
-
-def test_declared_load_forecast_certifies_the_maximum_measured_load():
-    target = _loaded_yaml("workload.yaml")
-    target["load_forecast"] = {"multipliers": [1.0, 1.25, 1.5]}
-    inputs = parse_portable_sizing_inputs(
-        target,
-        _loaded_yaml("measurements.yaml"),
-        base_path=EXAMPLE,
-    )
-    characterization = characterize_deployment(inputs)
-    (variant,) = build_simulation_workload_variants(inputs, characterization)
-    ((_, system),) = build_characterized_system_variants(
-        inputs,
-        characterization,
-        evaluation_mode="analytical",
-    )
-
-    assert characterization.rate_source == "measured_workload_forecast_upper_bound"
-    assert characterization.service_map["api"].workload_arrival_rate_rps == (
-        pytest.approx(30.0)
-    )
-    assert characterization.service_map["database"].workload_arrival_rate_rps == (
-        pytest.approx(36.0)
-    )
-    assert system.get_external_arrival_distribution_specs()["browse"]["api"].rate == (
-        pytest.approx(30.0)
-    )
-    assert any(
-        item.kind == "forecast"
-        and item.treatment == "upper_envelope_certification"
-        and item.values == (1.0, 1.25, 1.5)
-        for item in variant.uncertainty_dimensions
-    )
-
-
-def test_portable_workload_preserves_a_declared_service_pool_limit():
-    workload = _loaded_yaml("workload.yaml")
-    workload["services"]["api"]["concurrency_limit_per_replica"] = 17
-    inputs = parse_portable_sizing_inputs(
-        workload,
-        _loaded_yaml("measurements.yaml"),
-        base_path=EXAMPLE,
-    )
-    characterization = characterize_deployment(inputs)
-    (variant,) = build_simulation_workload_variants(inputs, characterization)
-
-    assert inputs.workload.services[0].concurrency_limit_per_replica == 17
-    assert (
-        variant.workload["traffic_model"]["service_times"]["api"][
-            "concurrency_limit_per_replica"
-        ]
-        == 17
-    )
 
 
 def _low_load_leaf_blocking_inputs(
@@ -666,37 +524,6 @@ def _low_load_leaf_blocking_inputs(
     return parse_portable_sizing_inputs(workload, manifest, base_path=EXAMPLE)
 
 
-def test_simulation_builder_fits_leaf_blocking_variability_from_low_load_evidence(
-    tmp_path,
-):
-    inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=True)
-    characterization = characterize_deployment(inputs)
-
-    (variant,) = build_simulation_workload_variants(inputs, characterization)
-
-    blocking = variant.workload["traffic_model"]["service_times"]["database"][
-        "non_cpu_blocking_time"
-    ]
-    assert blocking["distribution"] == "lognormal"
-    assert blocking["mean"] > 0.0
-    assert blocking["scv"] > 0.0
-    assert any(
-        "database blocking uses lognormal_mean_p50_fit" in assumption
-        for assumption in variant.assumptions
-    )
-
-
-def test_fitted_blocking_requires_declared_service_concurrency(tmp_path):
-    inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=False)
-    characterization = characterize_deployment(inputs)
-
-    with pytest.raises(
-        ValueError,
-        match=r"services\.database\.concurrency_limit_per_replica",
-    ):
-        build_simulation_workload_variants(inputs, characterization)
-
-
 def test_analytical_characterization_remains_available_without_fitted_blocking(
     tmp_path,
 ):
@@ -715,187 +542,16 @@ def test_analytical_characterization_remains_available_without_fitted_blocking(
     ((_, system),) = build_characterized_system_variants(
         inputs,
         characterization,
-        evaluation_mode="analytical",
     )
     assert system.get_strict_analytical_incompatibilities() == ()
 
 
-def test_characterized_system_executes_in_mandatory_native_backend():
-    workload = _loaded_yaml("workload.yaml")
-    workload["service_blocking_times"] = {
-        "api": {"distribution": "deterministic", "mean": 0.001},
-        "database": {"distribution": "deterministic", "mean": 0.001},
-    }
-    inputs = parse_portable_sizing_inputs(
-        workload,
-        _loaded_yaml("measurements.yaml"),
-        base_path=EXAMPLE,
-    )
-    characterization = characterize_deployment(inputs)
-    recommendation = recommend_initial_replicas(inputs, characterization)
-    ((variant, system),) = build_characterized_system_variants(
-        inputs,
-        characterization,
-        recommendation=recommendation,
-    )
-
-    assert variant.name == "declared"
-    payload = get_native_backend().serialize_system(system)
-    assert [item["replicas"] for item in payload["services"]] == [1, 1]
-    assert all(
-        item["execution_model"] == "processor_sharing" for item in payload["services"]
-    )
-    replication = system.simulate_measurement_replications(
-        warmup_duration=0.1,
-        measurement_duration=0.2,
-        seeds=(101,),
-        workers=1,
-        maximum_drain_time=2.0,
-    )[0]
-    assert replication.measured_request_counts["browse"] >= 0
-    assert replication.tagged_requests_in_flight_at_end == 0
-
-
-def test_incomplete_fitted_model_cannot_construct_a_production_system():
+def test_analytical_builder_does_not_require_simulation_blocking_fit():
     inputs = _inputs()
     characterization = characterize_deployment(inputs)
 
-    with pytest.raises(ValueError, match="incomplete fitted-variability model"):
-        build_characterized_system_variants(inputs, characterization)
-
-
-def test_parallel_downstream_means_do_not_fabricate_parent_blocking(tmp_path):
-    inputs = _low_load_leaf_blocking_inputs(
-        tmp_path,
-        declare_concurrency=True,
-        call_execution="parallel",
-    )
-    characterization = characterize_deployment(inputs)
-
-    (variant,) = build_simulation_workload_variants(inputs, characterization)
-
-    assert any(
-        "api blocking cannot be fitted because parallel downstream duration" in issue
-        for issue in variant.model_issues
-    )
-
-
-def test_blocking_residual_uses_request_weighted_cpu_demand(tmp_path):
-    rows = (EXAMPLE / "service-intervals.csv").read_text(encoding="utf-8").splitlines()
-    header = rows[0].split(",")
-    service_index = header.index("service")
-    request_index = header.index("request_count")
-    cpu_index = header.index("cpu_seconds")
-    response_index = header.index("response_duration_sum_seconds")
-    database_values = iter(
-        (
-            (7200.0, 0.72),
-            (14400.0, 2.88),
-            (28800.0, 11.52),
-        )
-    )
-    rewritten = [rows[0]]
-    for row in rows[1:]:
-        fields = row.split(",")
-        if fields[service_index] == "database":
-            requests, cpu_seconds = next(database_values)
-            fields[request_index] = str(requests)
-            fields[cpu_index] = str(cpu_seconds)
-            fields[response_index] = str(0.01 * requests)
-        rewritten.append(",".join(fields))
-    service_intervals = tmp_path / "weighted-service-intervals.csv"
-    service_intervals.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
-
-    workload = _loaded_yaml("workload.yaml")
-    workload["services"]["api"]["concurrency_limit_per_replica"] = 8
-    workload["services"]["database"]["concurrency_limit_per_replica"] = 8
-    manifest = _loaded_yaml("measurements.yaml")
-    manifest["service_intervals"] = str(service_intervals)
-    inputs = parse_portable_sizing_inputs(workload, manifest, base_path=EXAMPLE)
-    characterization = characterize_deployment(inputs)
-
-    (variant,) = build_simulation_workload_variants(inputs, characterization)
-
-    blocking = variant.workload["traffic_model"]["service_times"]["database"][
-        "non_cpu_blocking_time"
-    ]
-    pooled_cpu_execution = (0.72 + 2.88 + 11.52) / (7200.0 + 14400.0 + 28800.0) / 0.25
-    assert blocking["mean"] == pytest.approx(0.01 - pooled_cpu_execution)
-
-
-def test_inferred_edge_ordering_returns_explicit_sequential_and_parallel_variants():
-    target = _loaded_yaml("workload.yaml")
-    target["request_classes"]["browse"].pop("calls")
-    target["request_classes"]["browse"].pop("call_execution")
-    inputs = parse_portable_sizing_inputs(
-        target,
-        _loaded_yaml("measurements.yaml"),
-        base_path=EXAMPLE,
-    )
-    characterization = characterize_deployment(inputs)
-
-    variants = build_simulation_workload_variants(inputs, characterization)
-
-    assert [variant.name for variant in variants] == [
-        "browse-sequential",
-        "browse-parallel",
-    ]
-    assert {
-        variant.workload["request_classes"]["browse"]["call_execution"]
-        for variant in variants
-    } == {"sequential", "parallel"}
-
-
-def test_ambiguity_variant_budget_fails_instead_of_sampling_semantics():
-    target = _loaded_yaml("workload.yaml")
-    target["request_classes"]["browse"]["call_execution"] = "uncertain"
-    inputs = parse_portable_sizing_inputs(
-        target,
-        _loaded_yaml("measurements.yaml"),
-        base_path=EXAMPLE,
-    )
-    characterization = characterize_deployment(inputs)
-
-    with pytest.raises(ValueError, match="2 ambiguity variants"):
-        build_simulation_workload_variants(
-            inputs,
-            characterization,
-            maximum_ambiguity_variants=1,
-        )
-
-
-def test_invalid_histogram_and_missing_simulation_rate_fail_clearly(tmp_path):
-    histogram = tmp_path / "hist.csv"
-    histogram.write_text(
-        "start,end,service,upper_bound_seconds,cumulative_count\n"
-        "0,10,api,0.1,10\n"
-        "0,10,api,0.2,9\n",
-        encoding="utf-8",
-    )
-    manifest = _loaded_yaml("measurements.yaml")
-    manifest["service_latency_histograms"] = str(histogram)
-    with pytest.raises(ValueError, match="cumulative counts decrease"):
-        parse_portable_sizing_inputs(
-            _loaded_yaml("workload.yaml"),
-            manifest,
-            base_path=EXAMPLE,
-        )
-
-    target = copy.deepcopy(_loaded_yaml("workload.yaml"))
-    target["request_classes"]["browse"].pop("calls")
-    target["request_classes"]["browse"].pop("call_execution")
-    manifest = _loaded_yaml("measurements.yaml")
-    manifest.pop("service_edges")
-    manifest.pop("external_intervals")
-    manifest.pop("external_latency_histograms")
-    inputs = parse_portable_sizing_inputs(
-        target,
-        manifest,
-        base_path=EXAMPLE,
-    )
-    characterization = characterize_deployment(inputs)
-    with pytest.raises(ValueError, match="positive measured external arrival rate"):
-        build_simulation_workload_variants(inputs, characterization)
+    ((_, system),) = build_characterized_system_variants(inputs, characterization)
+    assert system.get_strict_analytical_incompatibilities() == ()
 
 
 def test_histograms_reject_duplicate_buckets(tmp_path):

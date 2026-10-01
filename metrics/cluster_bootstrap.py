@@ -133,10 +133,9 @@ def _weighted_order_statistics(
         candidates = pooled_values[middle]
         counts = np.zeros(len(ranks), dtype=np.int64)
         for cluster_index, cluster in enumerate(sorted_clusters):
-            counts += (
-                multiplicities[:, cluster_index].astype(np.int64)
-                * np.searchsorted(cluster, candidates, side="right")
-            )
+            counts += multiplicities[:, cluster_index].astype(
+                np.int64
+            ) * np.searchsorted(cluster, candidates, side="right")
         rank_found = counts > ranks
         high = np.where(rank_found, middle, high)
         low = np.where(rank_found, low, middle + 1)
@@ -209,10 +208,9 @@ def _weighted_bootstrap_p95(
         upper_ranks,
         pooled_values,
     )
-    bootstrap_values = (
-        lower_values * (1.0 - weights) + upper_values * weights
-    )
+    bootstrap_values = lower_values * (1.0 - weights) + upper_values * weights
     return pooled_values, tuple(float(value) for value in bootstrap_values)
+
 
 def replication_cluster_bootstrap_p95(
     latency_clusters,
@@ -235,17 +233,14 @@ def replication_cluster_bootstrap_p95(
     if any(cluster.ndim != 1 for cluster in clusters):
         raise ValueError("Every latency cluster must be one-dimensional.")
     if any(
-        np.any(~np.isfinite(cluster)) or np.any(cluster < 0)
-        for cluster in clusters
+        np.any(~np.isfinite(cluster)) or np.any(cluster < 0) for cluster in clusters
     ):
         raise ValueError("Latency clusters must be finite and non-negative.")
     if sum(len(cluster) for cluster in clusters) == 0:
         raise ValueError("Cluster bootstrap requires at least one latency.")
     if not math.isfinite(float(slo)) or float(slo) <= 0:
         raise ValueError("slo must be finite and positive.")
-    if (
-        not 0 < lower_tail_probability < upper_tail_probability < 1
-    ):
+    if not 0 < lower_tail_probability < upper_tail_probability < 1:
         raise ValueError("Bootstrap interval probabilities are invalid.")
     if (
         isinstance(resample_count, bool)
@@ -259,10 +254,13 @@ def replication_cluster_bootstrap_p95(
         or minimum_tail_draws <= 0
     ):
         raise ValueError("minimum_tail_draws must be a positive integer.")
-    tail_resolution = min(
-        lower_tail_probability,
-        1.0 - upper_tail_probability,
-    ) * resample_count
+    tail_resolution = (
+        min(
+            lower_tail_probability,
+            1.0 - upper_tail_probability,
+        )
+        * resample_count
+    )
     if tail_resolution < minimum_tail_draws:
         raise ValueError(
             "Bootstrap resample count is insufficient for the requested tail "
@@ -294,9 +292,7 @@ def replication_cluster_bootstrap_p95(
         upper_bound=upper,
         half_width=half_width,
         relative_half_width=(
-            half_width / point
-            if point
-            else (0.0 if half_width == 0 else math.inf)
+            half_width / point if point else (0.0 if half_width == 0 else math.inf)
         ),
         lower_tail_probability=lower_tail_probability,
         upper_tail_probability=upper_tail_probability,
@@ -327,8 +323,7 @@ def replication_cluster_bootstrap_mean(
     if any(cluster.ndim != 1 for cluster in clusters):
         raise ValueError("Every latency cluster must be one-dimensional.")
     if any(
-        np.any(~np.isfinite(cluster)) or np.any(cluster < 0)
-        for cluster in clusters
+        np.any(~np.isfinite(cluster)) or np.any(cluster < 0) for cluster in clusters
     ):
         raise ValueError("Latency clusters must be finite and non-negative.")
     total_count = sum(len(cluster) for cluster in clusters)
@@ -350,10 +345,13 @@ def replication_cluster_bootstrap_mean(
         or minimum_tail_draws <= 0
     ):
         raise ValueError("minimum_tail_draws must be a positive integer.")
-    tail_resolution = min(
-        lower_tail_probability,
-        1.0 - upper_tail_probability,
-    ) * resample_count
+    tail_resolution = (
+        min(
+            lower_tail_probability,
+            1.0 - upper_tail_probability,
+        )
+        * resample_count
+    )
     if tail_resolution < minimum_tail_draws:
         raise ValueError(
             "Bootstrap resample count is insufficient for the requested tail "
@@ -371,8 +369,7 @@ def replication_cluster_bootstrap_mean(
     ).astype(np.int64)
     bootstrap_counts = multiplicities @ cluster_sizes
     bootstrap_values = tuple(
-        float(value)
-        for value in (multiplicities @ cluster_sums) / bootstrap_counts
+        float(value) for value in (multiplicities @ cluster_sums) / bootstrap_counts
     )
     point = sum(cluster_sums) / total_count
     lower = percentile(bootstrap_values, lower_tail_probability)
@@ -392,9 +389,7 @@ def replication_cluster_bootstrap_mean(
         upper_bound=upper,
         half_width=half_width,
         relative_half_width=(
-            half_width / point
-            if point
-            else (0.0 if half_width == 0 else math.inf)
+            half_width / point if point else (0.0 if half_width == 0 else math.inf)
         ),
         lower_tail_probability=lower_tail_probability,
         upper_tail_probability=upper_tail_probability,
@@ -419,7 +414,10 @@ def replication_cluster_bootstrap_rate(
     clusters = tuple(tuple(cluster) for cluster in failure_clusters)
     if len(clusters) < 2:
         raise ValueError("Cluster bootstrap requires at least two replications.")
-    if any(any(value not in (False, True, 0, 1) for value in cluster) for cluster in clusters):
+    if any(
+        any(value not in (False, True, 0, 1) for value in cluster)
+        for cluster in clusters
+    ):
         raise ValueError("Failure clusters must contain only binary outcomes.")
     sizes = np.asarray([len(cluster) for cluster in clusters], dtype=np.int64)
     total = int(np.sum(sizes))
@@ -443,10 +441,13 @@ def replication_cluster_bootstrap_rate(
         or minimum_tail_draws <= 0
     ):
         raise ValueError("minimum_tail_draws must be a positive integer.")
-    tail_resolution = min(
-        lower_tail_probability,
-        1.0 - upper_tail_probability,
-    ) * resample_count
+    tail_resolution = (
+        min(
+            lower_tail_probability,
+            1.0 - upper_tail_probability,
+        )
+        * resample_count
+    )
     if tail_resolution < minimum_tail_draws:
         raise ValueError(
             "Bootstrap resample count is insufficient for the requested tail "
@@ -463,8 +464,7 @@ def replication_cluster_bootstrap_rate(
     bootstrap_totals = multiplicities @ sizes
     bootstrap_failures = multiplicities @ failures
     bootstrap_values = tuple(
-        float(value)
-        for value in bootstrap_failures / bootstrap_totals
+        float(value) for value in bootstrap_failures / bootstrap_totals
     )
     point = int(np.sum(failures)) / total
     lower = percentile(bootstrap_values, lower_tail_probability)

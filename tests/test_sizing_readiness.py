@@ -10,7 +10,6 @@ from characterization import (
     LatencySummary,
     RecommendationReadiness,
     assess_initial_sizing_risk,
-    build_simulation_workload_variants,
     characterize_deployment,
     load_and_prepare_initial_sizing,
     load_portable_sizing_inputs,
@@ -133,24 +132,3 @@ def test_inferred_edges_are_explicit_structural_uncertainty_not_a_hidden_claim()
 
     assert "CALL_ORDER_INFERRED" in {item.code for item in risk.findings}
     assert risk.readiness is RecommendationReadiness.CONDITIONAL
-
-
-def test_unattributed_multi_entry_trace_is_not_duplicated_across_entries():
-    inputs, characterization, recommendation = _evidence()
-    request_class = replace(
-        inputs.workload.request_classes[0],
-        entry_service_weights=(("api", 0.5), ("database", 0.5)),
-    )
-    inputs = replace(
-        inputs,
-        workload=replace(inputs.workload, request_classes=(request_class,)),
-    )
-
-    (variant,) = build_simulation_workload_variants(inputs, characterization)
-    streams = variant.workload["traffic_model"]["entry_services"]["browse"]
-    risk = assess_initial_sizing_risk(inputs, characterization, recommendation)
-
-    assert {item["distribution"] for item in streams.values()} == {"exponential"}
-    assert "MULTI_ENTRY_TRACE_ATTRIBUTION_UNAVAILABLE" in {
-        item.code for item in risk.findings
-    }

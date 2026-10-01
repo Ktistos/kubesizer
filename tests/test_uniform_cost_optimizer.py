@@ -1,15 +1,6 @@
 from types import SimpleNamespace
 
-import pytest
-
-import statistical_workflow
-from metrics import Metrics
-from optimization import (
-    CalibratedReplicaSizingProblem,
-    GraphSearchProblem,
-    SimulationClassification,
-    UniformCostReplicaOptimizer,
-)
+from optimization import GraphSearchProblem, UniformCostReplicaOptimizer
 
 
 class SearchProblem(GraphSearchProblem):
@@ -112,18 +103,12 @@ def test_lower_cost_inconclusive_state_prevents_a_proven_minimum_claim():
             "goal": (),
         },
         {
-            "start": evaluation(
-                classification=SimulationClassification.STATISTICALLY_INFEASIBLE
-            ),
-            "uncertain": evaluation(
-                classification=SimulationClassification.INCONCLUSIVE
-            ),
-            "bridge": evaluation(
-                classification=SimulationClassification.STATISTICALLY_INFEASIBLE
-            ),
+            "start": evaluation(classification="INFEASIBLE"),
+            "uncertain": evaluation(classification="INCONCLUSIVE"),
+            "bridge": evaluation(classification="INFEASIBLE"),
             "goal": evaluation(
                 feasible=True,
-                classification=SimulationClassification.STATISTICALLY_FEASIBLE,
+                classification="FEASIBLE",
             ),
         },
     )
@@ -144,15 +129,11 @@ def test_definitively_infeasible_lower_states_preserve_minimality_proof():
             "goal": (),
         },
         {
-            "start": evaluation(
-                classification=SimulationClassification.STATISTICALLY_INFEASIBLE
-            ),
-            "infeasible": evaluation(
-                classification=SimulationClassification.STATISTICALLY_INFEASIBLE
-            ),
+            "start": evaluation(classification="INFEASIBLE"),
+            "infeasible": evaluation(classification="INFEASIBLE"),
             "goal": evaluation(
                 feasible=True,
-                classification=SimulationClassification.STATISTICALLY_FEASIBLE,
+                classification="FEASIBLE",
             ),
         },
     )
@@ -161,129 +142,3 @@ def test_definitively_infeasible_lower_states_preserve_minimality_proof():
 
     assert result.minimality_proven
     assert result.unresolved_lower_cost_states == ()
-
-
-class FakeService:
-    def __init__(self, rate):
-        self.rate = rate
-
-    def get_mu(self):
-        return self.rate
-
-
-class OrderingSystem:
-    def __init__(self):
-        self.configuration = (1, 1)
-        self.services = {
-            "busy": FakeService(10.0),
-            "light": FakeService(10.0),
-        }
-
-    def get_services(self):
-        return self.services
-
-    def configure_system_replicas(self, configuration):
-        self.configuration = tuple(configuration)
-
-    def solve(self):
-        utilization = (
-            8.0 / (10.0 * self.configuration[0]),
-            2.0 / (10.0 * self.configuration[1]),
-        )
-        return Metrics(utilization, (0.1, 0.1), True)
-
-
-def test_calibrated_problem_orders_equal_cost_states_by_bottleneck_utilization():
-    problem = CalibratedReplicaSizingProblem(
-        OrderingSystem(),
-        SimpleNamespace(
-            minimum_replica_configuration=(1, 1),
-            maximum_replica_configuration=(3, 3),
-        ),
-        evaluator=object(),
-    )
-
-    assert problem.search_tie_breaker((2, 1)) == pytest.approx(0.4)
-    assert problem.search_tie_breaker((1, 2)) == pytest.approx(0.8)
-
-
-def test_public_calibrated_workflow_uses_uniform_cost_by_default(monkeypatch):
-    raw_result = SimpleNamespace(
-        configuration=(2,),
-        cost=1.0,
-        metrics=object(),
-        explored_states=2,
-        path=((1,), (2,)),
-        minimality_proven=False,
-        unresolved_lower_cost_states=((1,),),
-    )
-    calls = []
-
-    class FakeProblem:
-        def __init__(self, *_args, **_kwargs):
-            self.configuration_evaluations = {(1,): "inconclusive", (2,): "feasible"}
-
-    class FakeUniformCost:
-        def __init__(self, **_kwargs):
-            pass
-
-        def optimize(self, problem):
-            calls.append(problem)
-            return raw_result
-
-    monkeypatch.setattr(
-        statistical_workflow,
-        "validate_profile_for_experiment",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        statistical_workflow,
-        "CalibratedReplicaSizingProblem",
-        FakeProblem,
-    )
-    monkeypatch.setattr(
-        statistical_workflow,
-        "UniformCostReplicaOptimizer",
-        FakeUniformCost,
-    )
-    profile = SimpleNamespace(
-        slos={"checkout": 1.0},
-        minimum_replica_configuration=(1,),
-        maximum_replica_configuration=(2,),
-        profile_fingerprint="profile",
-    )
-
-    system = object()
-
-    class Certificate:
-        status = SimpleNamespace(value="VALIDATED")
-        certificate_fingerprint = "predictive-certificate"
-
-        def assert_valid_for(self, supplied_system):
-            assert supplied_system is system
-
-    result = statistical_workflow.optimize_with_calibrated_simulation(
-        system,
-        profile,
-        predictive_validation=Certificate(),
-        require_predictive_validation=True,
-    )
-
-    assert len(calls) == 1
-    assert result.configuration == (2,)
-    assert not result.minimality_proven
-    assert result.unresolved_lower_cost_states == ((1,),)
-    assert result.predictive_validation_status == "VALIDATED"
-    assert (
-        result.predictive_validation_certificate_fingerprint
-        == "predictive-certificate"
-    )
-
-
-def test_simulation_recommendation_can_require_predictive_validation():
-    with pytest.raises(ValueError, match="predictive-validation certificate"):
-        statistical_workflow.optimize_with_calibrated_simulation(
-            object(),
-            object(),
-            require_predictive_validation=True,
-        )

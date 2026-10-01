@@ -10,16 +10,26 @@ import numpy as np
 
 from metrics import student_t_quantile
 
+from .latency import client_to_entry_mean_component
 from .models import (
     AlignedInputWindow,
     CapacityEnvelopePoint,
     DeploymentCharacterization,
     ExternalRequestClassCharacterization,
+    LatencyBoundaryCharacterization,
     LatencySummary,
     ServiceCharacterization,
 )
 
 CAPACITY_ENVELOPE_CONFIDENCE_LEVEL = 0.95
+MINIMUM_BOUNDARY_LATENCY_WINDOWS = 3
+BOUNDARY_LATENCY_DIFFERENCE_TOLERANCE_SECONDS = 0.001
+BOUNDARY_LATENCY_MAXIMUM_CV = 0.20
+BOUNDARY_LATENCY_MAXIMUM_RELATIVE_RANGE = 0.50
+BOUNDARY_LATENCY_MAXIMUM_ERROR_RATE = 0.01
+BOUNDARY_LATENCY_COUNT_RELATIVE_TOLERANCE = 0.05
+BOUNDARY_LATENCY_COUNT_ABSOLUTE_TOLERANCE = 1.0
+BOUNDARY_LATENCY_MINIMUM_MATCHED_WINDOW_FRACTION = 0.80
 
 
 def _quantile(values, probability):
@@ -79,16 +89,12 @@ def _capacity_envelope(observations):
                         CAPACITY_ENVELOPE_CONFIDENCE_LEVEL,
                     )
                 ),
-                lower_bound_confidence_level=(
-                    CAPACITY_ENVELOPE_CONFIDENCE_LEVEL
-                ),
+                lower_bound_confidence_level=(CAPACITY_ENVELOPE_CONFIDENCE_LEVEL),
                 minimum_healthy_completed_rate_rps=(
                     min(completed) if completed else None
                 ),
                 maximum_healthy_offered_rate_rps=(
-                    max(item.offered_rate_rps for item in healthy)
-                    if healthy
-                    else None
+                    max(item.offered_rate_rps for item in healthy) if healthy else None
                 ),
                 minimum_unhealthy_offered_rate_rps=(
                     min(item.offered_rate_rps for item in unhealthy)
@@ -145,6 +151,272 @@ def _latency_summary(histograms, interval_rows):
         p90_seconds=_histogram_quantile(histograms, 0.90),
         p95_seconds=_histogram_quantile(histograms, 0.95),
         p99_seconds=_histogram_quantile(histograms, 0.99),
+    )
+
+
+def _boundary_latency_result(
+    status,
+    *,
+    component_name=None,
+    mean_seconds=None,
+    window_mean_seconds=(),
+    candidate_window_count=0,
+    excluded_window_count=0,
+    coefficient_of_variation=None,
+    method=None,
+    reason=None,
+):
+    return LatencyBoundaryCharacterization(
+        status=status,
+        component_name=component_name,
+        mean_seconds=mean_seconds,
+        window_mean_seconds=tuple(window_mean_seconds),
+        candidate_window_count=candidate_window_count,
+        excluded_window_count=excluded_window_count,
+        coefficient_of_variation=coefficient_of_variation,
+        method=method,
+        reason=reason,
+    )
+
+
+def _counts_match(left, right):
+    return math.isclose(
+        float(left),
+        float(right),
+        rel_tol=BOUNDARY_LATENCY_COUNT_RELATIVE_TOLERANCE,
+        abs_tol=BOUNDARY_LATENCY_COUNT_ABSOLUTE_TOLERANCE,
+    )
+
+
+def _characterize_boundary_latency(inputs, request_class):
+    """Infer a mean-only external-client component from aligned counters.
+
+    The service response duration is inclusive of the application entry and
+    its downstream work. Subtracting it from the matched external duration
+    therefore isolates only the boundary outside the modeled service graph.
+    Aggregate means identify no per-request tail distribution, so percentile
+    SLOs deliberately require an explicitly measured component distribution.
+    """
+    explicit_mean = request_class.fixed_latency_overhead_seconds
+    if (
+        request_class.latency_components
+        or request_class.latency_overhead_distribution is not None
+        or explicit_mean > 0.0
+    ):
+        return _boundary_latency_result(
+            "explicit",
+            mean_seconds=explicit_mean,
+            method="workload_declaration",
+        )
+    if request_class.latency_boundary != "external_client":
+        return _boundary_latency_result("not_applicable")
+    latency_slo = dict(request_class.latency_slo or ())
+    if "percentile" in latency_slo:
+        return _boundary_latency_result(
+            "unavailable",
+            reason=(
+                "aggregate external and entry means cannot identify a boundary "
+                "latency distribution for a percentile SLO; supply paired "
+                "samples or an explicit latency component distribution"
+            ),
+        )
+    if "mean_seconds" not in latency_slo:
+        return _boundary_latency_result(
+            "not_applicable",
+            reason=("automatic boundary fitting is only needed for a mean latency SLO"),
+        )
+
+    external = defaultdict(
+        lambda: {"count": 0.0, "duration": 0.0, "errors": 0.0, "complete": True}
+    )
+    for row in inputs.measurements.external_intervals:
+        if row.request_class != request_class.name:
+            continue
+        key = (row.start, row.end)
+        external[key]["count"] += row.request_count
+        external[key]["errors"] += row.errors_4xx + row.errors_5xx
+        if row.response_duration_sum_seconds is None:
+            external[key]["complete"] = False
+        else:
+            external[key]["duration"] += row.response_duration_sum_seconds
+
+    entries = set(request_class.entry_services)
+    entry = defaultdict(
+        lambda: {"count": 0.0, "duration": 0.0, "errors": 0.0, "complete": True}
+    )
+    entry_by_service = defaultdict(float)
+    for row in inputs.measurements.service_intervals:
+        if row.service not in entries:
+            continue
+        key = (row.start, row.end)
+        entry[key]["count"] += row.request_count
+        entry[key]["errors"] += row.errors_4xx + row.errors_5xx
+        entry_by_service[(row.start, row.end, row.service)] += row.request_count
+        if row.response_duration_sum_seconds is None:
+            entry[key]["complete"] = False
+        else:
+            entry[key]["duration"] += row.response_duration_sum_seconds
+
+    candidate_windows = tuple(
+        sorted(
+            key
+            for key in set(external) & set(entry)
+            if external[key]["count"] > 0.0 and entry[key]["count"] > 0.0
+        )
+    )
+    if len(candidate_windows) < MINIMUM_BOUNDARY_LATENCY_WINDOWS:
+        return _boundary_latency_result(
+            "unavailable",
+            candidate_window_count=len(candidate_windows),
+            reason=(
+                "client-to-entry inference requires at least "
+                f"{MINIMUM_BOUNDARY_LATENCY_WINDOWS} common positive observation "
+                "windows with external and entry-service latency sums"
+            ),
+        )
+    windows = tuple(
+        key
+        for key in candidate_windows
+        if _counts_match(external[key]["count"], entry[key]["count"])
+    )
+    excluded_window_count = len(candidate_windows) - len(windows)
+    if (
+        len(windows) < MINIMUM_BOUNDARY_LATENCY_WINDOWS
+        or len(windows) / len(candidate_windows)
+        < BOUNDARY_LATENCY_MINIMUM_MATCHED_WINDOW_FRACTION
+    ):
+        return _boundary_latency_result(
+            "unavailable",
+            candidate_window_count=len(candidate_windows),
+            excluded_window_count=excluded_window_count,
+            reason=(
+                "too few external and entry-service windows have aligned "
+                "completed-request counts"
+            ),
+        )
+    if any(not external[key]["complete"] for key in windows):
+        return _boundary_latency_result(
+            "unavailable",
+            candidate_window_count=len(candidate_windows),
+            excluded_window_count=excluded_window_count,
+            reason="external intervals lack response-duration sums",
+        )
+    if any(not entry[key]["complete"] for key in windows):
+        return _boundary_latency_result(
+            "unavailable",
+            candidate_window_count=len(candidate_windows),
+            excluded_window_count=excluded_window_count,
+            reason="entry-service intervals lack response-duration sums",
+        )
+
+    if len(inputs.workload.request_classes) > 1:
+        class_counts = defaultdict(float)
+        for row in inputs.measurements.service_class_intervals:
+            if row.request_class == request_class.name and row.service in entries:
+                class_counts[(row.start, row.end, row.service)] += row.request_count
+        ambiguous = []
+        for start, end in windows:
+            for service in entries:
+                total = entry_by_service[(start, end, service)]
+                attributed = class_counts[(start, end, service)]
+                if total > 0.0 and not _counts_match(attributed, total):
+                    ambiguous.append((start, end, service, attributed, total))
+        if ambiguous:
+            return _boundary_latency_result(
+                "unavailable",
+                candidate_window_count=len(candidate_windows),
+                excluded_window_count=excluded_window_count,
+                reason=(
+                    "entry-service response means mix request classes; aligned "
+                    "class-attributed entry latency is unavailable"
+                ),
+            )
+
+    residuals = []
+    weights = []
+    for key in windows:
+        external_item = external[key]
+        entry_item = entry[key]
+        if (
+            external_item["errors"] / external_item["count"]
+            > BOUNDARY_LATENCY_MAXIMUM_ERROR_RATE
+            or entry_item["errors"] / entry_item["count"]
+            > BOUNDARY_LATENCY_MAXIMUM_ERROR_RATE
+        ):
+            return _boundary_latency_result(
+                "unavailable",
+                candidate_window_count=len(candidate_windows),
+                excluded_window_count=excluded_window_count,
+                reason=(
+                    "client-to-entry inference requires healthy windows with at "
+                    f"most {BOUNDARY_LATENCY_MAXIMUM_ERROR_RATE:.0%} errors"
+                ),
+            )
+        client_mean = external_item["duration"] / external_item["count"]
+        entry_mean = entry_item["duration"] / entry_item["count"]
+        try:
+            component = client_to_entry_mean_component(
+                client_mean_seconds=client_mean,
+                application_entry_mean_seconds=entry_mean,
+                difference_tolerance_seconds=(
+                    BOUNDARY_LATENCY_DIFFERENCE_TOLERANCE_SECONDS
+                ),
+            )
+        except ValueError as error:
+            return _boundary_latency_result(
+                "unavailable",
+                window_mean_seconds=residuals,
+                candidate_window_count=len(candidate_windows),
+                excluded_window_count=excluded_window_count,
+                reason=str(error),
+            )
+        residuals.append(component.get("client_to_entry", {}).get("mean", 0.0))
+        weights.append(external_item["count"])
+
+    mean = sum(
+        value * weight for value, weight in zip(residuals, weights, strict=True)
+    ) / sum(weights)
+    coefficient_of_variation = (
+        statistics.pstdev(residuals) / mean if mean > 0.0 else None
+    )
+    if max(residuals) <= BOUNDARY_LATENCY_DIFFERENCE_TOLERANCE_SECONDS:
+        return _boundary_latency_result(
+            "negligible",
+            mean_seconds=mean,
+            window_mean_seconds=residuals,
+            candidate_window_count=len(candidate_windows),
+            excluded_window_count=excluded_window_count,
+            coefficient_of_variation=coefficient_of_variation,
+            method="request_count_weighted_aligned_mean_difference",
+        )
+    relative_range = (max(residuals) - min(residuals)) / mean
+    if (
+        coefficient_of_variation is None
+        or coefficient_of_variation > BOUNDARY_LATENCY_MAXIMUM_CV
+        or relative_range > BOUNDARY_LATENCY_MAXIMUM_RELATIVE_RANGE
+    ):
+        return _boundary_latency_result(
+            "unavailable",
+            mean_seconds=mean,
+            window_mean_seconds=residuals,
+            candidate_window_count=len(candidate_windows),
+            excluded_window_count=excluded_window_count,
+            coefficient_of_variation=coefficient_of_variation,
+            method="request_count_weighted_aligned_mean_difference",
+            reason=(
+                "client-to-entry window means are not stable enough to freeze "
+                "as one portable mean component"
+            ),
+        )
+    return _boundary_latency_result(
+        "inferred",
+        component_name="client_to_entry",
+        mean_seconds=mean,
+        window_mean_seconds=residuals,
+        candidate_window_count=len(candidate_windows),
+        excluded_window_count=excluded_window_count,
+        coefficient_of_variation=coefficient_of_variation,
+        method="request_count_weighted_aligned_mean_difference",
     )
 
 
@@ -230,9 +502,8 @@ def _aligned_input_windows(inputs, service_windows):
             )
             for service in service_names
         )
-        if (
-            all(rate > 0.0 for _, rate in arrivals)
-            and all(demand is not None and demand > 0.0 for _, demand in demands)
+        if all(rate > 0.0 for _, rate in arrivals) and all(
+            demand is not None and demand > 0.0 for _, demand in demands
         ):
             result.append(
                 AlignedInputWindow(
@@ -466,9 +737,7 @@ def characterize_deployment(inputs):
     observed_replica_counts = {}
     variable_replica_services = []
     for service in inputs.workload.services:
-        counts = {
-            len(pods) for pods in pod_counts[service.name].values()
-        }
+        counts = {len(pods) for pods in pod_counts[service.name].values()}
         if len(counts) != 1:
             variable_replica_services.append((service.name, sorted(counts)))
         else:
@@ -482,10 +751,7 @@ def characterize_deployment(inputs):
     measured_classes = {
         value
         for value in (
-            [
-                row.request_class
-                for row in inputs.measurements.service_class_intervals
-            ]
+            [row.request_class for row in inputs.measurements.service_class_intervals]
             + [row.request_class for row in inputs.measurements.external_intervals]
             + [row.request_class for row in inputs.measurements.service_edges]
             + [
@@ -741,6 +1007,12 @@ def characterize_deployment(inputs):
     for request_class in inputs.workload.request_classes:
         rows = external_rows[request_class.name]
         total_requests = sum(row.request_count for row in rows)
+        boundary_latency = _characterize_boundary_latency(inputs, request_class)
+        if boundary_latency.status == "unavailable":
+            global_warnings.append(
+                f"{request_class.name} external latency boundary could not be "
+                f"characterized: {boundary_latency.reason}"
+            )
         external_characterizations.append(
             ExternalRequestClassCharacterization(
                 request_class=request_class.name,
@@ -759,6 +1031,7 @@ def characterize_deployment(inputs):
                     external_histograms[request_class.name],
                     rows,
                 ),
+                boundary_latency=boundary_latency,
             )
         )
     capabilities = (
@@ -793,12 +1066,17 @@ def characterize_deployment(inputs):
                 for service in services
             ),
         ),
+        (
+            "inferred_client_to_entry_mean",
+            any(
+                item.boundary_latency.status == "inferred"
+                for item in external_characterizations
+            ),
+        ),
     )
     return DeploymentCharacterization(
         input_fingerprint=inputs.fingerprint,
-        measurement_methodology_version=(
-            inputs.measurements.methodology_version
-        ),
+        measurement_methodology_version=(inputs.measurements.methodology_version),
         rate_source=rate_source,
         services=tuple(services),
         observed_external_arrival_rate_rps=observed_external_rate,

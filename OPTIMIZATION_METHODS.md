@@ -1,63 +1,24 @@
-# Replica optimization method and guarantees
+# Analytical sizing and guarantees
 
-Kubesizer makes one optimization decision: the replica count for each modeled
-service. It does not optimize Kubernetes node placement or claim that a
-recommendation is schedulable on a particular cluster.
+The only optimizer is bounded uniform-cost search over replica counts. Node
+placement, scalable search approximations, and simulation are not included.
 
-## One exact search method
+Each transition adds one replica at its configured positive cost. Search starts
+at analytical stability, or a confidence-bounded CPU capacity floor when portable
+measurements are provided. It checks all states no more expensive than the best
+feasible state before claiming minimum cost within the declared bounds.
 
-`UniformCostReplicaOptimizer` is the only optimizer. There is no search-mode
-option, randomized approximation, multi-start search, VNS, or automatic switch
-to a cheaper method.
+Queueing evaluation retains M/M/c, M/G/1, and variability-adjusted G/G/c models.
+Only the first two have exact mean formulas under their assumptions; exact
+replica search does not make the other queueing formulas exact.
 
-The search begins at the hard per-service lower bound: analytical stability for
-a directly modeled workload, or the confidence-bounded statistical stability
-floor for portable measurement input. A state is a replica vector. Each edge
-adds one replica, and its edge cost is that service's configured replica cost.
-The priority queue therefore visits states in nondecreasing total added cost.
-Analytical utilization may order states of exactly equal cost, but it cannot
-change which cost level is searched first.
+Fixed boundary residuals and declared communication means are included in the
+end-to-end mean. Unsupported blocking/parent-holding semantics, terminal
+timeouts, and percentile SLOs are rejected by the baseline sizing workflow.
+Direct diagnostic calls to System.solve() do not certify unsupported workloads.
 
-## Feasibility semantics
+For lower bounds L and upper bounds U, the search space contains the product of
+U[i] - L[i] + 1. There is no automatic fallback when this space is large.
 
-Analytical evaluation gives a conclusive feasible or infeasible result under
-the supported mean-latency model. Simulation evaluation may also be
-statistically inconclusive. An inconclusive state is never accepted as
-feasible.
-
-Search stops after it has evaluated every reachable state whose cost is no
-greater than the best feasible state's cost. If all cheaper states were
-conclusively infeasible, the result is the minimum weighted replica cost inside
-the declared bounds. If a cheaper state was statistically inconclusive, the
-returned vector is feasible but minimum cost is explicitly reported as not
-proven.
-
-Fresh final validation is separate from optimization in simulation mode. A
-configuration is emitted by the CLI only if that validation passes.
-
-## Result metadata
-
-The exact result records:
-
-- the replica vector, weighted objective, explored-state count, and search path;
-- whether bounded-model minimality was proven;
-- any statistically unresolved cheaper configurations;
-- simulation replication count and runtime;
-- the valid lower bound and absolute or relative bound gap.
-
-“Exact” applies only to the finite declared replica bounds and the selected
-analytical or frozen simulation model. It is not a claim that the model captures
-unmeasured deployment behavior, and it is not a Kubernetes scheduling result.
-
-## Runtime consequence
-
-For service `i`, let `L_i` and `U_i` be its lower and upper replica bounds. The
-bounded space contains
-
-```text
-product over i of (U_i - L_i + 1)
-```
-
-configurations. Exact search may need to evaluate all of them. The runtime
-preflight reports this full ceiling; large bounds must be reduced by the user
-instead of silently changing optimization semantics.
+Recommendations are conditional model predictions, not deployment guarantees.
+They do not prove Kubernetes schedulability or rule out unmeasured bottlenecks.

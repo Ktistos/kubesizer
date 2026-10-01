@@ -13,7 +13,7 @@ import statistics
 from dataclasses import dataclass
 from enum import Enum
 
-from .models import SizingPolicy
+from .models import MINIMUM_ARRIVAL_TRACE_INTERVALS, SizingPolicy
 
 
 class RecommendationReadiness(str, Enum):
@@ -171,9 +171,9 @@ def assess_initial_sizing_risk(
     external = {
         item.request_class: item for item in characterization.external_request_classes
     }
-    measured_arrival_classes = {
-        item.request_class for item in inputs.measurements.external_arrival_samples
-    }
+    arrival_samples_by_class = {}
+    for sample in inputs.measurements.external_arrival_samples:
+        arrival_samples_by_class.setdefault(sample.request_class, []).append(sample)
     inferred_calls = {
         request_class: {source: dict(targets) for source, targets in sources}
         for request_class, sources in characterization.request_class_calls
@@ -214,27 +214,93 @@ def assess_initial_sizing_risk(
                         "the declared latency statistic was not measured for this class",
                     )
                 )
-        if request_class.name not in measured_arrival_classes:
+        class_arrival_samples = tuple(
+            arrival_samples_by_class.get(request_class.name, ())
+        )
+        if not class_arrival_samples:
             findings.append(
                 EvidenceFinding(
-                    "CONDITIONAL",
+                    (
+                        "BLOCKING"
+                        if request_class.latency_slo is not None
+                        else "CONDITIONAL"
+                    ),
                     "REQUEST_CLASS_ARRIVAL_TRACE_UNAVAILABLE",
                     request_class.name,
-                    "burst ordering was not measured for this request class",
+                    (
+                        "burst ordering was not measured; a latency recommendation "
+                        "cannot substitute exponential arrivals for missing trace "
+                        "evidence"
+                    ),
                 )
             )
-        if (
-            len(request_class.entry_service_weights) > 1
-            and request_class.name in measured_arrival_classes
+        elif len(request_class.entry_service_weights) == 1 and (
+            len(class_arrival_samples) - 1 < MINIMUM_ARRIVAL_TRACE_INTERVALS
         ):
             findings.append(
                 EvidenceFinding(
-                    "CONDITIONAL",
-                    "MULTI_ENTRY_TRACE_ATTRIBUTION_UNAVAILABLE",
+                    (
+                        "BLOCKING"
+                        if request_class.latency_slo is not None
+                        else "CONDITIONAL"
+                    ),
+                    "REQUEST_CLASS_ARRIVAL_TRACE_INSUFFICIENT",
                     request_class.name,
-                    "arrival samples are class-attributed but not attributed to one of the class entry services",
+                    "the arrival trace is too short to characterize burst ordering; "
+                    f"at least {MINIMUM_ARRIVAL_TRACE_INTERVALS} interarrival "
+                    "gaps are required",
                 )
             )
+        if len(request_class.entry_service_weights) > 1 and class_arrival_samples:
+            attributed_entries = {
+                sample.entry_service
+                for sample in class_arrival_samples
+                if sample.entry_service is not None
+            }
+            declared_entries = set(request_class.entry_services)
+            if (
+                any(sample.entry_service is None for sample in class_arrival_samples)
+                or attributed_entries != declared_entries
+            ):
+                findings.append(
+                    EvidenceFinding(
+                        (
+                            "BLOCKING"
+                            if request_class.latency_slo is not None
+                            else "CONDITIONAL"
+                        ),
+                        "MULTI_ENTRY_TRACE_ATTRIBUTION_UNAVAILABLE",
+                        request_class.name,
+                        "arrival samples for a multi-entry class must identify "
+                        "every entry service without unattributed rows",
+                    )
+                )
+            else:
+                insufficient_entries = sorted(
+                    entry
+                    for entry in declared_entries
+                    if sum(
+                        sample.entry_service == entry
+                        for sample in class_arrival_samples
+                    )
+                    - 1
+                    < MINIMUM_ARRIVAL_TRACE_INTERVALS
+                )
+                if insufficient_entries:
+                    findings.append(
+                        EvidenceFinding(
+                            (
+                                "BLOCKING"
+                                if request_class.latency_slo is not None
+                                else "CONDITIONAL"
+                            ),
+                            "MULTI_ENTRY_ARRIVAL_TRACE_INSUFFICIENT",
+                            request_class.name,
+                            "arrival traces are too short for entry services "
+                            f"{insufficient_entries}; each needs at least "
+                            f"{MINIMUM_ARRIVAL_TRACE_INTERVALS} interarrival gaps",
+                        )
+                    )
         if not request_class.call_graph:
             calls = inferred_calls.get(request_class.name, {})
             nonentry_visits = set(request_class.visit_ratios) - set(

@@ -2,9 +2,7 @@ import math
 from dataclasses import dataclass
 
 
-FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD = (
-    "independent-replication-kl-hoeffding-v1"
-)
+FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD = "independent-replication-kl-hoeffding-v1"
 
 
 @dataclass(frozen=True)
@@ -52,10 +50,8 @@ def _binary_relative_entropy(observed, candidate):
         return -math.log1p(-candidate)
     if observed == 1.0:
         return -math.log(candidate)
-    return (
-        observed * math.log(observed / candidate)
-        + (1.0 - observed)
-        * math.log((1.0 - observed) / (1.0 - candidate))
+    return observed * math.log(observed / candidate) + (1.0 - observed) * math.log(
+        (1.0 - observed) / (1.0 - candidate)
     )
 
 

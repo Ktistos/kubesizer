@@ -134,34 +134,3 @@ def test_parser_rejects_routes_to_unknown_services():
     }
     with pytest.raises(ValueError, match="unknown service 'missing'"):
         System("test", workload, QueueingNetworkType.OPEN)
-
-
-def test_simulation_reports_p95_by_request_class():
-    random.seed(42)
-    workload = {
-        "read": {"api": {"gamma": 2.0, "mu": 100.0}},
-        "write": {"api": {"gamma": 2.0, "mu": 100.0}},
-    }
-    system = System("test", workload, QueueingNetworkType.OPEN)
-
-    metrics = system.simulate(10)
-    request_class_p95 = metrics.get_request_class_p95_latencies()
-
-    assert set(request_class_p95) == {"read", "write"}
-    assert all(latency > 0 for latency in request_class_p95.values())
-
-
-def test_simulation_can_exclude_pre_warmup_latency_without_skipping_the_run():
-    random.seed(42)
-    system = System(
-        "test",
-        {"read": {"api": {"gamma": 2.0, "mu": 100.0}}},
-        QueueingNetworkType.OPEN,
-    )
-
-    metrics = system.simulate(10.0, warmup_duration=10.0)
-
-    assert metrics.get_request_class_p95_latencies() == {}
-    assert metrics.get_mean_utilizations()[0] > 0
-    with pytest.raises(ValueError, match="warmup_duration"):
-        system.simulate(10.0, warmup_duration=11.0)

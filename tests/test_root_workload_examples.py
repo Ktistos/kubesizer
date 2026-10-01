@@ -130,29 +130,3 @@ def test_multiclass_service_demand_example_is_valid_for_analytical_optimization(
     ].mean == pytest.approx(0.008)
     system.configure_system_replicas(system.get_minimum_stable_replicas())
     assert system.solve().get_stability()
-
-
-def test_synchronous_call_graph_example_is_simulation_ready():
-    workload_path = ROOT / "examples/workloads/synchronous-call-graph.example.yaml"
-    workload = yaml.safe_load(workload_path.read_text(encoding="utf-8"))
-    parsed = parse_workload_spec(workload, base_path=workload_path.parent)
-    system = System(
-        "synchronous-call-graph",
-        workload,
-        QueueingNetworkType.OPEN,
-        workload_base_path=workload_path.parent,
-    )
-
-    assert dict(parsed.request_class_call_graphs["metadata_read"]["api"]) == {
-        "catalog": 1.0,
-        "identity": 3.0,
-    }
-    assert system.get_service_processing_slots_per_replica()["api"] == 1
-    assert system.get_service_concurrency_limits_per_replica()["api"] == 4
-    system.configure_system_replicas(system.get_minimum_stable_replicas())
-    replication = system.simulate_measurement_replications(
-        warmup_duration=1.0,
-        measurement_duration=1.0,
-        seeds=(43,),
-    )[0]
-    assert replication.measured_request_counts["metadata_read"] > 0

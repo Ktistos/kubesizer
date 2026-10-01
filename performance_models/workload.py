@@ -241,11 +241,14 @@ def _parse_joint_input_uncertainty(
     )
 
 
-def _sample_moments(values, label):
-    values = tuple(_finite_positive(value, label) for value in values)
+def _sample_moments(values, label, *, allow_zero=False):
+    validator = _finite_nonnegative if allow_zero else _finite_positive
+    values = tuple(validator(value, label) for value in values)
     if not values:
         raise ValueError(f"{label} must contain at least one observation.")
     mean = sum(values) / len(values)
+    if mean <= 0.0:
+        raise ValueError(f"{label} must contain at least one positive observation.")
     variance = sum((value - mean) ** 2 for value in values) / len(values)
     return mean, variance / (mean * mean)
 
@@ -605,17 +608,20 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             _finite_nonnegative(value, sample_label) for value in timestamps
         )
         if len(timestamps) < 2 or any(
-            right <= left
-            for left, right in zip(timestamps, timestamps[1:])
+            right < left for left, right in zip(timestamps, timestamps[1:])
         ):
             raise ValueError(
-                f"{label}.source timestamps must contain at least two strictly "
-                "increasing values."
+                f"{label}.source timestamps must contain at least two "
+                "nondecreasing values."
             )
         interarrivals = tuple(
             right - left for left, right in zip(timestamps, timestamps[1:])
         )
-        mean, scv = _sample_moments(interarrivals, f"{label}.source intervals")
+        mean, scv = _sample_moments(
+            interarrivals,
+            f"{label}.source intervals",
+            allow_zero=True,
+        )
         return DistributionSpec(
             distribution,
             mean,
@@ -926,9 +932,8 @@ def _parse_request_classes(
                     f"request_classes.{request_class_name}.latency_components "
                     f"contains unsupported components {sorted(unknown_components)}."
                 )
-            if (
-                boundary == "ingress"
-                and ({"client_to_ingress", "client_to_entry"} & set(raw_components))
+            if boundary == "ingress" and (
+                {"client_to_ingress", "client_to_entry"} & set(raw_components)
             ):
                 raise ValueError(
                     f"Request class {request_class_name!r} cannot include "
@@ -1359,9 +1364,9 @@ def parse_workload_spec(workload, *, base_path=None):
                     )
                     service_blocking_times[service_name] = parsed_blocking_time
                     for request_class_name in request_classes:
-                        service_blocking_times_by_request_class[
-                            request_class_name
-                        ][service_name] = parsed_blocking_time
+                        service_blocking_times_by_request_class[request_class_name][
+                            service_name
+                        ] = parsed_blocking_time
                 else:
                     unknown_classes = set(raw_blocking_time) - set(request_classes)
                     if not raw_blocking_time or unknown_classes:
@@ -1380,12 +1385,13 @@ def parse_workload_spec(workload, *, base_path=None):
                             raw_blocking_time.items()
                         )
                     }
-                    for request_class_name, specification in (
-                        parsed_blocking_times.items()
-                    ):
-                        service_blocking_times_by_request_class[
-                            request_class_name
-                        ][service_name] = specification
+                    for (
+                        request_class_name,
+                        specification,
+                    ) in parsed_blocking_times.items():
+                        service_blocking_times_by_request_class[request_class_name][
+                            service_name
+                        ] = specification
             distribution_specification = {
                 key: value
                 for key, value in raw_service_time.items()
@@ -1552,9 +1558,7 @@ def parse_workload_spec(workload, *, base_path=None):
                 }
             ),
             service_execution_models=_freeze_mapping(service_execution_models),
-            service_replica_queue_models=_freeze_mapping(
-                service_replica_queue_models
-            ),
+            service_replica_queue_models=_freeze_mapping(service_replica_queue_models),
             processing_slots_per_replica=_freeze_mapping(processing_slots_per_replica),
             concurrency_limits_per_replica=_freeze_mapping(
                 concurrency_limits_per_replica

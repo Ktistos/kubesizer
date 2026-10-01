@@ -31,7 +31,7 @@ from .models import (
     ServiceDeployment,
     ServiceSizingRecommendation,
     ServiceStabilityAssessment,
-    SimulationWorkloadVariant,
+    AnalyticalWorkloadVariant,
     SizingPolicy,
     StabilityFloorStatus,
     StatisticalStabilityError,
@@ -66,10 +66,9 @@ from .readiness import (
     ServiceSizingRisk,
     assess_initial_sizing_risk,
 )
-from .simulation import (
+from .analytical import (
     build_analytical_workload_variants,
     build_characterized_system_variants,
-    build_simulation_workload_variants,
 )
 from .sizing import recommend_initial_replicas
 from .stability import estimate_statistical_stability_floor
@@ -106,7 +105,7 @@ __all__ = [
     "ServiceSizingRecommendation",
     "ServiceSizingRisk",
     "ServiceStabilityAssessment",
-    "SimulationWorkloadVariant",
+    "AnalyticalWorkloadVariant",
     "SizingPolicy",
     "StabilityFloorStatus",
     "StatisticalStabilityError",
@@ -117,7 +116,6 @@ __all__ = [
     "assess_initial_sizing_risk",
     "build_analytical_workload_variants",
     "build_characterized_system_variants",
-    "build_simulation_workload_variants",
     "characterize_deployment",
     "client_to_entry_mean_component",
     "communication_latency_from_round_trip_probes",

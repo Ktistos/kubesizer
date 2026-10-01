@@ -2,9 +2,8 @@ import copy
 
 import pytest
 
-from calibration.profile import experiment_fingerprints
 from performance_models import QueueingNetworkType, System, parse_workload_spec
-from statistical_workflow import optimize_with_analytical_model
+from analytical_workflow import optimize_with_analytical_model
 
 
 def _visit_workload(*, visits=None, fixed_overhead=0.01):
@@ -127,12 +126,11 @@ def test_fixed_latency_overhead_is_supported_for_routing_workloads():
 
     parsed = parse_workload_spec(workload)
 
-    assert parsed.request_class_fixed_latency_overheads == {
-        "metadata_read": 0.01
-    }
-    assert parsed.request_class_latency_overhead_specs[
-        "metadata_read"
-    ].distribution == "deterministic"
+    assert parsed.request_class_fixed_latency_overheads == {"metadata_read": 0.01}
+    assert (
+        parsed.request_class_latency_overhead_specs["metadata_read"].distribution
+        == "deterministic"
+    )
 
 
 @pytest.mark.parametrize(
@@ -156,74 +154,6 @@ def test_visit_ratios_must_include_the_external_entry_service():
 
     with pytest.raises(ValueError, match="external entry service"):
         parse_workload_spec(workload)
-
-
-def test_visit_only_workload_is_rejected_before_native_simulation():
-    system = System(
-        "analytical-only-visits",
-        _visit_workload(),
-        QueueingNetworkType.OPEN,
-    )
-
-    with pytest.raises(ValueError, match="Simulation requires sequential routing"):
-        system.simulate(10.0)
-    with pytest.raises(ValueError, match="Simulation requires sequential routing"):
-        system.run_warmup_ensemble(
-            seeds=(1,),
-            horizon=10.0,
-            bucket_width=1.0,
-        )
-    with pytest.raises(ValueError, match="Simulation requires sequential routing"):
-        system.simulate_measurement_replications(
-            warmup_duration=1.0,
-            measurement_duration=2.0,
-            seeds=(1,),
-        )
-
-
-def test_executable_workflow_derives_visits_and_runs_in_native_backend():
-    workload = _visit_workload(fixed_overhead=0.1)
-    request_class = workload["request_classes"]["metadata_read"]
-    del request_class["visits"]
-    request_class["workflow"] = [
-        {"service": "api"},
-        {"service": "auth", "mean_visits": 2.5},
-        {"service": "search", "mean_visits": 0.75},
-    ]
-    workload["traffic_model"]["entry_services"]["metadata_read"]["api"] = {
-        "distribution": "deterministic",
-        "rate": 1.0,
-    }
-    workload["traffic_model"]["service_times"] = {
-        service: {"distribution": "deterministic", "mean": 0.01}
-        for service in ("api", "auth", "search")
-    }
-
-    parsed = parse_workload_spec(workload)
-    system = System("workflow", workload, QueueingNetworkType.OPEN)
-    replication = system.simulate_measurement_replications(
-        warmup_duration=0.0,
-        measurement_duration=20.5,
-        seeds=(101,),
-    )[0]
-
-    assert dict(parsed.request_class_visit_ratios["metadata_read"]) == {
-        "api": 1.0,
-        "auth": 2.5,
-        "search": 0.75,
-    }
-    assert tuple(
-        (visit.service, visit.mean_visits)
-        for visit in parsed.request_class_workflows["metadata_read"]
-    ) == (("api", 1.0), ("auth", 2.5), ("search", 0.75))
-    assert replication.measured_request_counts == {"metadata_read": 20}
-    assert replication.completed_measured_request_counts == {
-        "metadata_read": 20
-    }
-    assert all(
-        any(latency == pytest.approx(expected) for expected in (0.13, 0.14, 0.15))
-        for latency in replication.request_class_latencies["metadata_read"]
-    )
 
 
 def test_workflow_must_start_at_its_only_external_entry_service():
@@ -253,28 +183,3 @@ def test_analytical_optimizer_uses_visit_ratio_load_and_latency():
 
     assert result.configuration == (1, 2)
     assert dict(result.metrics.request_class_mean_latencies)["metadata_read"] <= 0.35
-
-
-def test_visits_and_fixed_overhead_change_experiment_fingerprints():
-    original = _visit_workload()
-    changed_visits = copy.deepcopy(original)
-    changed_visits["request_classes"]["metadata_read"]["visits"]["auth"] = 2.5
-    changed_overhead = copy.deepcopy(original)
-    changed_overhead["request_classes"]["metadata_read"][
-        "fixed_latency_overhead_seconds"
-    ] = 0.02
-
-    original_fingerprints = experiment_fingerprints(
-        System("original", original, QueueingNetworkType.OPEN)
-    )
-    visit_fingerprints = experiment_fingerprints(
-        System("changed-visits", changed_visits, QueueingNetworkType.OPEN)
-    )
-    overhead_fingerprints = experiment_fingerprints(
-        System("changed-overhead", changed_overhead, QueueingNetworkType.OPEN)
-    )
-
-    assert original_fingerprints[0] != visit_fingerprints[0]
-    assert original_fingerprints[1] == visit_fingerprints[1]
-    assert original_fingerprints[0] == overhead_fingerprints[0]
-    assert original_fingerprints[1] != overhead_fingerprints[1]

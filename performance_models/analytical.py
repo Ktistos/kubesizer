@@ -32,15 +32,9 @@ def select_queueing_model(*, poisson_arrivals, exponential_service, replicas):
 
 
 def _validate_queue(service_arrival_rate, per_replica_service_rate, replicas):
-    if (
-        not math.isfinite(service_arrival_rate)
-        or service_arrival_rate < 0.0
-    ):
+    if not math.isfinite(service_arrival_rate) or service_arrival_rate < 0.0:
         raise ValueError("service_arrival_rate must be finite and non-negative.")
-    if (
-        not math.isfinite(per_replica_service_rate)
-        or per_replica_service_rate <= 0.0
-    ):
+    if not math.isfinite(per_replica_service_rate) or per_replica_service_rate <= 0.0:
         raise ValueError("per_replica_service_rate must be finite and positive.")
     if isinstance(replicas, bool) or not isinstance(replicas, int) or replicas <= 0:
         raise ValueError("replicas must be a positive integer.")
@@ -104,9 +98,7 @@ def mg1_mean_response_time(
         return math.inf
     mean_service = 1.0 / service_rate
     second_moment = (service_scv + 1.0) * mean_service * mean_service
-    mean_wait = service_arrival_rate * second_moment / (
-        2.0 * (1.0 - utilization)
-    )
+    mean_wait = service_arrival_rate * second_moment / (2.0 * (1.0 - utilization))
     return mean_service + mean_wait
 
 
@@ -161,8 +153,7 @@ def combine_independent_stream_scvs(streams):
         return 1.0
     total_rate = sum(rate for rate, _ in positive)
     combined = 1.0 + sum(
-        (rate / total_rate) ** 2 * (scv - 1.0)
-        for rate, scv in positive
+        (rate / total_rate) ** 2 * (scv - 1.0) for rate, scv in positive
     )
     return max(0.0, combined)
 

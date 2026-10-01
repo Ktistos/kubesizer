@@ -2,9 +2,8 @@ import copy
 
 import pytest
 
-from calibration.profile import experiment_fingerprints
 from performance_models import QueueingNetworkType, System, parse_workload_spec
-from statistical_workflow import optimize_with_analytical_model
+from analytical_workflow import optimize_with_analytical_model
 
 
 def _workload():
@@ -21,12 +20,8 @@ def _workload():
         },
         "traffic_model": {
             "entry_services": {
-                "fast": {
-                    "api": {"distribution": "exponential", "rate": 1.0}
-                },
-                "slow": {
-                    "api": {"distribution": "exponential", "rate": 1.0}
-                },
+                "fast": {"api": {"distribution": "exponential", "rate": 1.0}},
+                "slow": {"api": {"distribution": "exponential", "rate": 1.0}},
             },
             "service_times": {
                 "api": {
@@ -76,30 +71,6 @@ def test_missing_reachable_class_service_distribution_fails():
         parse_workload_spec(workload)
 
 
-def test_native_simulation_uses_request_class_specific_service_times():
-    workload = _workload()
-    for request_class in workload["request_classes"].values():
-        request_class["workflow"] = [{"service": "api"}]
-        del request_class["visits"]
-    for streams in workload["traffic_model"]["entry_services"].values():
-        streams["api"] = {"distribution": "deterministic", "rate": 1.0}
-    system = System("multiclass", workload, QueueingNetworkType.OPEN)
-    system.get_service("api").set_replicas(2)
-
-    replications = system.simulate_measurement_replications(
-        warmup_duration=0.0,
-        measurement_duration=5.5,
-        seeds=(17,),
-    )
-
-    assert replications[0].request_class_latencies["fast"] == pytest.approx(
-        (0.1,) * 5
-    )
-    assert replications[0].request_class_latencies["slow"] == pytest.approx(
-        (0.3,) * 5
-    )
-
-
 def test_analytical_optimizer_enforces_every_class_specific_mean_slo():
     workload = _workload()
     workload["request_classes"]["fast"]["end_to_end_latency_slos"] = {
@@ -119,19 +90,3 @@ def test_analytical_optimizer_enforces_every_class_specific_mean_slo():
     latencies = dict(result.metrics.request_class_mean_latencies)
     assert latencies["fast"] <= 0.2
     assert latencies["slow"] <= 0.35
-
-
-def test_class_specific_service_demand_changes_workload_fingerprint():
-    original = _workload()
-    changed = copy.deepcopy(original)
-    changed["traffic_model"]["service_times"]["api"]["slow"]["mean"] = 0.31
-
-    original_fingerprints = experiment_fingerprints(
-        System("original", original, QueueingNetworkType.OPEN)
-    )
-    changed_fingerprints = experiment_fingerprints(
-        System("changed", changed, QueueingNetworkType.OPEN)
-    )
-
-    assert original_fingerprints[0] == changed_fingerprints[0]
-    assert original_fingerprints[1] != changed_fingerprints[1]

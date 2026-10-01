@@ -15,22 +15,6 @@ class TerminationReason(str, Enum):
     STATISTICALLY_UNRESOLVED = "STATISTICALLY_UNRESOLVED"
 
 
-def evaluation_replication_count(evaluation):
-    """Return simulation replications represented by an evaluation, if any."""
-    candidates = (
-        evaluation,
-        getattr(evaluation, "configuration_evaluation", None),
-    )
-    values = []
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        value = getattr(candidate, "replications_used", None)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            values.append(value)
-    return max(values, default=0)
-
-
 def certified_bound_gaps(objective_value, lower_bound):
     """Return valid absolute and relative minimization gaps."""
     if lower_bound is None:

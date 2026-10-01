@@ -1,92 +1,18 @@
+# Smallest versioned workload accepted by the current analytical and C++ paths.
 request_classes:
-  read_heavy:
-    concurrency_weight: 0.7
+  request:
+    concurrency_weight: 1.0
     end_to_end_latency_slos:
-      percentile:
-        quantile: 0.95
-        maximum_seconds: 1.0
-    routing:
-      api:
-        auth: 0.2
-        db: 0.6
-        cache: 0.1
-        worker: 0.05
-      auth:
-        db: 0.8
-        cache: 0.05
-      db:
-        cache: 0.05
-      cache:
-        worker: 0.05
-      worker:
-        db: 0.8
-        cache: 0.05
-
-  write_heavy:
-    concurrency_weight: 0.2
-    end_to_end_latency_slos:
-      percentile:
-        quantile: 0.95
-        maximum_seconds: 1.0
-    routing:
-      api:
-        auth: 0.15
-        db: 0.45
-        worker: 0.3
-      auth:
-        db: 0.7
-        worker: 0.2
-      db:
-        worker: 0.2
-      worker:
-        db: 0.1
-
-  compute_heavy:
-    concurrency_weight: 0.1
-    end_to_end_latency_slos:
-      percentile:
-        quantile: 0.95
-        maximum_seconds: 1.0
-    routing:
-      api:
-        auth: 0.1
-        worker: 0.8
-      auth:
-        worker: 0.85
-      worker:
-        cache: 0.25
-        db: 0.1
-      cache:
-        db: 0.05
+      mean_seconds: 1.0
+    routing: {}
 
 traffic_model:
   entry_services:
-    read_heavy:
-      api:
+    request:
+      service:
         distribution: exponential
-        rate: 23.1
-    write_heavy:
-      api:
-        distribution: exponential
-        rate: 6.6
-    compute_heavy:
-      api:
-        distribution: exponential
-        rate: 3.3
-
+        rate: 1.0
   service_times:
-    api:
+    service:
       distribution: exponential
-      rate: 100.0
-    auth:
-      distribution: exponential
-      rate: 50.0
-    db:
-      distribution: exponential
-      rate: 5.0
-    cache:
-      distribution: exponential
-      rate: 80.0
-    worker:
-      distribution: exponential
-      rate: 50.0
+      rate: 2.0

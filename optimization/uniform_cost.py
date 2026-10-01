@@ -10,19 +10,17 @@ from .feasibility import (
     FeasibilityStatus,
     TerminationReason,
     certified_bound_gaps,
-    evaluation_replication_count,
 )
 from .result import OptimizationResult
 
 
 @dataclass(frozen=True)
 class ReplicaOptimizationResult(OptimizationResult):
-    """Uniform-cost result with statistical minimality evidence."""
+    """Uniform-cost result with bounded-model minimality evidence."""
 
     minimality_proven: bool
     unresolved_lower_cost_states: tuple
     objective_value: float
-    simulation_replications: int
     runtime_seconds: float
     lower_bound: float | None
     absolute_bound_gap: float | None
@@ -87,7 +85,6 @@ class UniformCostReplicaOptimizer(Optimizer):
             (0.0, self._state_ordering(problem, initial), next(counter), initial),
         )
         explored_states = 0
-        simulation_replications = 0
         best_goal = None
         unresolved_states = []
 
@@ -105,7 +102,6 @@ class UniformCostReplicaOptimizer(Optimizer):
                 state_is_feasible = problem.is_feasible(state)
                 evaluation = problem.evaluate(state) if state_is_feasible else None
 
-            simulation_replications += evaluation_replication_count(evaluation)
             classification = getattr(evaluation, "classification", None)
             classification_value = getattr(classification, "value", classification)
             if classification_value in self._UNRESOLVED_CLASSIFICATIONS:
@@ -189,7 +185,6 @@ class UniformCostReplicaOptimizer(Optimizer):
             minimality_proven=proven,
             unresolved_lower_cost_states=unresolved_lower,
             objective_value=objective,
-            simulation_replications=simulation_replications,
             runtime_seconds=max(0.0, self._clock() - started),
             lower_bound=(objective if proven else lower_bound),
             absolute_bound_gap=absolute_gap,
