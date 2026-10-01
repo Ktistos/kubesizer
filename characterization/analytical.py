@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import copy
+from dataclasses import replace
 from itertools import pairwise, product
 from performance_models import (
     QueueingNetworkType,
@@ -539,6 +540,7 @@ def build_characterized_system_variants(
     name="characterized-deployment",
     maximum_ambiguity_variants=64,
     input_uncertainty_block_length=2,
+    include_declared_blocking=False,
 ):
     """Build analytical systems from the same characterized measurements."""
     unavailable = [
@@ -559,6 +561,24 @@ def build_characterized_system_variants(
     )
     results = []
     for variant in variants:
+        if include_declared_blocking:
+            workload = copy.deepcopy(variant.workload)
+            for service, blocking in inputs.workload.service_blocking_times:
+                workload["traffic_model"]["service_times"][service][
+                    "non_cpu_blocking_time"
+                ] = duration_distribution_to_workload_mapping(blocking)
+            variant = replace(
+                variant,
+                workload=workload,
+                assumptions=tuple(
+                    item
+                    for item in variant.assumptions
+                    if not item.startswith("non-CPU blocking variability is excluded")
+                )
+                + (
+                    "experimental layered analysis includes declared blocking only; missing local I/O waits are not inferred",
+                ),
+            )
         system = System(name, variant.workload, QueueingNetworkType.OPEN)
         if recommendation is not None:
             order = tuple(

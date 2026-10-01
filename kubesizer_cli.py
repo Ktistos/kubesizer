@@ -44,7 +44,11 @@ def _load_workflow_system(args):
             None,
         )
     plan = load_and_prepare_initial_sizing(path, args.measurements)
-    variants = build_characterized_system_variants(plan.inputs, plan.characterization)
+    variants = build_characterized_system_variants(
+        plan.inputs,
+        plan.characterization,
+        include_declared_blocking=args.analytical_semantics == "experimental-layered",
+    )
     if len(variants) != 1:
         raise ValueError(
             "Declare call_execution for every request class before optimization."
@@ -87,6 +91,7 @@ def _command_run(args):
         maximum_replicas=args.max_replicas,
         minimum_configuration=minimum,
         progress_callback=None if args.quiet else _progress,
+        analytical_semantics=args.analytical_semantics,
     )
     services = {
         service.get_name(): {
@@ -109,6 +114,12 @@ def build_parser():
     )
     parser.add_argument("--workload", default="workload.yaml", help="Workload YAML.")
     parser.add_argument("--measurements", help="Portable measurement manifest YAML.")
+    parser.add_argument(
+        "--analytical-semantics",
+        choices=("baseline", "experimental-layered"),
+        default="baseline",
+        help="Opt in to approximate layered holding/join semantics.",
+    )
     parser.add_argument(
         "--max-replicas",
         type=int,
@@ -139,6 +150,7 @@ def main(argv=None):
             "ok": True,
             "command": "kubesizer",
             "cli_version": CLI_VERSION,
+            "analytical_semantics": args.analytical_semantics,
             "result": result,
         }
         exit_code = 0

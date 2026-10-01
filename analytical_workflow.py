@@ -31,6 +31,7 @@ def optimize_with_analytical_model(
     replica_costs=None,
     structural_feasibility=None,
     progress_callback=None,
+    analytical_semantics="baseline",
 ):
     """Optimize analytical stability and optional mean latency without simulation.
 
@@ -42,6 +43,12 @@ def optimize_with_analytical_model(
     ``minimum_configuration`` is a hard lower bound and must itself be at or
     above analytical stability.
     """
+    if analytical_semantics == "experimental-layered":
+        from performance_models.layered import LayeredAnalyticalSystem
+
+        system = LayeredAnalyticalSystem(system)
+    elif analytical_semantics != "baseline":
+        raise ValueError("Unknown analytical semantics.")
     declared_kind = _declared_latency_slo_kind(system)
     declared_timeouts = getattr(
         system,

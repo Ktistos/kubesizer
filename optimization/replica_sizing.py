@@ -323,9 +323,9 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
     def search_tie_breaker(self, configuration):
         analytical, class_means = self._evidence(configuration)
         if not analytical.get_stability() or not class_means:
-            raise ValueError(
-                "Analytical optimization search states must be strictly stable."
-            )
+            # CPU stability is only a lower bound for a layered holding pool.
+            # Keep these states searchable, but never classify them feasible.
+            return 1e300
         value = self._worst_normalized_latency(class_means)
         if not math.isfinite(value) or value < 0:
             raise ValueError("Analytical mean-latency ranking must be finite.")
@@ -364,8 +364,14 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
             classification=classification,
             request_class_mean_latencies=class_means,
             request_class_mean_latency_limits=tuple(self.__limits.items()),
-            evaluation_basis=(
-                "ANALYTICAL_MEAN_LATENCY" if self.__limits else "ANALYTICAL_STABILITY"
-            ),
+            evaluation_basis=getattr(
+                self._system,
+                "get_analytical_evaluation_basis",
+                lambda: (
+                    "ANALYTICAL_MEAN_LATENCY"
+                    if self.__limits
+                    else "ANALYTICAL_STABILITY"
+                ),
+            )(),
         )
         return self._record_evaluation(configuration, evaluation)
