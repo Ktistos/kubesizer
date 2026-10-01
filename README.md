@@ -42,3 +42,7 @@ This feature branch also provides opt-in
 [experimental layered analytical semantics](docs/EXPERIMENTAL_ANALYTICAL_SEMANTICS.md).
 The analytical-only baseline is committed separately on master; the experimental
 evaluator is not a validated replacement for it.
+
+The [retrospective STELAR replay](results/stelar-layered-analytical-20261001/REPORT.md)
+found worse mean-latency accuracy for the enriched approximation. It is retained
+for investigation only and has not been promoted to master.
