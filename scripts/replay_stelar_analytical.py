@@ -12,6 +12,7 @@ import math
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -52,7 +53,14 @@ def characterize(root, operation):
         cohort = read_yaml(directory / "request_cohort.yaml")
         config = read_yaml(directory / "config.yaml")
         duration = float(config["measurement"]["stable_window_seconds"])
-        endpoints = measurement["raw"]["stable_window_end_times"]
+        endpoints = [
+            (
+                datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                if isinstance(value, str)
+                else float(value)
+            )
+            for value in measurement["raw"]["stable_window_end_times"]
+        ]
         if any(
             not math.isclose(b - a, duration, abs_tol=0.02)
             for a, b in zip(endpoints, endpoints[1:])
