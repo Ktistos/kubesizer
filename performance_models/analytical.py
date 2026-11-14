@@ -7,15 +7,18 @@ class AnalyticalQueueingModel(str, Enum):
 
     MMC = "M/M/c"
     MG1 = "M/G/1 Pollaczek-Khinchine exact mean"
+    MGC_PS = "M/G/c processor-sharing insensitive mean"
     MGC = "M/G/c variability-adjusted Erlang-C approximation"
     GMC = "G/M/c variability-adjusted Erlang-C approximation"
     GGC = "G/G/c variability-adjusted Erlang-C approximation"
+    UNSUPPORTED = "unsupported analytical execution/admission/dispatch semantics"
 
     @property
     def exact(self):
         return self in {
             AnalyticalQueueingModel.MMC,
             AnalyticalQueueingModel.MG1,
+            AnalyticalQueueingModel.MGC_PS,
         }
 
 

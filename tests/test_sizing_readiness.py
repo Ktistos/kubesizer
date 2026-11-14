@@ -10,6 +10,7 @@ from characterization import (
     LatencySummary,
     RecommendationReadiness,
     assess_initial_sizing_risk,
+    build_simulation_workload_variants,
     characterize_deployment,
     load_and_prepare_initial_sizing,
     load_portable_sizing_inputs,
@@ -131,4 +132,113 @@ def test_inferred_edges_are_explicit_structural_uncertainty_not_a_hidden_claim()
     risk = assess_initial_sizing_risk(inputs, characterization, recommendation)
 
     assert "CALL_ORDER_INFERRED" in {item.code for item in risk.findings}
+    assert risk.readiness is RecommendationReadiness.CONDITIONAL
+
+
+def test_unattributed_multi_entry_trace_is_not_duplicated_across_entries():
+    inputs, characterization, recommendation = _evidence()
+    request_class = replace(
+        inputs.workload.request_classes[0],
+        entry_service_weights=(("api", 0.5), ("database", 0.5)),
+    )
+    inputs = replace(
+        inputs,
+        workload=replace(inputs.workload, request_classes=(request_class,)),
+    )
+
+    risk = assess_initial_sizing_risk(inputs, characterization, recommendation)
+
+    with pytest.raises(ValueError, match="not attributable"):
+        build_simulation_workload_variants(inputs, characterization)
+    assert "MULTI_ENTRY_TRACE_ATTRIBUTION_UNAVAILABLE" in {
+        item.code for item in risk.findings
+    }
+    assert risk.readiness is RecommendationReadiness.INSUFFICIENT_EVIDENCE
+
+
+def test_entry_attributed_multi_entry_traces_are_preserved():
+    inputs, characterization, recommendation = _evidence()
+    request_class = replace(
+        inputs.workload.request_classes[0],
+        entry_service_weights=(("api", 0.5), ("database", 0.5)),
+    )
+    sample_type = type(inputs.measurements.external_arrival_samples[0])
+    samples = tuple(
+        sample_type((index // 3) * 0.15, "browse", entry)
+        for entry in ("api", "database")
+        for index in range(31)
+    )
+    inputs = replace(
+        inputs,
+        workload=replace(inputs.workload, request_classes=(request_class,)),
+        measurements=replace(
+            inputs.measurements,
+            external_arrival_samples=samples,
+        ),
+    )
+
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+    streams = variant.workload["traffic_model"]["entry_services"]["browse"]
+    risk = assess_initial_sizing_risk(inputs, characterization, recommendation)
+
+    assert {item["distribution"] for item in streams.values()} == {"arrival_trace"}
+    assert "MULTI_ENTRY_TRACE_ATTRIBUTION_UNAVAILABLE" not in {
+        item.code for item in risk.findings
+    }
+
+
+def test_missing_arrival_trace_blocks_latency_recommendation():
+    inputs, characterization, recommendation = _evidence()
+    inputs = replace(
+        inputs,
+        measurements=replace(inputs.measurements, external_arrival_samples=()),
+    )
+
+    risk = assess_initial_sizing_risk(inputs, characterization, recommendation)
+
+    assert risk.readiness is RecommendationReadiness.INSUFFICIENT_EVIDENCE
+    assert "REQUEST_CLASS_ARRIVAL_TRACE_UNAVAILABLE" in {
+        item.code for item in risk.findings
+    }
+    with pytest.raises(ValueError, match="Cannot certify latency"):
+        build_simulation_workload_variants(inputs, characterization)
+
+
+def test_short_arrival_trace_blocks_latency_recommendation():
+    inputs, characterization, recommendation = _evidence()
+    inputs = replace(
+        inputs,
+        measurements=replace(
+            inputs.measurements,
+            external_arrival_samples=inputs.measurements.external_arrival_samples[:4],
+        ),
+    )
+
+    risk = assess_initial_sizing_risk(inputs, characterization, recommendation)
+
+    assert risk.readiness is RecommendationReadiness.INSUFFICIENT_EVIDENCE
+    assert "REQUEST_CLASS_ARRIVAL_TRACE_INSUFFICIENT" in {
+        item.code for item in risk.findings
+    }
+    with pytest.raises(ValueError, match="at least 30"):
+        build_simulation_workload_variants(inputs, characterization)
+
+
+def test_throughput_only_workload_keeps_explicit_exponential_fallback():
+    inputs, characterization, recommendation = _evidence()
+    request_class = replace(
+        inputs.workload.request_classes[0],
+        latency_slo=None,
+    )
+    inputs = replace(
+        inputs,
+        workload=replace(inputs.workload, request_classes=(request_class,)),
+        measurements=replace(inputs.measurements, external_arrival_samples=()),
+    )
+
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+    arrival = variant.workload["traffic_model"]["entry_services"]["browse"]["api"]
+    risk = assess_initial_sizing_risk(inputs, characterization, recommendation)
+
+    assert arrival["distribution"] == "exponential"
     assert risk.readiness is RecommendationReadiness.CONDITIONAL

@@ -54,7 +54,10 @@ def _independent_model_workload():
                 }
             },
             "service_times": {
-                name: _distribution_spec(distribution, arrival=False)
+                name: {
+                    **_distribution_spec(distribution, arrival=False),
+                    "replica_queue_model": "pooled",
+                }
                 for name, distribution in services.items()
             },
         },

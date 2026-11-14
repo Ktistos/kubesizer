@@ -224,6 +224,13 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
         structural_feasibility=None,
         progress_callback=None,
     ):
+        incompatibilities = system.get_strict_analytical_incompatibilities()
+        if incompatibilities:
+            raise ValueError(
+                "Strict analytical evaluation cannot certify this workload: "
+                + "; ".join(incompatibilities)
+                + ". Use simulation replica evaluation."
+            )
         service_count = len(system.get_services())
         self.__request_classes = tuple(system.get_request_classes())
         self.__limits = self.__normalize_limits(request_class_mean_latency_limits)

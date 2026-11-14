@@ -186,7 +186,6 @@ def measurement_methodology_contract():
             "required_quantities": [
                 "offered_rate_rps",
                 "completed_rate_rps",
-                "error_rate",
                 "healthy",
             ],
             "healthy_semantics": (
@@ -246,11 +245,6 @@ def measurement_methodology_contract():
             "metric": "container_cpu_cfs_throttled_seconds_total",
             "operation": "counter_increase",
             "containers": "same_application_container_set_as_cpu_usage",
-        },
-        "optional_memory": {
-            "metric": "container_memory_working_set_bytes",
-            "containers": "same_application_container_set_as_cpu_usage",
-            "operation": "time_mean_or_max_over_window",
         },
         "replica_join": {
             "keys": ["namespace", "pod"],

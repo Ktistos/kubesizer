@@ -408,12 +408,13 @@ def parse_workload_definition(value, *, base_path=None):
         "sizing_policy",
         "communication_latency",
         "service_blocking_times",
+        "service_post_release_delays",
     }
     if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
             "workload must contain services and request_classes and may contain "
             "load_forecast, sizing_policy, communication_latency, and "
-            "service_blocking_times; "
+            "service_blocking_times, service_post_release_delays; "
             "arrival rates come from the measurement package."
         )
     missing = {"services", "request_classes"} - set(value)
@@ -789,12 +790,31 @@ def parse_workload_definition(value, *, base_path=None):
             )
             for service_name, specification in raw_blocking_times.items()
         )
+    post_release_delays = ()
+    if "service_post_release_delays" in value:
+        raw_delays = value["service_post_release_delays"]
+        if not isinstance(raw_delays, Mapping) or not raw_delays:
+            raise ValueError("service_post_release_delays must be a nonempty mapping.")
+        if set(raw_delays) - service_names:
+            raise ValueError("service_post_release_delays contains unknown services.")
+        post_release_delays = tuple(
+            (
+                name,
+                parse_duration_distribution(
+                    specification,
+                    f"service_post_release_delays.{name}",
+                    base_path=base_path,
+                ),
+            )
+            for name, specification in raw_delays.items()
+        )
     return WorkloadDefinition(
         services=services,
         request_classes=tuple(classes),
         load_forecast_multipliers=multipliers,
         communication_latency=communication_latency,
         service_blocking_times=service_blocking_times,
+        service_post_release_delays=post_release_delays,
         maximum_capacity_utilization=maximum_capacity_utilization,
     )
 
@@ -843,21 +863,6 @@ def _parse_service_intervals(path):
                 throttled_seconds=_finite(
                     row.get("throttled_seconds") or 0.0,
                     f"{label}.throttled_seconds",
-                    nonnegative=True,
-                ),
-                memory_bytes=_optional_number(
-                    row, "memory_bytes", f"{label}.memory_bytes", nonnegative=True
-                ),
-                mean_active_requests=_optional_number(
-                    row,
-                    "mean_active_requests",
-                    f"{label}.mean_active_requests",
-                    nonnegative=True,
-                ),
-                maximum_active_requests=_optional_number(
-                    row,
-                    "maximum_active_requests",
-                    f"{label}.maximum_active_requests",
                     nonnegative=True,
                 ),
                 response_duration_sum_seconds=_optional_number(
@@ -1099,7 +1104,6 @@ def _parse_capacity(path):
             "replicas",
             "offered_rate_rps",
             "completed_rate_rps",
-            "error_rate",
             "healthy",
         },
         "capacity_observations",
@@ -1113,18 +1117,6 @@ def _parse_capacity(path):
             float(row["replicas"]), replicas
         ):
             raise ValueError(f"{label}.replicas must be an integer.")
-        error_rate = _finite(
-            row.get("error_rate"), f"{label}.error_rate", nonnegative=True
-        )
-        if error_rate > 1.0:
-            raise ValueError(f"{label}.error_rate cannot exceed one.")
-        throttling_ratio = _finite(
-            row.get("cpu_throttling_ratio") or 0.0,
-            f"{label}.cpu_throttling_ratio",
-            nonnegative=True,
-        )
-        if throttling_ratio > 1.0:
-            raise ValueError(f"{label}.cpu_throttling_ratio cannot exceed one.")
         observation = CapacityObservation(
             run_id=_name(row.get("run_id"), f"{label}.run_id"),
             service=_name(row.get("service"), f"{label}.service"),
@@ -1139,9 +1131,7 @@ def _parse_capacity(path):
                 f"{label}.completed_rate_rps",
                 nonnegative=True,
             ),
-            error_rate=error_rate,
             healthy=_boolean(row.get("healthy"), f"{label}.healthy"),
-            cpu_throttling_ratio=throttling_ratio,
         )
         identity = (observation.service, observation.replicas, observation.run_id)
         if identity in identities:
