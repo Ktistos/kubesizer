@@ -45,7 +45,9 @@ def _independent_model_workload():
         "gg": "deterministic",
     }
     return {
-        "request_classes": {"request": {"concurrency_weight": 1.0, "routing": {}}},
+        "request_classes": {
+            "request": {"concurrency_weight": 1.0, "routing": {}}
+        },
         "traffic_model": {
             "entry_services": {
                 "request": {
@@ -184,3 +186,15 @@ def test_general_service_departure_makes_downstream_arrivals_general():
     }
     assert system.get_effective_arrival_scvs()[0] == pytest.approx(1.0)
     assert system.get_effective_arrival_scvs()[1] > 1.0
+
+
+def test_generalized_workload_is_supported_by_the_native_simulator():
+    system = System(
+        "models",
+        _independent_model_workload(),
+        QueueingNetworkType.OPEN,
+    )
+
+    assert system.native_simulation_supports_distributions() is True
+    result = system.simulate(10.0, seed=1)
+    assert result.get_stability()

@@ -33,7 +33,9 @@ def test_point_estimate_is_pooled_p95_not_mean_replication_p95():
     interval = bootstrap(clusters)
 
     pooled = percentile(clusters[0] + clusters[1], 0.95)
-    mean_replication_p95 = np.mean([percentile(cluster, 0.95) for cluster in clusters])
+    mean_replication_p95 = np.mean(
+        [percentile(cluster, 0.95) for cluster in clusters]
+    )
     assert interval.p95_estimate == pytest.approx(pooled)
     assert interval.p95_estimate != pytest.approx(mean_replication_p95)
     assert interval.eligible_request_count == 110
@@ -55,7 +57,11 @@ def test_cluster_bootstrap_mean_uses_pooled_mean_and_complete_replications():
     draws = draw_cluster_bootstrap_indices(2, 1_000, seed=41)
     expected = tuple(
         np.mean(
-            tuple(value for cluster_index in draw for value in clusters[cluster_index])
+            tuple(
+                value
+                for cluster_index in draw
+                for value in clusters[cluster_index]
+            )
         )
         for draw in draws
     )
@@ -92,7 +98,11 @@ def test_fast_weighted_selection_matches_expanded_cluster_draws():
     )
     expected = tuple(
         percentile(
-            tuple(value for cluster_index in draw for value in clusters[cluster_index]),
+            tuple(
+                value
+                for cluster_index in draw
+                for value in clusters[cluster_index]
+            ),
             0.95,
         )
         for draw in draws

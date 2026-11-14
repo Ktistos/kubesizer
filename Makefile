@@ -1,7 +1,10 @@
-.PHONY: install-cli uninstall-cli test test-cli
+.PHONY: native-backend install-cli uninstall-cli test test-cli
 
 CLI_INSTALL_DIRECTORY ?= $(HOME)/.local/bin
 CLI_INSTALL_PATH := $(CLI_INSTALL_DIRECTORY)/kubesizer
+
+native-backend:
+	./native_backend/cpp/build.sh
 
 install-cli:
 	install -d "$(CLI_INSTALL_DIRECTORY)"
@@ -28,5 +31,5 @@ uninstall-cli:
 test-cli:
 	python3 -m pytest -q tests/test_cli.py
 
-test:
+test: native-backend
 	python3 -m pytest -q

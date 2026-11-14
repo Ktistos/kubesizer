@@ -2,6 +2,7 @@ import copy
 
 import pytest
 
+from calibration.profile import experiment_fingerprints
 from performance_models import QueueingNetworkType, System, parse_workload_spec
 
 
@@ -47,6 +48,90 @@ def test_single_model_workload_has_no_schema_metadata_or_redundant_name():
     assert system.get_request_class_mean_latency_limits() == {"request": 1.0}
     with pytest.raises(ValueError, match="mean latency SLOs"):
         system.get_request_class_percentile_latency_limits()
+
+
+def test_request_class_end_to_end_timeout_is_optional_validated_and_fingerprinted():
+    workload = {
+        "request_classes": {
+            "request": {
+                "concurrency_weight": 1.0,
+                "end_to_end_timeout_seconds": 60.0,
+                "routing": {},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
+            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
+        },
+    }
+    parsed = parse_workload_spec(workload)
+    system = System("timeout", workload, QueueingNetworkType.OPEN)
+    _, first_fingerprint = experiment_fingerprints(system)
+
+    assert parsed.request_class_end_to_end_timeouts == {"request": 60.0}
+    assert system.get_request_class_end_to_end_timeouts() == {"request": 60.0}
+
+    changed = copy.deepcopy(workload)
+    changed["request_classes"]["request"]["end_to_end_timeout_seconds"] = 30.0
+    _, second_fingerprint = experiment_fingerprints(
+        System("timeout", changed, QueueingNetworkType.OPEN)
+    )
+    assert second_fingerprint != first_fingerprint
+
+    invalid = copy.deepcopy(workload)
+    invalid["request_classes"]["request"]["end_to_end_timeout_seconds"] = -1.0
+    with pytest.raises(ValueError, match="end_to_end_timeout_seconds"):
+        parse_workload_spec(invalid)
+
+
+def test_terminal_failure_rate_slo_requires_a_deadline_and_is_fingerprinted():
+    workload = {
+        "request_classes": {
+            "request": {
+                "concurrency_weight": 1.0,
+                "end_to_end_latency_slos": _percentile_slo(p95_seconds=1.0),
+                "end_to_end_timeout_seconds": 2.0,
+                "maximum_terminal_failure_rate": 0.05,
+                "routing": {},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
+            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
+        },
+    }
+    parsed = parse_workload_spec(workload)
+    system = System("failure-slo", workload, QueueingNetworkType.OPEN)
+    _, original = experiment_fingerprints(system)
+
+    assert parsed.request_class_failure_rate_slos == {"request": 0.05}
+    assert system.get_request_class_failure_rate_slos() == {"request": 0.05}
+
+    changed = copy.deepcopy(workload)
+    changed["request_classes"]["request"]["maximum_terminal_failure_rate"] = 0.10
+    _, changed_fingerprint = experiment_fingerprints(
+        System("failure-slo", changed, QueueingNetworkType.OPEN)
+    )
+    assert changed_fingerprint != original
+
+    missing_deadline = copy.deepcopy(workload)
+    del missing_deadline["request_classes"]["request"]["end_to_end_timeout_seconds"]
+    with pytest.raises(ValueError, match="no positive end_to_end_timeout_seconds"):
+        parse_workload_spec(missing_deadline)
+
+    invalid = copy.deepcopy(workload)
+    invalid["request_classes"]["request"]["maximum_terminal_failure_rate"] = 1.0
+    with pytest.raises(ValueError, match="less than one"):
+        parse_workload_spec(invalid)
+
+    zero = copy.deepcopy(workload)
+    zero["request_classes"]["request"]["maximum_terminal_failure_rate"] = 0.0
+    with pytest.raises(ValueError, match="greater than zero"):
+        parse_workload_spec(zero)
 
 
 def test_single_model_workload_requires_explicit_concurrency_weights():
@@ -148,6 +233,38 @@ def test_system_rejects_request_for_undeclared_percentile():
         system.get_request_class_mean_latency_limits()
     with pytest.raises(ValueError, match="does not define p99"):
         system.get_request_class_percentile_latency_limits(quantile=0.99)
+
+
+def test_latency_slo_changes_alter_the_workload_fingerprint():
+    workload = {
+        "request_classes": {
+            "request": {
+                "concurrency_weight": 1.0,
+                "end_to_end_latency_slos": _mean_slo(),
+                "routing": {},
+            }
+        },
+        "traffic_model": {
+            "entry_services": {
+                "request": {"api": {"distribution": "exponential", "rate": 2.0}}
+            },
+            "service_times": {"api": {"distribution": "exponential", "rate": 10.0}},
+        },
+    }
+    changed = copy.deepcopy(workload)
+    changed["request_classes"]["request"]["end_to_end_latency_slos"][
+        "mean_seconds"
+    ] = 0.9
+
+    original_fingerprints = experiment_fingerprints(
+        System("original-slos", workload, QueueingNetworkType.OPEN)
+    )
+    changed_fingerprints = experiment_fingerprints(
+        System("changed-slos", changed, QueueingNetworkType.OPEN)
+    )
+
+    assert original_fingerprints[0] == changed_fingerprints[0]
+    assert original_fingerprints[1] != changed_fingerprints[1]
 
 
 def test_only_request_classes_with_slos_are_constrained():

@@ -15,7 +15,6 @@ from .workload import (
     parse_workload_spec,
 )
 from .analytical import AnalyticalQueueingModel
-
 __all__ = [
     "Service",
     "Edge",

@@ -5,6 +5,12 @@ from enum import Enum
 from metrics import Metrics
 
 from .base import GraphSearchProblem
+from .exceptions import StatisticalEvaluationError
+from .simulation_evaluation import (
+    CalibratedConfigurationEvaluator,
+    ConfigurationEvaluation,
+    SimulationClassification,
+)
 
 
 class AnalyticalClassification(str, Enum):
@@ -46,6 +52,28 @@ class AnalyticalReplicaSizingEvaluation:
         return (0 if self.feasible else 1, self.cost, self.tie_breaker)
 
 
+@dataclass(frozen=True)
+class ReplicaSizingEvaluation:
+    """Constraint results and metrics for one replica configuration."""
+
+    configuration: tuple[int, ...]
+    feasible: bool
+    cost: float
+    tie_breaker: float
+    analytical_metrics: Metrics
+    simulation_metrics: Metrics | None
+    classification: SimulationClassification | None = None
+    configuration_evaluation: ConfigurationEvaluation | None = None
+
+    def ranking_key(self):
+        """Return the lexicographic feasibility, cost, and latency ordering."""
+        return (
+            0 if self.feasible else 1,
+            self.cost,
+            self.tie_breaker,
+        )
+
+
 def _positive_integer_tuple(values, size, message):
     values = tuple(values)
     if len(values) != size or any(
@@ -82,7 +110,7 @@ def _replica_costs(values, service_count):
 
 
 class _BoundedReplicaSizingProblem(GraphSearchProblem):
-    """Exact-search geometry for analytical evidence."""
+    """Shared exact-search geometry for analytical and simulation evidence."""
 
     def __init__(
         self,
@@ -330,9 +358,9 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
     def search_tie_breaker(self, configuration):
         analytical, class_means = self._evidence(configuration)
         if not analytical.get_stability() or not class_means:
-            raise ValueError(
-                "Analytical optimization search states must be strictly stable."
-            )
+            # CPU stability is only a lower bound for a layered holding pool.
+            # Keep these states searchable, but never classify them feasible.
+            return 1e300
         value = self._worst_normalized_latency(class_means)
         if not math.isfinite(value) or value < 0:
             raise ValueError("Analytical mean-latency ranking must be finite.")
@@ -371,8 +399,140 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
             classification=classification,
             request_class_mean_latencies=class_means,
             request_class_mean_latency_limits=tuple(self.__limits.items()),
-            evaluation_basis=(
-                "ANALYTICAL_MEAN_LATENCY" if self.__limits else "ANALYTICAL_STABILITY"
-            ),
+            evaluation_basis=getattr(
+                self._system,
+                "get_analytical_evaluation_basis",
+                lambda: (
+                    "ANALYTICAL_MEAN_LATENCY"
+                    if self.__limits
+                    else "ANALYTICAL_STABILITY"
+                ),
+            )(),
         )
         return self._record_evaluation(configuration, evaluation)
+
+
+class CalibratedReplicaSizingProblem(_BoundedReplicaSizingProblem):
+    """Bounded exact search driven by calibrated simulation results."""
+
+    def __init__(
+        self,
+        system,
+        calibration_profile,
+        *,
+        simulation_workers=1,
+        evaluator=None,
+        replica_costs=None,
+        structural_feasibility=None,
+        progress_callback=None,
+    ):
+        self.__profile = calibration_profile
+        maximum = tuple(calibration_profile.maximum_replica_configuration)
+        initial = tuple(calibration_profile.minimum_replica_configuration)
+        super().__init__(
+            system,
+            initial,
+            maximum,
+            replica_costs=replica_costs,
+            structural_feasibility=structural_feasibility,
+            progress_callback=progress_callback,
+            invalid_configuration_message=(
+                "Configuration is outside calibrated replica bounds."
+            ),
+            exceeded_configuration_message=(
+                "Configuration is outside calibrated replica bounds."
+            ),
+        )
+        if any(high < low for low, high in zip(initial, maximum)):
+            raise ValueError("Calibration profile contains invalid replica bounds.")
+        self.__evaluator = evaluator or CalibratedConfigurationEvaluator(
+            system,
+            calibration_profile,
+            workers=simulation_workers,
+            progress_callback=progress_callback,
+        )
+        self.__search_order_cache = {}
+
+    def search_tie_breaker(self, configuration):
+        """Order equal-cost states by lower analytical bottleneck utilization."""
+        configuration = self._normalize(configuration)
+        cached = self.__search_order_cache.get(configuration)
+        if cached is not None:
+            return cached
+        self._system.configure_system_replicas(configuration)
+        analytical = self._system.solve()
+        utilizations = tuple(analytical.get_mean_utilizations())
+        if not analytical.get_stability() or not utilizations:
+            raise ValueError(
+                "Calibrated uniform-cost search requires stable bounded states."
+            )
+        ordering = max(float(value) for value in utilizations)
+        if not math.isfinite(ordering) or ordering < 0:
+            raise ValueError("Analytical utilization ordering must be finite.")
+        self.__search_order_cache[configuration] = ordering
+        return ordering
+
+    def evaluate(self, configuration):
+        configuration = self._normalize(configuration)
+        if not self.candidate_is_structurally_feasible(configuration):
+            self._system.configure_system_replicas(configuration)
+            analytical = self._system.solve()
+            evaluation = ReplicaSizingEvaluation(
+                configuration=configuration,
+                feasible=False,
+                cost=math.inf,
+                tie_breaker=math.inf,
+                analytical_metrics=analytical,
+                simulation_metrics=None,
+                classification=(SimulationClassification.STRUCTURALLY_INFEASIBLE),
+            )
+            return self._record_evaluation(configuration, evaluation)
+        statistical = self.__evaluator.evaluate(configuration)
+        self._system.configure_system_replicas(configuration)
+        analytical = self._system.solve()
+        intervals = statistical.intervals
+        simulation_metrics = (
+            Metrics(
+                (),
+                (),
+                analytical.get_stability(),
+                request_class_p95_latencies={
+                    request_class: interval.p95_estimate
+                    for request_class, interval in intervals.items()
+                },
+            )
+            if intervals
+            else None
+        )
+        feasible = (
+            statistical.classification
+            == SimulationClassification.STATISTICALLY_FEASIBLE
+        )
+        evaluation = ReplicaSizingEvaluation(
+            configuration=configuration,
+            feasible=feasible,
+            cost=self.configuration_cost(configuration) if feasible else math.inf,
+            tie_breaker=(
+                max(
+                    interval.upper_bound / interval.slo
+                    for interval in intervals.values()
+                )
+                if feasible and intervals
+                else math.inf
+            ),
+            analytical_metrics=analytical,
+            simulation_metrics=simulation_metrics,
+            classification=statistical.classification,
+            configuration_evaluation=statistical,
+        )
+        self._record_evaluation(configuration, evaluation)
+        if statistical.classification in (
+            SimulationClassification.SIMULATION_FAILURE,
+            SimulationClassification.CALIBRATION_FAILURE,
+        ):
+            raise StatisticalEvaluationError(
+                statistical.failure_reason
+                or f"Configuration evaluation failed: {statistical.classification.value}",
+                evaluation,
+            )
+        return evaluation

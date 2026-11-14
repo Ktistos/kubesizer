@@ -3,6 +3,16 @@ import math
 from .uniform_cost import UniformCostReplicaOptimizer
 
 
+def replica_configuration_count(calibration_profile):
+    return math.prod(
+        maximum - minimum + 1
+        for minimum, maximum in zip(
+            calibration_profile.minimum_replica_configuration,
+            calibration_profile.maximum_replica_configuration,
+        )
+    )
+
+
 def optimize_replica_configuration(
     problem,
     *,
@@ -25,9 +35,7 @@ def optimize_replica_configuration(
             for low, maximum in zip(minimum, problem.maximum_configuration())
         )
     else:
-        raise TypeError(
-            "Exact replica search requires a configuration-count or bounds API."
-        )
+        raise TypeError("Exact replica search requires a configuration-count or bounds API.")
     if progress_callback is not None:
         progress_callback(
             "replica_optimization_started",

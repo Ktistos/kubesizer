@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from itertools import pairwise, product
 
 from performance_models import (
@@ -890,12 +891,17 @@ def build_characterized_system_variants(
     recommendation=None,
     name="characterized-deployment",
     evaluation_mode="simulation",
+    include_declared_blocking=False,
     maximum_ambiguity_variants=64,
     input_uncertainty_block_length=2,
 ):
     """Construct current ``System`` objects for every ambiguity variant."""
     if evaluation_mode not in {"analytical", "simulation"}:
         raise ValueError("evaluation_mode must be analytical or simulation.")
+    if include_declared_blocking and evaluation_mode != "analytical":
+        raise ValueError(
+            "include_declared_blocking is only valid for analytical evaluation."
+        )
     unavailable_boundaries = tuple(
         (item.request_class, item.boundary_latency.reason)
         for item in characterization.external_request_classes
@@ -922,6 +928,32 @@ def build_characterized_system_variants(
         maximum_ambiguity_variants=maximum_ambiguity_variants,
         input_uncertainty_block_length=input_uncertainty_block_length,
     )
+    if include_declared_blocking:
+        enriched_variants = []
+        for variant in variants:
+            workload = copy.deepcopy(variant.workload)
+            for service, blocking in inputs.workload.service_blocking_times:
+                workload["traffic_model"]["service_times"][service][
+                    "non_cpu_blocking_time"
+                ] = duration_distribution_to_workload_mapping(blocking)
+            enriched_variants.append(
+                replace(
+                    variant,
+                    workload=workload,
+                    assumptions=tuple(
+                        item
+                        for item in variant.assumptions
+                        if not item.startswith(
+                            "non-CPU blocking variability is excluded"
+                        )
+                    )
+                    + (
+                        "experimental layered analysis includes declared blocking "
+                        "only; missing local I/O waits are not inferred",
+                    ),
+                )
+            )
+        variants = tuple(enriched_variants)
     incomplete = tuple(
         (variant.name, issue)
         for variant in variants

@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from analytical_workflow import optimize_with_analytical_model
 from calibration import CalibrationOptions
 from characterization import (
     build_characterized_system_variants,
@@ -35,7 +36,6 @@ from performance_models import QueueingNetworkType, System
 from runtime_estimation import estimate_workflow_runtime
 from statistical_workflow import (
     calibrate,
-    optimize_with_analytical_model,
     optimize_with_calibrated_simulation,
     validate_final_configuration,
 )
@@ -126,6 +126,11 @@ def _load_workflow_system(args):
         plan.inputs,
         plan.characterization,
         evaluation_mode=getattr(args, "replica_evaluation", "simulation"),
+        include_declared_blocking=(
+            getattr(args, "replica_evaluation", "simulation") == "analytical"
+            and getattr(args, "analytical_semantics", "baseline")
+            == "experimental-layered"
+        ),
     )
     if len(variants) != 1:
         names = [variant.name for variant, _system in variants]
@@ -642,6 +647,7 @@ def _run_replica_workflow(
             maximum_replicas=args.max_replicas,
             minimum_configuration=minimum_configuration,
             progress_callback=_progress_callback(args),
+            analytical_semantics=args.analytical_semantics,
         )
         return result, None, None
 
@@ -763,6 +769,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_workload_argument(parser)
     _add_calibration_arguments(parser)
+    parser.add_argument(
+        "--analytical-semantics",
+        choices=("baseline", "experimental-layered"),
+        default="baseline",
+        help="Opt in to approximate layered holding/join semantics.",
+    )
     parser.add_argument(
         "--replica-evaluation",
         choices=("analytical", "simulation"),

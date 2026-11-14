@@ -1,0 +1,49 @@
+# One low-load run. The campaign supplied five independent files like this.
+# Only the fields consumed by fitted-variability characterization are shown.
+measurement:
+  start: "2026-09-01T10:06:41Z"
+  end: "2026-09-01T10:11:41Z"
+  warmup_seconds: 60
+  window_seconds: 30
+  stable_window_count: 10
+
+services:
+  network-front:
+    replica_count: 1
+    # Inclusive of this service, downstream calls and local blocking.
+    istio_response_time_ms:
+      mean: 54.07
+      p50: 47.00
+    replicas:
+      network-front-pod:
+        throughput_rps: 9.73
+        cpu_usage_cores: 0.0568
+        cpu_capacity_cores: 1.0
+        cpu_capacity_source: limit
+        cpu_service_demand_seconds_per_request: 0.00584
+
+  network-mid:
+    replica_count: 1
+    istio_response_time_ms:
+      mean: 37.82
+      p50: 34.00
+    replicas:
+      network-mid-pod:
+        throughput_rps: 9.73
+        cpu_usage_cores: 0.057
+        cpu_capacity_cores: 1.0
+        cpu_capacity_source: limit
+        cpu_service_demand_seconds_per_request: 0.0059
+
+  network-leaf:
+    replica_count: 1
+    istio_response_time_ms:
+      mean: 20.19
+      p50: 16.0
+    replicas:
+      network-leaf-pod:
+        throughput_rps: 9.73
+        cpu_usage_cores: 0.037
+        cpu_capacity_cores: 1.0
+        cpu_capacity_source: limit
+        cpu_service_demand_seconds_per_request: 0.0038

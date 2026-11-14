@@ -1,0 +1,45 @@
+# Forecast and search space frozen before screening outcomes were observed.
+family: same_node_chain
+namespace: kubesizer-rich-same-node-chain-20260901
+
+characterization_rates:
+  network_request: 10.0
+
+target_rates:
+  network_request: 55.0
+
+candidate_configurations:
+  c1:
+    network-front: 1
+    network-mid: 1
+    network-leaf: 1
+  c2:
+    network-front: 1
+    network-mid: 1
+    network-leaf: 2
+  c3:
+    network-front: 1
+    network-mid: 2
+    network-leaf: 2
+  c4:
+    network-front: 2
+    network-mid: 2
+    network-leaf: 3
+
+screening_arrival_patterns:
+  exponential:
+    distribution: exponential
+  moderately_variable:
+    distribution: gamma
+    scv: 0.5
+  bursty:
+    distribution: gamma
+    scv: 2.0
+
+held_out_final_load:
+  name: high_exponential
+  class_arrival_rates:
+    network_request: 80.0
+  class_interarrivals:
+    network_request:
+      distribution: exponential

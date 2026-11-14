@@ -1,0 +1,838 @@
+{
+  "characterizations": {
+    "dataset_search": {
+      "arrival_scv": 0.9880414436781052,
+      "capacity_basis": "one-core-normalized sensitivity; CPU request not recorded",
+      "client_to_entry_mean_seconds": 0.07599459871799165,
+      "cpu_demand_seconds": {
+        "ckan": 0.017833826591953213,
+        "keycloak": 0.0010448905405661757,
+        "solr": 0.002728380630758003,
+        "stelarapi": 0.011879387653405104
+      },
+      "hashes": {
+        "dataset_search/rate-4/rep-1/config.yaml": "cb0729a38afa39e2619d166199c670d918e0aa57d22606fb26570882a9c0b0cb",
+        "dataset_search/rate-4/rep-1/measurement.yaml": "149185dc7c6f8e368a0e88006990412ace9988d919b35523fe4b3895b0202b6d",
+        "dataset_search/rate-4/rep-1/request_cohort.yaml": "ebfa6060e5ebea6dcc616f6630c264d66f9e06bda607830434fb55559bab4000",
+        "dataset_search/rate-4/rep-1/request_trace.dataset_search.csv": "27ace3992f0078ba79af7a95862f5c10704695ff052b8b57c578ac7be999623d",
+        "dataset_search/rate-4/rep-2/config.yaml": "8240042baa1dfcf0161667d614e0e73aef789d4b0391947324f5d9636100edd9",
+        "dataset_search/rate-4/rep-2/measurement.yaml": "efea7918d42f11736b92e8a1b8cb7e698a4afee325907ba43afe6681066cd06f",
+        "dataset_search/rate-4/rep-2/request_cohort.yaml": "50142e2f6a73695c8ba62114785b23288d95605250b5c6815c3e25c0b3f23b0a",
+        "dataset_search/rate-4/rep-2/request_trace.dataset_search.csv": "416cb289a41a48bc87d9c1e091dc791895f021cbaa561402bdf651178ba45c8e"
+      },
+      "issues": [
+        "solr: blocking residual -0.00163268s is nonpositive/unseparable and omitted"
+      ],
+      "observed_lowload_response_seconds": {
+        "ckan": 0.04329352656140706,
+        "keycloak": 0.0011016513926531443,
+        "solr": 0.00109570270494633,
+        "stelarapi": 0.06882249013382737
+      },
+      "worker_pool_basis": "historical declared-count sensitivity, not telemetry inference"
+    },
+    "organizations": {
+      "arrival_scv": 1.087740286731601,
+      "capacity_basis": "one-core-normalized sensitivity; CPU request not recorded",
+      "client_to_entry_mean_seconds": 0.06312698212834364,
+      "cpu_demand_seconds": {
+        "ckan": 0.013577196000617353,
+        "keycloak": 0.0011761741359872311,
+        "stelarapi": 0.011516135605838959
+      },
+      "hashes": {
+        "organizations/rate-4/rep-1/config.yaml": "a088f7a8fb4a7693db27dd6070ae28ecacd8d2d096613c571a33d97bfae693d2",
+        "organizations/rate-4/rep-1/measurement.yaml": "96411ef47818a7e7f60f1ed85203f0b85404d9b9cb732bae41c398cf4e1cd8b0",
+        "organizations/rate-4/rep-1/request_cohort.yaml": "5eb462ea9ec55490189b94240d9beab5ca7b9549a65468b0d1b2ead08ddc532d",
+        "organizations/rate-4/rep-1/request_trace.organizations.csv": "d811c5cdb08fc5308c51c19ad81f4265671260a45f98a7ccbbe326e7fd6937a5",
+        "organizations/rate-4/rep-2/config.yaml": "2661545c380b40e85c4af52bc7bf1037d1e82ca32ba4b72c6b2f200080d88b36",
+        "organizations/rate-4/rep-2/measurement.yaml": "cefd0c638c7dfbae779db3ed64f30125f9e75f33639850a228eac882bca1a7f6",
+        "organizations/rate-4/rep-2/request_cohort.yaml": "1946b6d24eb9553ec1e19e86f7dab1d1d32ee168f1ac4b7ee265fe8ec1a9d4f8",
+        "organizations/rate-4/rep-2/request_trace.organizations.csv": "ae26cde9605ccdd0bb592b51dc22ed90cbbc0221d80cd9eefb506372305a1a2e"
+      },
+      "issues": [
+        "keycloak: blocking residual -7.84243e-05s is nonpositive/unseparable and omitted"
+      ],
+      "observed_lowload_response_seconds": {
+        "ckan": 0.036354464720394844,
+        "keycloak": 0.001097749863327911,
+        "stelarapi": 0.05886970278792702
+      },
+      "worker_pool_basis": "historical declared-count sensitivity, not telemetry inference"
+    }
+  },
+  "implementation_commit": "67302af77a91071bdc1299235df6ac8e955da831",
+  "models": {
+    "dataset_search": {
+      "request_classes": {
+        "dataset_search": {
+          "call_execution": "sequential",
+          "calls": {
+            "ckan": {
+              "solr": 1.0009578544061302
+            },
+            "stelarapi": {
+              "ckan": 1.0,
+              "keycloak": 2.99712368168744
+            }
+          },
+          "concurrency_weight": 1.0,
+          "end_to_end_latency_slos": {
+            "mean_seconds": 0.5
+          },
+          "latency_boundary": "external_client",
+          "latency_components": {
+            "client_to_entry": {
+              "distribution": "deterministic",
+              "mean": 0.07599459871799165
+            }
+          }
+        }
+      },
+      "traffic_model": {
+        "entry_services": {
+          "dataset_search": {
+            "stelarapi": {
+              "distribution": "gamma",
+              "rate": 4.0,
+              "scv": 0.9880414436781052
+            }
+          }
+        },
+        "service_times": {
+          "ckan": {
+            "concurrency_limit_per_replica": 2,
+            "distribution": "deterministic",
+            "execution_model": "processor_sharing",
+            "mean": 0.017833826591953213,
+            "non_cpu_blocking_time": {
+              "distribution": "deterministic",
+              "mean": 0.024362947740843775
+            },
+            "replica_queue_model": "independent_random"
+          },
+          "keycloak": {
+            "distribution": "deterministic",
+            "execution_model": "processor_sharing",
+            "mean": 0.0010448905405661757,
+            "non_cpu_blocking_time": {
+              "distribution": "deterministic",
+              "mean": 5.6760852086968575e-05
+            },
+            "replica_queue_model": "independent_random"
+          },
+          "solr": {
+            "distribution": "deterministic",
+            "execution_model": "processor_sharing",
+            "mean": 0.002728380630758003,
+            "replica_queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "concurrency_limit_per_replica": 4,
+            "distribution": "deterministic",
+            "execution_model": "processor_sharing",
+            "mean": 0.011879387653405104,
+            "non_cpu_blocking_time": {
+              "distribution": "deterministic",
+              "mean": 0.010347790441130517
+            },
+            "replica_queue_model": "independent_random"
+          }
+        }
+      }
+    },
+    "organizations": {
+      "request_classes": {
+        "organizations": {
+          "call_execution": "sequential",
+          "calls": {
+            "stelarapi": {
+              "ckan": 1.0,
+              "keycloak": 3.0027372262773726
+            }
+          },
+          "concurrency_weight": 1.0,
+          "end_to_end_latency_slos": {
+            "mean_seconds": 0.5
+          },
+          "latency_boundary": "external_client",
+          "latency_components": {
+            "client_to_entry": {
+              "distribution": "deterministic",
+              "mean": 0.06312698212834364
+            }
+          }
+        }
+      },
+      "traffic_model": {
+        "entry_services": {
+          "organizations": {
+            "stelarapi": {
+              "distribution": "gamma",
+              "rate": 4.0,
+              "scv": 1.087740286731601
+            }
+          }
+        },
+        "service_times": {
+          "ckan": {
+            "concurrency_limit_per_replica": 2,
+            "distribution": "deterministic",
+            "execution_model": "processor_sharing",
+            "mean": 0.013577196000617353,
+            "non_cpu_blocking_time": {
+              "distribution": "deterministic",
+              "mean": 0.02277726871977749
+            },
+            "replica_queue_model": "independent_random"
+          },
+          "keycloak": {
+            "distribution": "deterministic",
+            "execution_model": "processor_sharing",
+            "mean": 0.0011761741359872311,
+            "replica_queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "concurrency_limit_per_replica": 4,
+            "distribution": "deterministic",
+            "execution_model": "processor_sharing",
+            "mean": 0.011516135605838959,
+            "non_cpu_blocking_time": {
+              "distribution": "deterministic",
+              "mean": 0.007702848081937601
+            },
+            "replica_queue_model": "independent_random"
+          }
+        }
+      }
+    }
+  },
+  "protocol": "docs/STELAR_REPLAY_PROTOCOL.md",
+  "runs": [
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services ckan, stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "solr": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.0,
+      "hashes": {
+        "measurement.yaml": "74e1038fe16b990e2cba8436e6cc6383e7404c445e5a798cd6ca49d971f92e93",
+        "request_cohort.yaml": "8af3c0eed4fad0ca2f268adf41fc6d30043f26805d86ab30039cb93103fc4224"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": 0.02554287064296648,
+            "cpu_utilization": 0.5791039801664807,
+            "cpu_wait_mean_seconds": 0.02453727161659526,
+            "holding_mean_seconds": 0.04519352448839278,
+            "holding_utilization": 0.7337670850962661,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.10169216024948685,
+            "cpu_wait_mean_seconds": 0.00011828592782173567,
+            "holding_mean_seconds": 0.0011016513926531443,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "solr": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.08868144477535998,
+            "cpu_wait_mean_seconds": 0.0002655018213396142,
+            "holding_mean_seconds": 0.002728380630758003,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": 1.0289482503818619,
+            "cpu_utilization": 0.3857501157452935,
+            "cpu_wait_mean_seconds": 0.007371064271121949,
+            "holding_mean_seconds": 0.12115714787585972,
+            "holding_utilization": 0.983560457408889,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": true,
+      "mean_accuracy_eligible": true,
+      "model_false_feasible": {
+        "baseline_diagnostic": false,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 0.14606922670140848,
+      "observed_unsafe": false,
+      "offered_rate_rps": 32.47222222222222,
+      "operation": "dataset_search",
+      "predictions": {
+        "baseline_diagnostic": 0.16271563543369127,
+        "experimental_layered": 1.2334710612468354,
+        "layered_unknown_pool_sensitivity": 0.17897994022200686
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/dataset_search/rate-32/rep-1"
+    },
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services ckan, stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "solr": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.0,
+      "hashes": {
+        "measurement.yaml": "09d781d074b91fc2e27808b04d4f6d1b061f6bf94a0589d8a88388b8554b0e31",
+        "request_cohort.yaml": "3675ca042ff541b87b37829d234216e0030e34f6d9aadec27d429b0acb43e649"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": 0.02268549587074531,
+            "cpu_utilization": 0.563350766676922,
+            "cpu_wait_mean_seconds": 0.02300862824583626,
+            "holding_mean_seconds": 0.04518561264690626,
+            "holding_utilization": 0.713681648639747,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.09892585512037336,
+            "cpu_wait_mean_seconds": 0.00011471496637660901,
+            "holding_mean_seconds": 0.0011016513926531443,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "solr": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.086269066722446,
+            "cpu_wait_mean_seconds": 0.0002575975509932684,
+            "holding_mean_seconds": 0.002728380630758003,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": 0.17786769066177183,
+            "cpu_utilization": 0.37525665665145236,
+            "cpu_wait_mean_seconds": 0.007050111470694762,
+            "holding_mean_seconds": 0.11675251527827943,
+            "holding_utilization": 0.9220205581559678,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": true,
+      "mean_accuracy_eligible": true,
+      "model_false_feasible": {
+        "baseline_diagnostic": false,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 0.12483590193462338,
+      "observed_unsafe": false,
+      "offered_rate_rps": 31.58888888888889,
+      "operation": "dataset_search",
+      "predictions": {
+        "baseline_diagnostic": 0.16178153012079813,
+        "experimental_layered": 0.37766491612873765,
+        "layered_unknown_pool_sensitivity": 0.17711172959622054
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/dataset_search/rate-32/rep-2"
+    },
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services ckan, stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "solr": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.03607835298820707,
+      "hashes": {
+        "measurement.yaml": "b5bd0e32ae3c1a4ac08a6eaf3b8d60e734a6168b8cfcbaeea6085ec8a001febf",
+        "request_cohort.yaml": "12794b8f47b7be75cf7262163f60288b8bda9c199664aa37447b960c70f62e4b"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 0.9913626048837991,
+            "cpu_wait_mean_seconds": 2.0468889691156202,
+            "holding_mean_seconds": 0.04541657583301019,
+            "holding_utilization": 1.2623284938475,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.17408584353402318,
+            "cpu_wait_mean_seconds": 0.00022024159500246742,
+            "holding_mean_seconds": 0.0011016513926531443,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "solr": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.1518129232544486,
+            "cpu_wait_mean_seconds": 0.0004883397196942275,
+            "holding_mean_seconds": 0.002728380630758003,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 0.6603619603331748,
+            "cpu_wait_mean_seconds": 0.022821014074532128,
+            "holding_mean_seconds": null,
+            "holding_utilization": null,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": false,
+      "mean_accuracy_eligible": false,
+      "model_false_feasible": {
+        "baseline_diagnostic": false,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 2.6530968659452596,
+      "observed_unsafe": true,
+      "offered_rate_rps": 55.58888888888889,
+      "operation": "dataset_search",
+      "predictions": {
+        "baseline_diagnostic": 1.1818807716295194,
+        "experimental_layered": null,
+        "layered_unknown_pool_sensitivity": 2.217310212613649
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/dataset_search/rate-56/rep-1"
+    },
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services ckan, stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "solr": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.026893415068222265,
+      "hashes": {
+        "measurement.yaml": "4f3d211a647c84e1bb58c62f14a6deed07af576fc9d8e5f698a50947e1979793",
+        "request_cohort.yaml": "7d41fc97083e346b235f2c91b49cf695a4efe96b45ac0f024943bfa6523304ca"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 1.0020629008389712,
+            "cpu_wait_mean_seconds": null,
+            "holding_mean_seconds": 0.04542280814611731,
+            "holding_utilization": 1.2761285599717513,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.17596484324436446,
+            "cpu_wait_mean_seconds": 0.00022312640264300095,
+            "holding_mean_seconds": 0.0011016513926531443,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "solr": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.15345151966774867,
+            "cpu_wait_mean_seconds": 0.0004945660688653601,
+            "holding_mean_seconds": 0.002728380630758003,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 0.667489592925218,
+            "cpu_wait_mean_seconds": 0.023561800393599876,
+            "holding_mean_seconds": null,
+            "holding_utilization": null,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": false,
+      "mean_accuracy_eligible": false,
+      "model_false_feasible": {
+        "baseline_diagnostic": false,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 2.6653600401950963,
+      "observed_unsafe": true,
+      "offered_rate_rps": 56.18888888888889,
+      "operation": "dataset_search",
+      "predictions": {
+        "baseline_diagnostic": null,
+        "experimental_layered": null,
+        "layered_unknown_pool_sensitivity": null
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/dataset_search/rate-56/rep-2"
+    },
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.0,
+      "hashes": {
+        "measurement.yaml": "ffcc090b60b3f7c3ed072145bf82b7ee829ccac7bda722d7a683a68c05aa5a00",
+        "request_cohort.yaml": "be2d75ac1afd34f4d594d553d8553ed6f2ffcc5e08ee88daa4da3307163bdbaf"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": 0.008286406674972999,
+            "cpu_utilization": 0.4233822286192512,
+            "cpu_wait_mean_seconds": 0.009969070997199717,
+            "holding_mean_seconds": 0.036354464720394844,
+            "holding_utilization": 0.5668266957654897,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.11013148375228214,
+            "cpu_wait_mean_seconds": 0.00014556510358803743,
+            "holding_mean_seconds": 0.0011761741359872311,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": 0.008342039414636914,
+            "cpu_utilization": 0.3591114953087449,
+            "cpu_wait_mean_seconds": 0.0070190576485883996,
+            "holding_mean_seconds": 0.07779776169844832,
+            "holding_utilization": 0.6064983839074868,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": true,
+      "mean_accuracy_eligible": true,
+      "model_false_feasible": {
+        "baseline_diagnostic": false,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 0.10513886007080948,
+      "observed_unsafe": false,
+      "offered_rate_rps": 31.183333333333334,
+      "operation": "organizations",
+      "predictions": {
+        "baseline_diagnostic": 0.13094478359981793,
+        "experimental_layered": 0.1562858408900173,
+        "layered_unknown_pool_sensitivity": 0.13965739480040737
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/organizations/rate-32/rep-1"
+    },
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.0,
+      "hashes": {
+        "measurement.yaml": "c5a8c7c1190cbc211d470fec71cdc24d39439fbc9995d770eccba542fc000040",
+        "request_cohort.yaml": "b1b3fd480a9db99e94055855818f0f3306f11e8ee929e41506bde80f2f89c6af"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": 0.008645811420802601,
+            "cpu_utilization": 0.42941653795285883,
+            "cpu_wait_mean_seconds": 0.010218088832744355,
+            "holding_mean_seconds": 0.036354464720394844,
+            "holding_utilization": 0.5749054657033551,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.11170114680237701,
+            "cpu_wait_mean_seconds": 0.00014790067481922108,
+            "holding_mean_seconds": 0.0011761741359872311,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": 0.009253281322109773,
+            "cpu_utilization": 0.36422977780022886,
+            "cpu_wait_mean_seconds": 0.007176410121033969,
+            "holding_mean_seconds": 0.07841319738650307,
+            "holding_utilization": 0.620008795446336,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": true,
+      "mean_accuracy_eligible": true,
+      "model_false_feasible": {
+        "baseline_diagnostic": false,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 0.10721259219311838,
+      "observed_unsafe": false,
+      "offered_rate_rps": 31.627777777777776,
+      "operation": "organizations",
+      "predictions": {
+        "baseline_diagnostic": 0.1311514753071533,
+        "experimental_layered": 0.15796987095799045,
+        "layered_unknown_pool_sensitivity": 0.14007077821507807
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/organizations/rate-32/rep-2"
+    },
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.2751196172248804,
+      "hashes": {
+        "measurement.yaml": "4da2cd3487eaaee3cd0bc221d1985e063c6b286395fdc6d2fe1b1e4b0d6f1e38",
+        "request_cohort.yaml": "44cb44a11b001150a61ed891c42e20e14985083b74a9e46fe462963e8417aa39"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 0.7567023904344071,
+            "cpu_wait_mean_seconds": 0.042227692608273595,
+            "holding_mean_seconds": 0.036354464720394844,
+            "holding_utilization": 1.0130777502083363,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.19683574648189817,
+            "cpu_wait_mean_seconds": 0.00028825126745326494,
+            "holding_mean_seconds": 0.0011761741359872311,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 0.6418326244320913,
+            "cpu_wait_mean_seconds": 0.022447487989286502,
+            "holding_mean_seconds": null,
+            "holding_utilization": null,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": false,
+      "mean_accuracy_eligible": false,
+      "model_false_feasible": {
+        "baseline_diagnostic": true,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 4.760027669477121,
+      "observed_unsafe": true,
+      "offered_rate_rps": 55.733333333333334,
+      "operation": "organizations",
+      "predictions": {
+        "baseline_diagnostic": 0.15500253410366038,
+        "experimental_layered": null,
+        "layered_unknown_pool_sensitivity": 0.18777289580809217
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/organizations/rate-56/rep-1"
+    },
+    {
+      "baseline_strict_incompatibilities": [
+        "per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes",
+        "synchronous downstream calls hold finite parent concurrency at services stelarapi"
+      ],
+      "censored_count": 0,
+      "configuration": {
+        "ckan": 1,
+        "keycloak": 1,
+        "stelarapi": 1
+      },
+      "failure_rate": 0.2761999818528264,
+      "hashes": {
+        "measurement.yaml": "da591c89c3e0bbd4057c86b4dd3e69eae12ed0756089721a0d7d076730cadbc9",
+        "request_cohort.yaml": "2f6401cb0131c2b2607b8489edab7ee48ad05968125228135b97e988207f87f9"
+      },
+      "layered_details": {
+        "assumptions": [
+          "CPU/admission decomposition, not a joint queue solution",
+          "independent durations and floor/ceil sequential call counts",
+          "moment-matched lognormal independent fork branches",
+          "CPU queue residence excluded from admitted holding demand",
+          "baseline approximate network arrival SCV propagation"
+        ],
+        "evaluation_basis": "EXPERIMENTAL_LAYERED_MOMENT_APPROXIMATION",
+        "fork_join_branch_mean_ranges": {},
+        "join_strategy": "moment_match",
+        "services": {
+          "ckan": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 0.8312261107044625,
+            "cpu_wait_mean_seconds": 0.06686887333681744,
+            "holding_mean_seconds": 0.036354464720394844,
+            "holding_utilization": 1.1128505589409756,
+            "queue_model": "independent_random"
+          },
+          "keycloak": {
+            "admission_wait_correction_seconds": 0.0,
+            "cpu_utilization": 0.21622108515056995,
+            "cpu_wait_mean_seconds": 0.00032447115275874544,
+            "holding_mean_seconds": 0.0011761741359872311,
+            "holding_utilization": 0.0,
+            "queue_model": "independent_random"
+          },
+          "stelarapi": {
+            "admission_wait_correction_seconds": null,
+            "cpu_utilization": 0.7050434132019185,
+            "cpu_wait_mean_seconds": 0.029942616263888302,
+            "holding_mean_seconds": null,
+            "holding_utilization": null,
+            "queue_model": "independent_random"
+          }
+        }
+      },
+      "layered_stable": false,
+      "mean_accuracy_eligible": false,
+      "model_false_feasible": {
+        "baseline_diagnostic": true,
+        "experimental_layered": false
+      },
+      "observed_mean_seconds": 5.08343744381793,
+      "observed_unsafe": true,
+      "offered_rate_rps": 61.22222222222222,
+      "operation": "organizations",
+      "predictions": {
+        "baseline_diagnostic": 0.17112506800420232,
+        "experimental_layered": null,
+        "layered_unknown_pool_sensitivity": 0.22001796360917608
+      },
+      "run": "/home/ktistos/work/STELAR_LOAD_TESTS/experiments/operation-characterization/2026-08-22-admin-valid/organizations/rate-56/rep-2"
+    }
+  ],
+  "status": "RETROSPECTIVE_EXPERIMENTAL_COMPARISON",
+  "summary": {
+    "baseline_diagnostic": {
+      "false_feasible_all_runs": 2,
+      "finite_predictions": 4,
+      "healthy_cases": 4,
+      "mean_absolute_percentage_error": 0.2196615908224731
+    },
+    "experimental_layered": {
+      "false_feasible_all_runs": 0,
+      "finite_predictions": 4,
+      "healthy_cases": 4,
+      "mean_absolute_percentage_error": 2.6074040156283025
+    },
+    "layered_unknown_pool_sensitivity": {
+      "false_feasible_all_runs": null,
+      "finite_predictions": 4,
+      "healthy_cases": 4,
+      "mean_absolute_percentage_error": 0.31971401607209554
+    }
+  }
+}

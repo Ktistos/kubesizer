@@ -1,0 +1,29 @@
+# Client-side evidence aligned with portable-measurement.yaml.
+# A characterization run was accepted only when the cohort was complete,
+# uncensored, healthy and not limited by the load generator.
+semantics: actual-client-start arrival cohort with post-window completion drain
+scheduled_count: 2912
+started_count: 2912
+completed_count: 2912
+censored_count: 0
+failure_count: 0
+scheduled_not_started_count: 0
+configured_max_in_flight: 2000
+fraction_of_window_at_max_in_flight: 0.0
+load_generator_saturated: false
+
+scheduler_delay_ms:
+  mean: 0.157
+  p95: 0.222
+
+request_classes:
+  network_request:
+    started_count: 2912
+    started_rate_rps: 9.707
+    completed_count: 2912
+    censored_count: 0
+    failure_count: 0
+    successful_latency_ms:
+      mean: 110.106
+      p50: 102.483
+      p95: 163.555

@@ -1,8 +1,14 @@
 import pytest
 
-from optimization import AnalyticalClassification
+from optimization import (
+    AnalyticalClassification,
+    ReplicaEvaluationMode,
+)
 from performance_models import QueueingNetworkType, System
-from analytical_workflow import optimize_with_analytical_model
+from statistical_workflow import (
+    optimize_replica_sizing,
+    optimize_with_analytical_model,
+)
 
 
 def _single_service_system():
@@ -93,7 +99,6 @@ def test_exact_analytical_search_finds_minimum_model_feasible_cost(monkeypatch):
         system,
         "simulate_measurement_replications",
         fail_if_simulated,
-        raising=False,
     )
 
     result = optimize_with_analytical_model(
@@ -106,7 +111,7 @@ def test_exact_analytical_search_finds_minimum_model_feasible_cost(monkeypatch):
     assert result.objective_value == 2.0
     assert result.cost == 1.0
     assert result.global_optimal
-    assert not hasattr(result, "simulation_replications")
+    assert result.simulation_replications == 0
     assert (
         result.metrics.classification == AnalyticalClassification.ANALYTICALLY_FEASIBLE
     )
@@ -153,7 +158,7 @@ def test_analytical_search_defaults_to_workload_mean_slo_not_percentile_slo():
 
 
 def test_percentile_workload_cannot_use_strict_analytical_optimization():
-    with pytest.raises(ValueError, match="cannot be certified by analytical mean"):
+    with pytest.raises(ValueError, match="require simulation"):
         optimize_with_analytical_model(
             _structured_percentile_system(),
             request_class_mean_latency_limits={"request": 0.12},
@@ -166,7 +171,7 @@ def test_deadline_workload_cannot_silently_use_strict_analytical_optimization():
     workload["request_classes"]["request"]["end_to_end_timeout_seconds"] = 1.0
     system = System("deadline", workload, QueueingNetworkType.OPEN)
 
-    with pytest.raises(ValueError, match="does not model terminal timeouts"):
+    with pytest.raises(ValueError, match="deadlines require simulation"):
         optimize_with_analytical_model(
             system,
             maximum_replicas=3,
@@ -187,3 +192,31 @@ def test_workload_without_slos_optimizes_to_the_stable_vector():
     assert result.configuration == tuple(system.get_minimum_stable_replicas())
     assert result.metrics.limits == {}
     assert result.metrics.evaluation_basis == "ANALYTICAL_STABILITY"
+
+
+def test_public_dispatcher_selects_evaluation_evidence():
+    result = optimize_replica_sizing(
+        _single_service_system(),
+        evaluation_mode=ReplicaEvaluationMode.ANALYTICAL,
+        request_class_mean_latency_limits={"request": 0.12},
+        maximum_replicas=3,
+    )
+
+    assert result.configuration == (2,)
+    assert result.method == "UNIFORM_COST_EXACT"
+    assert result.simulation_replications == 0
+
+    with pytest.raises(ValueError, match="calibration profile"):
+        optimize_replica_sizing(
+            _single_service_system(),
+            evaluation_mode=ReplicaEvaluationMode.SIMULATION,
+        )
+
+    with pytest.raises(ValueError, match="does not consume"):
+        optimize_replica_sizing(
+            _single_service_system(),
+            evaluation_mode=ReplicaEvaluationMode.ANALYTICAL,
+            calibration_profile=object(),
+            request_class_mean_latency_limits={"request": 0.12},
+            maximum_replicas=3,
+        )

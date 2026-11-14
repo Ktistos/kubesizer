@@ -1,4 +1,5 @@
 from .metrics import Metrics
+from .simulation_metrics_collector import SimulationMetricsCollector
 from .replication_rate import (
     FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD,
     IndependentReplicationRateInterval,
@@ -21,6 +22,7 @@ from .student_t import student_t_cdf, student_t_quantile
 
 __all__ = [
     "Metrics",
+    "SimulationMetricsCollector",
     "student_t_cdf",
     "student_t_quantile",
     "FAILURE_RATE_CONFIDENCE_INTERVAL_METHOD",

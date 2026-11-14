@@ -55,7 +55,9 @@ def test_kl_hoeffding_zero_failure_bound_is_tighter_and_auditable():
     )
 
     assert interval.method == "independent-replication-kl-hoeffding-v1"
-    assert interval.upper_bound == pytest.approx(1.0 - 0.003125 ** (1.0 / 60))
+    assert interval.upper_bound == pytest.approx(
+        1.0 - 0.003125 ** (1.0 / 60)
+    )
     assert interval.upper_bound < 0.10
     assert minimum_zero_failure_replications(0.10, 0.003125) == 55
 

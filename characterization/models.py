@@ -491,7 +491,7 @@ class InitialSizingRecommendation:
 
 
 @dataclass(frozen=True)
-class AnalyticalWorkloadVariant:
+class SimulationWorkloadVariant:
     name: str
     workload: dict
     assumptions: tuple[str, ...]

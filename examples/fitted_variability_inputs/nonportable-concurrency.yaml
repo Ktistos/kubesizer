@@ -1,0 +1,25 @@
+# Operator/application knowledge used by the historical concurrency-aware
+# fitted model. These values did NOT come from Prometheus/Istio measurements;
+# they were read from the synthetic deployment-family declaration. Equivalent
+# values are portable when a DevOps engineer can obtain them from application
+# configuration.
+blocking_concurrency_by_service:
+  network-front: 16
+  network-mid: 8
+  network-leaf: 4
+
+# The builder copies the values above into the generated simulation model as:
+generated_field_mapping:
+  network-front:
+    concurrency_limit_per_replica: 16
+  network-mid:
+    concurrency_limit_per_replica: 8
+  network-leaf:
+    concurrency_limit_per_replica: 4
+
+# Examples of where equivalent knowledge might come from in a real service:
+possible_sources:
+  - application worker/thread count
+  - database connection-pool size
+  - HTTP server maximum in-flight request limit
+  - explicitly configured admission semaphore
