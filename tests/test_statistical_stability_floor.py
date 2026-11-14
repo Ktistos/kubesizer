@@ -6,13 +6,14 @@ import yaml
 from characterization import (
     StabilityFloorStatus,
     StatisticalStabilityError,
-    build_characterized_system_variants,
+    build_analytical_workload_variants,
     characterize_deployment,
     estimate_statistical_stability_floor,
     load_and_prepare_initial_sizing,
     parse_portable_sizing_inputs,
 )
 from optimization import AnalyticalReplicaSizingProblem, UniformCostReplicaOptimizer
+from performance_models import QueueingNetworkType, System
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
 
@@ -30,11 +31,13 @@ def _plan(manifest="measurements.with-capacity.yaml"):
 
 
 def _system_and_order(plan):
-    ((_, system),) = build_characterized_system_variants(
+    (variant,) = build_analytical_workload_variants(
         plan.inputs,
         plan.characterization,
-        evaluation_mode="analytical",
     )
+    # These tests use only the CPU lower bound, not a latency recommendation.
+    # Incomplete blocking evidence must still fail the production builder.
+    system = System("capacity-floor", variant.workload, QueueingNetworkType.OPEN)
     order = tuple(
         item.get_name()
         for item in sorted(
@@ -170,8 +173,25 @@ def test_floor_reports_when_confidence_bounded_requirement_exceeds_bounds(tmp_pa
 
 
 def test_analytical_search_cannot_delete_below_statistical_floor():
-    plan = _plan()
-    system, _ = _system_and_order(plan)
+    # Isolate the search-floor contract with a supported CPU-only workload.
+    # The portable sample's unresolved blocking cannot certify a mean SLO.
+    system = System(
+        "floor-search",
+        {
+            "request_classes": {"request": {"concurrency_weight": 1.0, "routing": {}}},
+            "traffic_model": {
+                "entry_services": {"request": {
+                    name: {"distribution": "exponential", "rate": 1.0}
+                    for name in ("api", "database")
+                }},
+                "service_times": {
+                    name: {"distribution": "exponential", "rate": 10.0, "replica_queue_model": "pooled"}
+                    for name in ("api", "database")
+                },
+            },
+        },
+        QueueingNetworkType.OPEN,
+    )
     problem = AnalyticalReplicaSizingProblem(
         system,
         {},

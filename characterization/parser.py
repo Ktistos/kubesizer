@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
 import json
 import math
@@ -126,7 +127,8 @@ def _resolve_source(value, label, base_path):
 
 def _csv_rows(path, required_columns, label):
     try:
-        with path.open(newline="", encoding="utf-8") as stream:
+        opener = gzip.open if path.suffix == ".gz" else Path.open
+        with opener(path, mode="rt", newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
             columns = set(reader.fieldnames or ())
             missing = set(required_columns) - columns
@@ -406,12 +408,13 @@ def parse_workload_definition(value, *, base_path=None):
         "sizing_policy",
         "communication_latency",
         "service_blocking_times",
+        "service_post_release_delays",
     }
     if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
             "workload must contain services and request_classes and may contain "
             "load_forecast, sizing_policy, communication_latency, and "
-            "service_blocking_times; "
+            "service_blocking_times, service_post_release_delays; "
             "arrival rates come from the measurement package."
         )
     missing = {"services", "request_classes"} - set(value)
@@ -787,12 +790,31 @@ def parse_workload_definition(value, *, base_path=None):
             )
             for service_name, specification in raw_blocking_times.items()
         )
+    post_release_delays = ()
+    if "service_post_release_delays" in value:
+        raw_delays = value["service_post_release_delays"]
+        if not isinstance(raw_delays, Mapping) or not raw_delays:
+            raise ValueError("service_post_release_delays must be a nonempty mapping.")
+        if set(raw_delays) - service_names:
+            raise ValueError("service_post_release_delays contains unknown services.")
+        post_release_delays = tuple(
+            (
+                name,
+                parse_duration_distribution(
+                    specification,
+                    f"service_post_release_delays.{name}",
+                    base_path=base_path,
+                ),
+            )
+            for name, specification in raw_delays.items()
+        )
     return WorkloadDefinition(
         services=services,
         request_classes=tuple(classes),
         load_forecast_multipliers=multipliers,
         communication_latency=communication_latency,
         service_blocking_times=service_blocking_times,
+        service_post_release_delays=post_release_delays,
         maximum_capacity_utilization=maximum_capacity_utilization,
     )
 
@@ -1031,17 +1053,33 @@ def _parse_arrival_samples(path):
                 row.get("request_class"),
                 f"external_arrival_samples row {index}.request_class",
             ),
+            entry_service=(
+                _name(
+                    row.get("entry_service"),
+                    f"external_arrival_samples row {index}.entry_service",
+                )
+                if row.get("entry_service") not in (None, "")
+                else None
+            ),
         )
         for index, row in enumerate(rows, 2)
     )
     by_class = {}
     for item in result:
-        by_class.setdefault(item.request_class, []).append(item.timestamp)
-    for request_class, timestamps in by_class.items():
-        if any(right <= left for left, right in pairwise(timestamps)):
+        key = (item.request_class, item.entry_service)
+        by_class.setdefault(key, []).append(item.timestamp)
+    for (request_class, entry_service), timestamps in by_class.items():
+        if any(right < left for left, right in pairwise(timestamps)):
             raise ValueError(
-                "external_arrival_samples timestamps must be strictly increasing "
-                f"within request class {request_class!r}."
+                "external_arrival_samples timestamps must be nondecreasing "
+                f"within request class {request_class!r} and entry service "
+                f"{entry_service!r}."
+            )
+        if len(timestamps) < 2 or timestamps[-1] <= timestamps[0]:
+            raise ValueError(
+                "external_arrival_samples requires at least two timestamps with "
+                f"positive span for request class {request_class!r} and entry "
+                f"service {entry_service!r}."
             )
     return result
 
@@ -1236,6 +1274,22 @@ def parse_portable_sizing_inputs(
         measurement_manifest,
         base_path=base_path,
     )
+    request_classes = {
+        request_class.name: request_class
+        for request_class in parsed_workload.request_classes
+    }
+    for sample in parsed_measurements.external_arrival_samples:
+        request_class = request_classes.get(sample.request_class)
+        if (
+            request_class is not None
+            and sample.entry_service is not None
+            and sample.entry_service not in request_class.entry_services
+        ):
+            raise ValueError(
+                "external_arrival_samples entry_service "
+                f"{sample.entry_service!r} is not an entry service for request "
+                f"class {sample.request_class!r}."
+            )
     return PortableSizingInputs(
         workload=parsed_workload,
         measurements=parsed_measurements,

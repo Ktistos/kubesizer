@@ -182,15 +182,17 @@ def estimate_low_load_service_blocking_time(
     cpu_execution_mean_seconds,
     downstream_response_mean_seconds=0.0,
     communication_round_trip_mean_seconds=0.0,
+    post_release_delay_mean_seconds=0.0,
     maximum_observed_cpu_utilization,
     maximum_allowed_cpu_utilization=0.20,
     difference_tolerance_seconds=0.001,
 ):
     """Estimate an explicitly labelled non-CPU wait from a low-load run.
 
-    The response, CPU execution, downstream response, and communication means
-    must describe the same service, route, and observation window. The result
-    is an inferred mean residual, not a directly observed I/O distribution.
+    The response, CPU execution, downstream response, communication, and
+    independently measured post-release delay means must describe the same
+    service, route, and observation window, with no overlapping components.
+    The result is an inferred mean residual, not a directly observed I/O distribution.
     A low-utilization gate prevents ordinary queueing delay from being silently
     relabelled as intrinsic blocking work.
     """
@@ -209,6 +211,10 @@ def estimate_low_load_service_blocking_time(
     communication = _finite_nonnegative(
         communication_round_trip_mean_seconds,
         "communication_round_trip_mean_seconds",
+    )
+    post_release = _finite_nonnegative(
+        post_release_delay_mean_seconds,
+        "post_release_delay_mean_seconds",
     )
     utilization = _finite_nonnegative(
         maximum_observed_cpu_utilization,
@@ -232,10 +238,11 @@ def estimate_low_load_service_blocking_time(
             "The characterization run is not low-load enough to separate "
             "non-CPU blocking from queueing delay."
         )
-    accounted = cpu + downstream + communication
+    accounted = cpu + downstream + communication + post_release
     if accounted > observed + tolerance:
         raise ValueError(
-            "Modeled CPU, downstream, and communication means exceed the "
+            "Modeled CPU, downstream, communication, and post-release means "
+            "exceed the "
             "observed service response mean; the boundaries are incompatible."
         )
     residual = max(0.0, observed - accounted)

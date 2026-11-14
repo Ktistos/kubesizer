@@ -7,11 +7,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 13
+PROTOCOL_VERSION = 14
 SIMULATOR_SEMANTICS_VERSION = (
     "native-event-kernel-joint-input-blocks-burst-traces-concurrency-"
     "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-"
-    "ps-replica-queues-measured-latency-components-non-cpu-blocking-v14"
+    "ps-replica-queues-measured-latency-components-rate-preserving-traces-"
+    "post-release-delays-v17"
 )
 
 
@@ -202,6 +203,7 @@ class CppSimulationBackend:
             "get_request_class_service_blocking_time_distribution_specs",
             lambda: {},
         )()
+        post_release_specs = system.get_service_post_release_delay_distribution_specs()
         workflows = system.get_request_class_workflows()
         call_graphs = system.get_request_class_call_graphs()
         call_execution_modes = system.get_request_class_call_execution_modes()
@@ -360,6 +362,10 @@ class CppSimulationBackend:
                         )
                         for request_class in system.get_request_classes()
                     ],
+                    "post_release_delay": (
+                        _serialize_distribution(post_release_specs[service.get_name()])
+                        if service.get_name() in post_release_specs else None
+                    ),
                 }
                 for service in services
             ],

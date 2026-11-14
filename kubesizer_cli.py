@@ -16,6 +16,7 @@ import threading
 import time
 from dataclasses import fields, is_dataclass, replace
 from enum import Enum
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
 
@@ -50,14 +51,21 @@ class CliUsageError(ValueError):
 
 def _jsonable(value: Any) -> Any:
     """Convert repository result objects into strict JSON-compatible values."""
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float):
-        if math.isfinite(value):
-            return value
-        return "Infinity" if value > 0 else "-Infinity"
+    # String-backed enums also satisfy isinstance(value, str), so enums must be
+    # unwrapped before the primitive fast path.
     if isinstance(value, Enum):
         return _jsonable(value.value)
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    # Convert numeric scalar subclasses (including NumPy scalars) to built-in
+    # values so JSON/YAML serializers never receive library-specific objects.
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        converted = float(value)
+        if math.isfinite(converted):
+            return converted
+        return "Infinity" if converted > 0 else "-Infinity"
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, dict):

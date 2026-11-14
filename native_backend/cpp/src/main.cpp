@@ -24,7 +24,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 13;
+constexpr int kProtocolVersion = 14;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 constexpr int kDeadlinePriority = 2;
@@ -34,6 +34,7 @@ enum class EventKind {
     Admit,
     ServiceCompletion,
     BlockingCompletion,
+    ServiceResponse,
     Grant,
     Resume,
     ConcurrencyGrant,
@@ -80,6 +81,7 @@ struct Service {
     ReplicaQueueModel replica_queue_model{ReplicaQueueModel::Pooled};
     std::vector<Distribution> service_times;
     std::vector<std::optional<Distribution>> blocking_times;
+    std::optional<Distribution> post_release_delay;
 };
 
 struct Route {
@@ -118,8 +120,7 @@ struct InputEpoch {
 
 struct TraceSamplerState {
     std::size_t next_index{};
-    double elapsed{};
-    bool initialized{};
+    std::size_t remaining{};
 };
 
 struct Workload {
@@ -760,19 +761,27 @@ class Kernel {
                         "arrival_trace requires per-stream sampler state"
                     );
                 }
-                if (!trace_state->initialized
-                    || trace_state->elapsed >= distribution.block_duration
-                    || trace_state->next_index >= distribution.samples.size()) {
+                if (trace_state->remaining == 0) {
                     std::uniform_int_distribution<std::size_t> choose(
                         0,
                         distribution.samples.size() - 1
                     );
                     trace_state->next_index = choose(random_);
-                    trace_state->elapsed = 0.0;
-                    trace_state->initialized = true;
+                    // A fixed number of gaps per circular block keeps every
+                    // source gap equally likely. Stopping a block by elapsed
+                    // time instead overweights long gaps and changes the load.
+                    // block_duration specifies the target expected duration.
+                    trace_state->remaining = static_cast<std::size_t>(std::min(
+                        static_cast<double>(distribution.samples.size()),
+                        std::max(1.0, std::ceil(
+                            distribution.block_duration / distribution.mean
+                        ))
+                    ));
                 }
-                result = distribution.samples[trace_state->next_index++];
-                trace_state->elapsed += result;
+                result = distribution.samples[trace_state->next_index];
+                trace_state->next_index =
+                    (trace_state->next_index + 1) % distribution.samples.size();
+                --trace_state->remaining;
                 break;
             }
             case DistributionKind::Custom:
@@ -787,9 +796,12 @@ class Kernel {
                 );
                 break;
         }
-        if (!std::isfinite(result) || result <= 0.0) {
+        if (!std::isfinite(result)
+            || result < 0.0
+            || (result == 0.0
+                && distribution.kind != DistributionKind::ArrivalTrace)) {
             throw std::runtime_error(
-                "a distribution generated a non-positive or non-finite sample"
+                "a distribution generated an invalid sample"
             );
         }
         return result;
@@ -884,6 +896,14 @@ class Kernel {
                 service_completion(event); break;
             case EventKind::BlockingCompletion:
                 blocking_completion(event); break;
+            case EventKind::ServiceResponse:
+                if (workload_.request_classes[event.visit->request->request_class].flow_kind
+                    == FlowKind::Calls) {
+                    complete_call_visit(event.visit, event.time, true);
+                } else {
+                    complete_routed_visit(event.visit, event.time, true);
+                }
+                break;
             case EventKind::Grant:
                 grant(event.index, event.queue, event.time);
                 break;
@@ -1307,14 +1327,9 @@ class Kernel {
         );
     }
 
-    void release_concurrency_and_destroy(Visit* visit, double now) {
+    void release_concurrency(Visit* visit, double now) {
         const int service = visit->service;
         const int queue = queue_index(visit);
-        if (collect_service_samples_) {
-            service_response_times_[service].push_back(
-                now - visit->arrival_time
-            );
-        }
         --active_concurrency_by_queue_[service][queue];
         if (active_concurrency_by_queue_[service][queue] < 0) {
             throw std::runtime_error("replica active concurrency became negative");
@@ -1334,9 +1349,33 @@ class Kernel {
             0,
             queue
         );
+    }
+
+    void destroy_visit(Visit* visit, double now) {
+        if (collect_service_samples_) {
+            service_response_times_[visit->service].push_back(now - visit->arrival_time);
+        }
         const std::size_t ownership_index = visit->ownership_index;
         visits_[ownership_index].reset();
         free_visit_slots_.push_back(ownership_index);
+    }
+
+    void release_concurrency_and_destroy(Visit* visit, double now) {
+        release_concurrency(visit, now);
+        destroy_visit(visit, now);
+    }
+
+    bool defer_service_response(Visit* visit, double now) {
+        const auto& distribution = workload_.services[visit->service].post_release_delay;
+        if (!distribution.has_value()) return false;
+        const double delay = sample(distribution.value());
+        if (delay == 0.0) return false;
+        // Keep the Visit and Request alive until the response is delivered.
+        // A caller retains its own slot; this service no longer retains one.
+        release_concurrency(visit, now);
+        schedule(now + delay, kNormalPriority, EventKind::ServiceResponse,
+                 nullptr, visit->service, visit);
+        return true;
     }
 
     void schedule_child(Visit* parent, int child_service, double now) {
@@ -1390,11 +1429,13 @@ class Kernel {
         complete_call_visit(parent, now);
     }
 
-    void complete_call_visit(Visit* visit, double now) {
+    void complete_call_visit(Visit* visit, double now, bool released = false) {
+        if (!released && defer_service_response(visit, now)) return;
         Request* request = visit->request;
         Visit* parent = visit->parent;
         const double return_network_delay = visit->return_network_delay;
-        release_concurrency_and_destroy(visit, now);
+        if (released) destroy_visit(visit, now);
+        else release_concurrency_and_destroy(visit, now);
         if (parent != nullptr) {
             const double return_time = now + return_network_delay;
             if (return_time == now) {
@@ -1481,7 +1522,13 @@ class Kernel {
             return;
         }
 
-        const int target = choose_route(request, service);
+        if (defer_service_response(visit, now)) return;
+        complete_routed_visit(visit, now);
+    }
+
+    void complete_routed_visit(Visit* visit, double now, bool released = false) {
+        Request* request = visit->request;
+        const int target = choose_route(request, visit->service);
         if (target >= 0) {
             Visit* next = create_visit(request, target, nullptr, now);
             const double arrival_time = now + network_delay();
@@ -1495,7 +1542,8 @@ class Kernel {
                 next
             );
         }
-        release_concurrency_and_destroy(visit, now);
+        if (released) destroy_visit(visit, now);
+        else release_concurrency_and_destroy(visit, now);
         if (target < 0) {
             finish_or_delay(request, now);
         }
@@ -1965,14 +2013,21 @@ Distribution parse_distribution(json_t* raw, bool allow_arrival_trace) {
             }
             std::vector<double> intervals;
             intervals.reserve(result.samples.size() - 1);
+            bool has_positive_interval = false;
             for (std::size_t i = 1; i < result.samples.size(); ++i) {
                 const double interval = result.samples[i] - result.samples[i - 1];
-                if (interval <= 0.0) {
+                if (interval < 0.0) {
                     throw std::runtime_error(
-                        "arrival_trace timestamps must be strictly increasing"
+                        "arrival_trace timestamps must be nondecreasing"
                     );
                 }
+                has_positive_interval = has_positive_interval || interval > 0.0;
                 intervals.push_back(interval);
+            }
+            if (!has_positive_interval) {
+                throw std::runtime_error(
+                    "arrival_trace must span a positive amount of time"
+                );
             }
             result.samples = std::move(intervals);
         } else if (std::any_of(
@@ -2180,6 +2235,10 @@ Workload parse_workload(json_t* raw) {
                     parse_distribution(raw_blocking_distribution, false)
                 );
             }
+        }
+        json_t* raw_post_release_delay = required(item, "post_release_delay");
+        if (!json_is_null(raw_post_release_delay)) {
+            service.post_release_delay = parse_distribution(raw_post_release_delay, false);
         }
         workload.services.push_back(std::move(service));
     }

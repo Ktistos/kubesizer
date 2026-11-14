@@ -136,6 +136,27 @@ def test_arrival_trace_retains_local_burst_order_instead_of_iid_sampling():
     assert observed_intervals[:3] == (0.1, 1.0, 0.1)
 
 
+def test_arrival_trace_preserves_simultaneous_gateway_arrivals():
+    workload = _single_service_workload()
+    workload["traffic_model"]["entry_services"]["request"]["api"] = {
+        "distribution": "arrival_trace",
+        "timestamps": [0.0, 0.0, 0.0, 1.0],
+        "sampling": "block_bootstrap",
+        "block_duration": 10.0,
+    }
+    system = System("batched-trace", workload, QueueingNetworkType.OPEN)
+
+    replication = system.simulate_measurement_replications(
+        warmup_duration=0.0,
+        measurement_duration=10.0,
+        seeds=(7,),
+    )[0]
+    arrivals = replication.request_class_arrival_times["request"]
+
+    assert any(left == right for left, right in zip(arrivals, arrivals[1:]))
+    assert system.get_external_arrival_distribution_specs()["request"]["api"].scv > 1.0
+
+
 def test_processor_sharing_pool_limit_queues_excess_concurrency():
     def two_streams(limit):
         specification = _single_service_workload(concurrency_limit=limit)

@@ -10,8 +10,10 @@ from metrics import (
 )
 
 from .replication_evidence import (
+    LatencyGrowthStatus,
     ReplicationEvidenceError,
     calculate_replication_evidence,
+    latency_growth_diagnostics,
     replication_diagnostics,
 )
 
@@ -19,6 +21,7 @@ from .replication_evidence import (
 class FinalValidationClassification(str, Enum):
     VALIDATED_FEASIBLE = "VALIDATED_FEASIBLE"
     FAILED_SLO_VALIDATION = "FAILED_SLO_VALIDATION"
+    MODELED_NONSTATIONARY = "MODELED_NONSTATIONARY"
     ANALYTICALLY_UNSTABLE = "ANALYTICALLY_UNSTABLE"
     SIMULATION_FAILURE = "SIMULATION_FAILURE"
     CALIBRATION_FAILURE = "CALIBRATION_FAILURE"
@@ -38,6 +41,7 @@ class CalibratedFinalValidationResult:
     calibration_profile_fingerprint: str
     simulation_diagnostics: tuple[tuple[str, float | int], ...]
     failure_reason: str | None = None
+    latency_growth_diagnostics: tuple = ()
 
     @property
     def passed(self):
@@ -76,6 +80,7 @@ def validate_final_configuration(
         failure_intervals=(),
         counts=(),
         diagnostics=(),
+        growth_diagnostics=(),
     ):
         return CalibratedFinalValidationResult(
             replica_configuration=configuration,
@@ -90,6 +95,7 @@ def validate_final_configuration(
             calibration_profile_fingerprint=profile.profile_fingerprint,
             simulation_diagnostics=diagnostics,
             failure_reason=failure_reason,
+            latency_growth_diagnostics=tuple(growth_diagnostics),
         )
 
     try:
@@ -205,6 +211,45 @@ def validate_final_configuration(
         intervals = evidence.latency_intervals
         failure_intervals = evidence.failure_intervals
         counts = evidence.eligible_request_counts
+        try:
+            growth_diagnostics = latency_growth_diagnostics(
+                replications,
+                tuple(
+                    request_class for request_class, _ in profile.request_class_slos
+                ),
+                warmup_duration=profile.warmup_duration,
+                measurement_duration=profile.measurement_duration,
+            )
+        except ValueError as error:
+            return result(
+                FinalValidationClassification.SIMULATION_FAILURE,
+                str(error),
+                replication_count=len(replications),
+                seeds=seeds,
+                intervals=intervals,
+                failure_intervals=failure_intervals,
+                counts=counts,
+            )
+        growing = tuple(
+            diagnostic.request_class
+            for diagnostic in growth_diagnostics
+            if diagnostic.status == LatencyGrowthStatus.GROWTH_DETECTED
+        )
+        if growing:
+            return result(
+                FinalValidationClassification.MODELED_NONSTATIONARY,
+                "Sustained early-to-late latency growth was detected across "
+                "independent final-validation replications for: "
+                + ", ".join(growing)
+                + ". No stationary finite-mean recommendation is available.",
+                replication_count=len(replications),
+                seeds=seeds,
+                intervals=intervals,
+                failure_intervals=failure_intervals,
+                counts=counts,
+                diagnostics=replication_diagnostics(replications),
+                growth_diagnostics=growth_diagnostics,
+            )
         passed = all(
             interval.upper_bound <= interval.slo for _, interval in intervals
         ) and all(
@@ -239,6 +284,7 @@ def validate_final_configuration(
             failure_intervals=failure_intervals,
             counts=counts,
             diagnostics=diagnostics,
+            growth_diagnostics=growth_diagnostics,
         )
     finally:
         system.configure_system_replicas(original)

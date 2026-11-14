@@ -1,8 +1,10 @@
 import io
 import json
+from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import yaml
 
@@ -23,6 +25,30 @@ class _ManualClock:
 
 class _Classification:
     value = "ANALYTICALLY_FEASIBLE"
+
+
+class _StringClassification(str, Enum):
+    VALIDATED = "VALIDATED_FEASIBLE"
+
+
+def test_jsonable_unwraps_string_backed_enums():
+    converted = kubesizer_cli._jsonable(
+        {"classification": _StringClassification.VALIDATED}
+    )
+
+    assert converted == {"classification": "VALIDATED_FEASIBLE"}
+    assert json.loads(json.dumps(converted)) == converted
+
+
+def test_jsonable_converts_numpy_scalars_to_builtin_numbers():
+    converted = kubesizer_cli._jsonable(
+        {"latency": np.float64(0.064), "replicas": np.int64(3)}
+    )
+
+    assert converted == {"latency": 0.064, "replicas": 3}
+    assert type(converted["latency"]) is float
+    assert type(converted["replicas"]) is int
+    assert json.loads(json.dumps(converted)) == converted
 
 
 def _fake_system(*, slo_kind="mean"):
@@ -440,7 +466,7 @@ def test_run_creates_no_files_without_out(tmp_path, capsys, monkeypatch):
     assert tuple(tmp_path.iterdir()) == ()
 
 
-def test_portable_measurements_run_end_to_end_to_service_recommendations(
+def test_portable_analytical_workflow_rejects_incomplete_blocking_characterization(
     tmp_path,
     capsys,
     monkeypatch,
@@ -464,29 +490,24 @@ def test_portable_measurements_run_end_to_end_to_service_recommendations(
     )
 
     output = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert output["result"] == {
-        "services": {
-            "api": {
-                "recommended_replicas": 1,
-            },
-            "database": {
-                "recommended_replicas": 1,
-            },
-        }
-    }
+    assert exit_code == 2
+    assert output["ok"] is False
+    assert "incomplete" in output["error"]["message"]
+    assert "blocking" in output["error"]["message"]
+    assert "result" not in output
     assert tuple(tmp_path.iterdir()) == ()
 
 
 def test_portable_workflow_refuses_to_claim_stability_without_capacity_runs(
-    capsys,
+    capsys, tmp_path,
 ):
     evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
+    workload_path = _portable_workload_with_explicit_blocking(tmp_path)
 
     exit_code = kubesizer_cli.main(
         [
             "--workload",
-            str(evidence / "workload.yaml"),
+            str(workload_path),
             "--measurements",
             str(evidence / "measurements.yaml"),
             "--replica-evaluation",
@@ -582,12 +603,25 @@ def test_portable_simulation_rejects_an_incomplete_fitted_model(capsys):
     assert "incomplete fitted-variability model" in output["error"]["message"]
 
 
+def _portable_workload_with_explicit_blocking(tmp_path):
+    evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
+    workload = yaml.safe_load((evidence / "workload.yaml").read_text())
+    workload["service_blocking_times"] = {
+        name: {"distribution": "deterministic", "mean": 0.001}
+        for name in workload["services"]
+    }
+    path = tmp_path / "workload.yaml"
+    path.write_text(yaml.safe_dump(workload), encoding="utf-8")
+    return path
+
+
 def test_portable_workflow_uses_statistical_floor_not_legacy_sizing_seed(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ):
     evidence = Path(__file__).parents[1] / "examples" / "portable_evidence"
+    workload_path = _portable_workload_with_explicit_blocking(tmp_path)
     plan = kubesizer_cli.load_and_prepare_initial_sizing(
-        evidence / "workload.yaml",
+        workload_path,
         evidence / "measurements.with-capacity.yaml",
     )
     legacy_recommendation = SimpleNamespace(
@@ -612,7 +646,7 @@ def test_portable_workflow_uses_statistical_floor_not_legacy_sizing_seed(
         lambda *args, **kwargs: floor,
     )
     arguments = SimpleNamespace(
-        workload=str(evidence / "workload.yaml"),
+        workload=str(workload_path),
         measurements=str(evidence / "measurements.with-capacity.yaml"),
         max_replicas=4,
         replica_evaluation="analytical",
@@ -628,6 +662,10 @@ def test_portable_cli_honors_declared_maximum_capacity_utilization(tmp_path):
     with (evidence / "workload.yaml").open(encoding="utf-8") as stream:
         workload = yaml.safe_load(stream)
     workload["sizing_policy"] = {"maximum_capacity_utilization": 0.50}
+    workload["service_blocking_times"] = {
+        name: {"distribution": "deterministic", "mean": 0.001}
+        for name in workload["services"]
+    }
     workload_path = tmp_path / "workload.yaml"
     workload_path.write_text(yaml.safe_dump(workload), encoding="utf-8")
     arguments = SimpleNamespace(

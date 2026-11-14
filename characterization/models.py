@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 MEASUREMENT_METHODOLOGY_VERSION = "prometheus-istio-kubernetes-v1"
 DEFAULT_MAXIMUM_CAPACITY_UTILIZATION = 0.85
+MINIMUM_ARRIVAL_TRACE_INTERVALS = 30
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,7 @@ class WorkloadDefinition:
     communication_latency: object | None = None
     service_blocking_times: tuple[tuple[str, object], ...] = ()
     maximum_capacity_utilization: float = DEFAULT_MAXIMUM_CAPACITY_UTILIZATION
+    service_post_release_delays: tuple[tuple[str, object], ...] = ()
 
     @property
     def service_names(self):
@@ -185,6 +187,7 @@ class LatencyHistogramBucket:
 class ExternalArrivalSample:
     timestamp: float
     request_class: str
+    entry_service: str | None = None
 
 
 @dataclass(frozen=True)
@@ -251,6 +254,21 @@ class LatencySummary:
 
 
 @dataclass(frozen=True)
+class LatencyBoundaryCharacterization:
+    """Evidence for latency outside the modeled application service graph."""
+
+    status: str
+    component_name: str | None
+    mean_seconds: float | None
+    window_mean_seconds: tuple[float, ...]
+    candidate_window_count: int
+    excluded_window_count: int
+    coefficient_of_variation: float | None
+    method: str | None
+    reason: str | None
+
+
+@dataclass(frozen=True)
 class ServiceCharacterization:
     service: str
     observed_replica_count: int
@@ -284,6 +302,7 @@ class ExternalRequestClassCharacterization:
     error_rate_4xx: float | None
     error_rate_5xx: float | None
     latency: LatencySummary
+    boundary_latency: LatencyBoundaryCharacterization
 
 
 @dataclass(frozen=True)

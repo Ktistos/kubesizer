@@ -58,6 +58,7 @@ class TrafficModelSpec:
     service_times: Mapping
     service_times_by_request_class: Mapping
     service_blocking_times: Mapping
+    service_post_release_delays: Mapping
     service_blocking_times_by_request_class: Mapping
     service_execution_models: Mapping
     service_replica_queue_models: Mapping
@@ -241,11 +242,14 @@ def _parse_joint_input_uncertainty(
     )
 
 
-def _sample_moments(values, label):
-    values = tuple(_finite_positive(value, label) for value in values)
+def _sample_moments(values, label, *, allow_zero=False):
+    validator = _finite_nonnegative if allow_zero else _finite_positive
+    values = tuple(validator(value, label) for value in values)
     if not values:
         raise ValueError(f"{label} must contain at least one observation.")
     mean = sum(values) / len(values)
+    if mean <= 0.0:
+        raise ValueError(f"{label} must contain at least one positive observation.")
     variance = sum((value - mean) ** 2 for value in values) / len(values)
     return mean, variance / (mean * mean)
 
@@ -605,17 +609,21 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             _finite_nonnegative(value, sample_label) for value in timestamps
         )
         if len(timestamps) < 2 or any(
-            right <= left
+            right < left
             for left, right in zip(timestamps, timestamps[1:])
         ):
             raise ValueError(
-                f"{label}.source timestamps must contain at least two strictly "
-                "increasing values."
+                f"{label}.source timestamps must contain at least two "
+                "nondecreasing values."
             )
         interarrivals = tuple(
             right - left for left, right in zip(timestamps, timestamps[1:])
         )
-        mean, scv = _sample_moments(interarrivals, f"{label}.source intervals")
+        mean, scv = _sample_moments(
+            interarrivals,
+            f"{label}.source intervals",
+            allow_zero=True,
+        )
         return DistributionSpec(
             distribution,
             mean,
@@ -1277,6 +1285,7 @@ def parse_workload_spec(workload, *, base_path=None):
         model_path = "traffic_model"
         service_times = {}
         service_blocking_times = {}
+        service_post_release_delays = {}
         service_execution_models = {}
         service_replica_queue_models = {}
         processing_slots_per_replica = {}
@@ -1347,6 +1356,12 @@ def parse_workload_spec(workload, *, base_path=None):
             service_execution_models[service_name] = execution_model
             service_replica_queue_models[service_name] = replica_queue_model
             raw_blocking_time = raw_service_time.get("non_cpu_blocking_time")
+            if "post_release_delay" in raw_service_time:
+                service_post_release_delays[service_name] = parse_duration_distribution(
+                    raw_service_time["post_release_delay"],
+                    f"{service_path}.post_release_delay",
+                    base_path=base_path,
+                )
             if raw_blocking_time is not None:
                 blocking_path = f"{service_path}.non_cpu_blocking_time"
                 if not isinstance(raw_blocking_time, Mapping):
@@ -1396,6 +1411,7 @@ def parse_workload_spec(workload, *, base_path=None):
                     "execution_model",
                     "replica_queue_model",
                     "non_cpu_blocking_time",
+                    "post_release_delay",
                 }
             }
             if "distribution" in distribution_specification:
@@ -1543,6 +1559,7 @@ def parse_workload_spec(workload, *, base_path=None):
                 }
             ),
             service_blocking_times=_freeze_mapping(service_blocking_times),
+            service_post_release_delays=_freeze_mapping(service_post_release_delays),
             service_blocking_times_by_request_class=_freeze_mapping(
                 {
                     request_class_name: _freeze_mapping(specifications)

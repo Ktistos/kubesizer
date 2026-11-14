@@ -252,7 +252,8 @@ traffic_model:
 
 The CPU phase runs first. Its processing slot is then released while the visit
 waits for `non_cpu_blocking_time`; the admitted concurrency slot is retained
-until routing or synchronous child-call processing continues. This models
+through blocking and any synchronous child calls, until this service completes.
+This models
 I/O, locks, connection-pool waits, or external waits without charging them as
 CPU demand. It can also be declared per request class. The values must exclude
 downstream and network latency already represented by the call graph and
@@ -262,6 +263,41 @@ This semantic is simulation-only for certification. The analytical mean
 diagnostic includes its mean, but strict analytical optimization rejects such
 a workload because finite-concurrency blocking is not represented by the
 M/M/c, M/G/1, or variability-adjusted queueing equations.
+
+### Optional post-release response delay
+
+The frozen service specification can additionally contain:
+
+```yaml
+post_release_delay:
+  distribution: deterministic
+  mean: 0.003  # Illustrative seconds; supply independent boundary evidence.
+```
+
+The ordering is CPU → slot-held blocking → synchronous children (if any) →
+release own admission slot → post-release delay → return/route onward.
+The delay is sampled once per completed visit, including repeated workflow
+visits. It is shared across request classes visiting the service. No CPU or
+admission capacity is occupied at this service during that final phase, but
+a synchronous caller still holds its own slot until the response returns.
+Service response metrics include the delay. Communication and external
+client-to-entry components remain separate and must not overlap it.
+
+The delayed-response event owns no objects: the simulation retains its visit
+and request until response delivery. A client timeout does not cancel or
+prematurely destroy that server-side work. Finite-cohort measurement still
+tracks terminal client outcomes, not just resource releases.
+
+The portable input counterpart is `service_post_release_delays.<service>`;
+see the [measurement guide](../DEVOPS_PORTABLE_MEASUREMENT_GUIDE.md#optional-delay-after-releasing-the-services-slot).
+Missing means no added delay, not an inferred split of existing blocking.
+Present duration distributions require positive means. Strict analytical
+recommendation rejects this feature; an additive analytical mean is only a
+diagnostic and does not account for changed parent-slot contention.
+
+This feature uses native protocol **14**, semantics version **v17**, and
+participates in calibration fingerprints. Rebuild the executable when updating
+from protocol 13; cached calibration evidence must be regenerated.
 
 Let `G` be the sum of all configured external `gamma` values, `w_k` the weight
 of class `k`, and `G_k_raw` that class's configured external total. The class

@@ -23,6 +23,11 @@ from .simulation_evaluation import (
     SimulationClassification,
     SimulationUncertaintyDiagnostics,
 )
+from .replication_evidence import (
+    LatencyGrowthDiagnostic,
+    LatencyGrowthStatus,
+    latency_growth_diagnostics,
+)
 from .replica_validation import (
     CalibratedFinalValidationResult,
     FinalValidationClassification,
@@ -65,4 +70,7 @@ __all__ = [
     "SequentialLookResult",
     "SimulationClassification",
     "SimulationUncertaintyDiagnostics",
+    "LatencyGrowthDiagnostic",
+    "LatencyGrowthStatus",
+    "latency_growth_diagnostics",
 ]

@@ -16,7 +16,7 @@ from native_backend import SIMULATOR_SEMANTICS_VERSION
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
 
-CALIBRATION_PROFILE_VERSION = 10
+CALIBRATION_PROFILE_VERSION = 11
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
 MEAN_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-mean-bootstrap-v1"
 
@@ -1016,6 +1016,16 @@ def experiment_fingerprints(system):
             "cross_node_probability": (
                 communication_latency.cross_node_probability
             ),
+        }
+    post_release_delays = getattr(
+        system,
+        "get_service_post_release_delay_distribution_specs",
+        lambda: {},
+    )()
+    if post_release_delays:
+        workload["traffic_model"]["service_post_release_delays"] = {
+            name: _distribution_fingerprint(specification)
+            for name, specification in sorted(post_release_delays.items())
         }
     return _fingerprint(topology), _fingerprint(workload)
 

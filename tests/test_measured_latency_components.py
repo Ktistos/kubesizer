@@ -1,4 +1,5 @@
 import copy
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,8 @@ import yaml
 
 from calibration.profile import experiment_fingerprints
 from characterization import (
+    build_analytical_workload_variants,
+    build_characterized_system_variants,
     build_simulation_workload_variants,
     characterize_deployment,
     parse_portable_sizing_inputs,
@@ -256,6 +259,8 @@ def test_portable_workload_preserves_measured_components_and_network_model():
 
     (variant,) = build_simulation_workload_variants(inputs, characterization)
 
+    boundary = characterization.external_request_classes[0].boundary_latency
+    assert boundary.status == "explicit"
     assert variant.workload["request_classes"]["browse"]["latency_components"] == {
         "client_to_ingress": {"distribution": "deterministic", "mean": 0.01},
         "ingress_processing": {"distribution": "deterministic", "mean": 0.002},
@@ -266,3 +271,201 @@ def test_portable_workload_preserves_measured_components_and_network_model():
     assert variant.workload["traffic_model"]["service_times"]["api"][
         "non_cpu_blocking_time"
     ] == {"distribution": "deterministic", "mean": 0.006}
+    assert all(
+        item.name != "browse.client_to_entry_mean"
+        for item in variant.uncertainty_dimensions
+    )
+
+
+def _portable_external_client_inputs(*, percentile=False):
+    base_path = Path(__file__).parents[1] / "examples" / "portable_evidence"
+    with (base_path / "workload.yaml").open(encoding="utf-8") as stream:
+        workload = yaml.safe_load(stream)
+    with (base_path / "measurements.yaml").open(encoding="utf-8") as stream:
+        measurements = yaml.safe_load(stream)
+    request_class = workload["request_classes"]["browse"]
+    request_class["latency_boundary"] = "external_client"
+    if percentile:
+        request_class["end_to_end_latency_slos"] = {
+            "percentile": {"quantile": 0.95, "maximum_seconds": 0.25}
+        }
+    return parse_portable_sizing_inputs(
+        workload,
+        measurements,
+        base_path=base_path,
+    )
+
+
+def test_boundary_fit_is_not_applied_without_a_latency_slo():
+    base_path = Path(__file__).parents[1] / "examples" / "portable_evidence"
+    with (base_path / "workload.yaml").open(encoding="utf-8") as stream:
+        workload = yaml.safe_load(stream)
+    with (base_path / "measurements.yaml").open(encoding="utf-8") as stream:
+        measurements = yaml.safe_load(stream)
+    request_class = workload["request_classes"]["browse"]
+    request_class["latency_boundary"] = "external_client"
+    request_class.pop("end_to_end_latency_slos")
+    inputs = parse_portable_sizing_inputs(
+        workload,
+        measurements,
+        base_path=base_path,
+    )
+
+    characterization = characterize_deployment(inputs)
+    boundary = characterization.external_request_classes[0].boundary_latency
+
+    assert boundary.status == "not_applicable"
+    assert "mean latency SLO" in boundary.reason
+
+
+def test_portable_workflow_infers_stable_client_to_entry_mean_component():
+    inputs = _portable_external_client_inputs()
+    characterization = characterize_deployment(inputs)
+
+    boundary = characterization.external_request_classes[0].boundary_latency
+    assert boundary.status == "inferred"
+    assert boundary.component_name == "client_to_entry"
+    assert boundary.mean_seconds == pytest.approx(0.008)
+    assert boundary.window_mean_seconds == pytest.approx((0.0075, 0.008, 0.0085))
+    assert boundary.candidate_window_count == 3
+    assert boundary.excluded_window_count == 0
+    assert boundary.coefficient_of_variation < 0.06
+    assert dict(characterization.capabilities)[
+        "inferred_client_to_entry_mean"
+    ] is True
+
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+
+    assert variant.workload["request_classes"]["browse"][
+        "latency_components"
+    ] == {
+        "client_to_entry": {
+            "distribution": "deterministic",
+            "mean": pytest.approx(0.008),
+        }
+    }
+    assert any(
+        item.name == "browse.client_to_entry_mean"
+        and item.treatment == "aligned_window_stability_gated_mean_fit"
+        for item in variant.uncertainty_dimensions
+    )
+    # Inspect boundary propagation independently of this sample's incomplete
+    # local-blocking evidence; that evidence must not pass production sizing.
+    (analytical_variant,) = build_analytical_workload_variants(
+        inputs,
+        characterization,
+    )
+    analytical_system = System(
+        "boundary-inspection", analytical_variant.workload, QueueingNetworkType.OPEN,
+    )
+    analytical_components = (
+        analytical_system.get_request_class_latency_component_distribution_specs()
+    )
+    assert analytical_components["browse"]["client_to_entry"].mean == pytest.approx(
+        0.008
+    )
+    with pytest.raises(ValueError, match="incomplete"):
+        build_characterized_system_variants(
+            inputs, characterization, evaluation_mode="analytical"
+        )
+
+
+def test_boundary_fit_excludes_a_small_number_of_count_misaligned_windows():
+    inputs = _portable_external_client_inputs()
+    measurements = inputs.measurements
+    latest_end = max(row.end for row in measurements.external_intervals)
+
+    def extend(rows):
+        templates = tuple(row for row in rows if row.end == latest_end)
+        return rows + tuple(
+            replace(row, start=row.start + offset, end=row.end + offset)
+            for offset in (3_600.0, 7_200.0)
+            for row in templates
+        )
+
+    external = list(extend(measurements.external_intervals))
+    external[0] = replace(
+        external[0],
+        request_count=external[0].request_count * 2.0,
+    )
+    inputs = replace(
+        inputs,
+        measurements=replace(
+            measurements,
+            service_intervals=extend(measurements.service_intervals),
+            service_class_intervals=extend(measurements.service_class_intervals),
+            external_intervals=tuple(external),
+        ),
+    )
+
+    characterization = characterize_deployment(inputs)
+    boundary = characterization.external_request_classes[0].boundary_latency
+
+    assert boundary.status == "inferred"
+    assert boundary.mean_seconds == pytest.approx(0.008375)
+    assert boundary.candidate_window_count == 5
+    assert boundary.excluded_window_count == 1
+    assert len(boundary.window_mean_seconds) == 4
+
+
+def test_boundary_fit_rejects_too_many_count_misaligned_windows():
+    inputs = _portable_external_client_inputs()
+    external = list(inputs.measurements.external_intervals)
+    external[0] = replace(
+        external[0],
+        request_count=external[0].request_count * 2.0,
+    )
+    inputs = replace(
+        inputs,
+        measurements=replace(
+            inputs.measurements,
+            external_intervals=tuple(external),
+        ),
+    )
+
+    characterization = characterize_deployment(inputs)
+    boundary = characterization.external_request_classes[0].boundary_latency
+
+    assert boundary.status == "unavailable"
+    assert boundary.candidate_window_count == 3
+    assert boundary.excluded_window_count == 1
+    assert "too few" in boundary.reason
+
+
+def test_unstable_boundary_means_make_the_simulation_model_incomplete():
+    inputs = _portable_external_client_inputs()
+    changed_sums = (300.0, 900.0, 312.0)
+    external = tuple(
+        replace(row, response_duration_sum_seconds=changed_sums[index])
+        for index, row in enumerate(inputs.measurements.external_intervals)
+    )
+    inputs = replace(
+        inputs,
+        measurements=replace(inputs.measurements, external_intervals=external),
+    )
+
+    characterization = characterize_deployment(inputs)
+    boundary = characterization.external_request_classes[0].boundary_latency
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+
+    assert boundary.status == "unavailable"
+    assert "not stable enough" in boundary.reason
+    assert variant.model_complete is False
+    assert any("external-client boundary latency" in item for item in variant.model_issues)
+    with pytest.raises(ValueError, match="incomplete external-client boundary"):
+        build_characterized_system_variants(
+            inputs,
+            characterization,
+            evaluation_mode="analytical",
+        )
+
+
+def test_aggregate_boundary_means_do_not_claim_a_percentile_distribution():
+    inputs = _portable_external_client_inputs(percentile=True)
+    characterization = characterize_deployment(inputs)
+    boundary = characterization.external_request_classes[0].boundary_latency
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+
+    assert boundary.status == "unavailable"
+    assert "percentile SLO" in boundary.reason
+    assert variant.model_complete is False

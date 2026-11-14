@@ -118,6 +118,7 @@ class System:
         self.__service_execution_models = {}
         self.__service_replica_queue_models = {}
         self.__service_blocking_time_specs = {}
+        self.__service_post_release_delay_specs = {}
         self.__request_class_service_blocking_time_specs = {}
         self.__class_specific_service_times = False
         self.__joint_input_uncertainty = None
@@ -183,6 +184,9 @@ class System:
             )
             self.__service_blocking_time_specs = dict(
                 parsed.traffic_model.service_blocking_times
+            )
+            self.__service_post_release_delay_specs = dict(
+                parsed.traffic_model.service_post_release_delays
             )
             self.__request_class_service_blocking_time_specs = {
                 request_class: dict(specifications)
@@ -591,6 +595,8 @@ class System:
                         flags[source_id]
                         and self.__service_time_distributions[source.get_name()]
                         == "exponential"
+                        and self.__service_replica_queue_models[source.get_name()]
+                        != "independent_round_robin"
                     )
                     if poisson_departure:
                         continue
@@ -610,15 +616,38 @@ class System:
         models = [None] * len(self.get_services())
         for service in self.get_services().values():
             service_id = service.get_id()
+            name = service.get_name()
+            slots = self.__service_processing_slots_per_replica[name]
+            limit = self.__service_concurrency_limits_per_replica[name]
+            queue_model = self.__service_replica_queue_models[name]
+            if limit is not None and limit < slots:
+                models[service_id] = AnalyticalQueueingModel.UNSUPPORTED
+                continue
+            if self.__service_execution_models[name] == "processor_sharing":
+                models[service_id] = (
+                    AnalyticalQueueingModel.MGC_PS
+                    if self.__poisson_arrival_flags[service_id]
+                    and limit is None
+                    and queue_model != "independent_round_robin"
+                    else AnalyticalQueueingModel.UNSUPPORTED
+                )
+                continue
             models[service_id] = select_queueing_model(
-                poisson_arrivals=self.__poisson_arrival_flags[service_id],
+                poisson_arrivals=(
+                    self.__poisson_arrival_flags[service_id]
+                    and not (
+                        queue_model == "independent_round_robin"
+                        and service.get_replicas() > 1
+                    )
+                ),
                 exponential_service=(
                     self.__service_time_distributions[service.get_name()]
                     == "exponential"
                 ),
                 replicas=(
-                    service.get_replicas()
-                    * self.__service_processing_slots_per_replica[service.get_name()]
+                    slots
+                    if queue_model != "pooled"
+                    else service.get_replicas() * slots
                 ),
             )
         return tuple(models)
@@ -929,24 +958,57 @@ class System:
         queueing_models = self.__current_queueing_models()
         latencies = []
         for service_id, model in enumerate(queueing_models):
-            if model is AnalyticalQueueingModel.MMC:
+            service = self.get_service_by_id(service_id)
+            arrival_rate = lambdas[service_id]
+            queue_servers = servers[service_id]
+            arrival_scv = arrival_scvs[service_id]
+            queue_model = self.__service_replica_queue_models[service.get_name()]
+            if queue_model != "pooled":
+                # Each replica has its own stream and slots; spare capacity
+                # cannot serve another replica's queue.
+                arrival_rate /= service.get_replicas()
+                queue_servers = self.__service_processing_slots_per_replica[
+                    service.get_name()
+                ]
+                if queue_model == "independent_random":
+                    arrival_scv = thinned_stream_scv(
+                        arrival_scv, 1.0 / service.get_replicas()
+                    )
+                else:
+                    # Under renewal input each replica sees a sum of R gaps.
+                    # For nonrenewal network traffic this remains an explicitly
+                    # variability-adjusted approximation, not a Poisson claim.
+                    arrival_scv /= service.get_replicas()
+            if model is AnalyticalQueueingModel.UNSUPPORTED:
+                # Keep capacity/utilization diagnostics usable by simulation,
+                # but never expose an unsupported latency as a finite estimate.
+                latency = math.inf
+            elif model in {
+                AnalyticalQueueingModel.MMC,
+                AnalyticalQueueingModel.MGC_PS,
+            }:
+                # The unlimited Poisson PS kernel serves each of n jobs at
+                # min(1, c/n). Its occupancy distribution is insensitive to
+                # work shape and has the M/M/c mean (Zachary, 2007, section 2:
+                # https://arxiv.org/abs/math/0611526). This does NOT cover finite
+                # admission or non-Poisson input.
                 latency = mmc_mean_response_time(
-                    lambdas[service_id],
+                    arrival_rate,
                     mus[service_id],
-                    servers[service_id],
+                    queue_servers,
                 )
             elif model is AnalyticalQueueingModel.MG1:
                 latency = mg1_mean_response_time(
-                    lambdas[service_id],
+                    arrival_rate,
                     mus[service_id],
                     service_scv=service_scvs[service_id],
                 )
             else:
                 latency = variability_adjusted_mean_response_time(
-                    lambdas[service_id],
+                    arrival_rate,
                     mus[service_id],
-                    servers[service_id],
-                    arrival_scv=arrival_scvs[service_id],
+                    queue_servers,
+                    arrival_scv=arrival_scv,
                     service_scv=service_scvs[service_id],
                 )
             latencies.append(latency)
@@ -1202,6 +1264,14 @@ class System:
         """
         return dict(self.__service_blocking_time_specs)
 
+    def get_service_post_release_delay_distribution_specs(self):
+        """Measured response delay after this service releases CPU and admission.
+
+        A synchronous caller still waits for this response. This delay must be
+        disjoint from local blocking, communication and the external residual.
+        """
+        return dict(self.__service_post_release_delay_specs)
+
     def get_request_class_service_blocking_time_distribution_specs(self):
         """Return class-specific non-CPU blocking distributions by service."""
         return {
@@ -1214,6 +1284,20 @@ class System:
     def get_strict_analytical_incompatibilities(self):
         """Return declared semantics not certified by the analytical model."""
         incompatibilities = []
+        if self.__service_post_release_delay_specs:
+            incompatibilities.append(
+                "post-release service response delays are not certified by the "
+                "analytical model"
+            )
+        models = self.__current_queueing_models()
+        for service in self.get_services().values():
+            if models[service.get_id()] is AnalyticalQueueingModel.UNSUPPORTED:
+                incompatibilities.append(
+                    f"{service.get_name()}: unsupported analytical execution/admission/"
+                    "dispatch semantics (processor sharing requires Poisson input "
+                    "and unlimited concurrency without round-robin dispatch; "
+                    "admission limits below processing slots require simulation)"
+                )
         if any(self.__request_class_service_blocking_time_specs.values()):
             incompatibilities.append(
                 "per-visit non-CPU blocking time occupies finite service "
@@ -1689,15 +1773,31 @@ class System:
                     service.get_name()
                 ]
                 visits = rate / external_rate
-                queueing_latency += visits * (
-                    specification.mean + queue_waits[service_id]
-                )
+                if (
+                    self.__service_execution_models[service.get_name()]
+                    == "processor_sharing"
+                ):
+                    # PS slowdown scales with each class's own CPU work; it is
+                    # not a common FCFS waiting time added to every class.
+                    visit_mean = (
+                        specification.mean
+                        * service_latencies[service_id]
+                        / service_means[service_id]
+                    )
+                else:
+                    visit_mean = specification.mean + queue_waits[service_id]
+                queueing_latency += visits * visit_mean
                 blocking = self.__request_class_service_blocking_time_specs.get(
                     request_class,
                     {},
                 ).get(service.get_name())
                 if blocking is not None:
                     queueing_latency += visits * blocking.mean
+                post_release = self.__service_post_release_delay_specs.get(
+                    service.get_name()
+                )
+                if post_release is not None:
+                    queueing_latency += visits * post_release.mean
             results[request_class] = (
                 queueing_latency
                 + self.__mean_request_class_network_latency(

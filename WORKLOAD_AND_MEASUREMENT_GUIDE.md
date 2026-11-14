@@ -159,13 +159,23 @@ communication_latency:
 | `entry_services` | How the class's measured external arrival rate is divided among application entry services. The weights for one class must sum to `1.0`. |
 | `calls` | Expected synchronous downstream calls per source-service visit. A value may exceed `1.0`. |
 | `call_execution` | Whether sibling calls are performed `sequential`ly or in `parallel`. This changes end-to-end latency and parent concurrency. |
-| `latency_boundary` | Where the end-to-end latency clock starts: `ingress` or `external_client`. |
-| `latency_components` | Measured delays outside service CPU queues, kept separate to avoid treating them as service demand. |
+| `latency_boundary` | Where the end-to-end latency clock starts: `ingress` or `external_client`. For an external-client mean SLO with no explicit component, Kubesizer attempts a stability-gated `client_to_entry` mean fit from aligned interval sums. |
+| `latency_components` | Explicitly measured delays outside service CPU queues, kept separate to avoid treating them as service demand. Explicit components take precedence over automatic mean inference. |
 | `end_to_end_latency_slos` | The mean or p95 latency limit used to decide whether a replica configuration is acceptable. |
 | `load_forecast` | Multipliers for future traffic. Kubesizer plans for the largest declared value. |
 | `sizing_policy.maximum_capacity_utilization` | Maximum fraction of confidence-bounded healthy request capacity that the stability floor may use. It must be greater than zero and less than one; the default is `0.85`. |
-| `service_blocking_times` | Optional direct evidence override for non-CPU wait that still occupies a service concurrency slot. Otherwise the sole simulation method requires an identifiable low-load residual for every non-negligible service component; production simulation fails closed when that fit is incomplete. |
+| `service_blocking_times` | Optional direct evidence override for non-CPU wait that still occupies a service concurrency slot. Otherwise characterization requires an identifiable low-load residual for every non-negligible service component. Production model construction fails closed when that fit is incomplete; analytical evaluation preserves blocking and rejects unsupported semantics rather than deleting it. |
 | `communication_latency` | Same-node and cross-node network-delay distributions plus the measured or estimated cross-node call probability. |
+
+Automatic boundary fitting is deliberately mean-only. It requires at least
+three healthy, aligned external/entry windows; completion counts must agree
+within 5% or one request in at least 80% of candidate windows; and the retained
+window residuals must be stable. The fitted deterministic `client_to_entry`
+component is added once per external request in both analytical and simulation
+mean-latency evaluation. If the boundary cannot be identified, both evaluators
+fail closed. A percentile SLO still requires an explicit component distribution
+or paired duration samples—Kubesizer never subtracts independently aggregated
+percentiles.
 
 ### Where are the arrival rates?
 
@@ -189,6 +199,22 @@ start,end,request_class,request_count
 The corresponding observed rates are 30 browse requests/second and 10 checkout requests/second. The measured shares, 0.75 and 0.25, agree with the declared concurrency weights.
 
 This separation prevents a manually typed rate and a measured rate from silently disagreeing.
+
+`external-arrival-samples.csv` provides request-start ordering rather than a
+second rate declaration. For a declared latency SLO it is required: Kubesizer
+rate-rescales and block-bootstraps the measured trace, preserves equal
+timestamps as batches, and rejects missing or ambiguous trace evidence instead
+of substituting exponential arrivals. The same file may be supplied as
+`external-arrival-samples.csv.gz`. Multi-entry request classes add an
+`entry_service` column so each stream receives only its own arrivals. Each
+stream needs at least 30 interarrival gaps; production evidence should be much
+longer when burst cycles are slow.
+
+Trace blocks contain a fixed number of consecutive gaps, with circular wrapping
+at the trace end. `block_duration` is a target expected duration: the gap count
+is `ceil(block_duration / mean_gap)`, bounded between one and the trace's gap
+count. Uniformly choosing block starts preserves the empirical mean offered
+load; it does not force an identical request count in every finite simulation.
 
 ## Service declarations inside `workload.yaml`
 
@@ -302,12 +328,33 @@ The CPU limit is retained as a ceiling and diagnostic. Kubesizer does not treat 
 
 This matters when a request performs CPU work and then waits for I/O or a downstream service. The CPU may be free, but the request can still occupy one of the application's finite slots. Without this field, the simulator cannot represent that particular bottleneck explicitly.
 
-The field can be omitted for the analytical CPU model or when no positive
-blocking residual is inferred. If portable simulation identifies a positive
+The field can be omitted when no positive blocking residual is inferred.
+If portable characterization identifies a positive
 residual, Kubesizer rejects the model until the limit is supplied; it does not
 silently invent a worker-pool size. A directly supplied blocking distribution
 can still represent additive I/O delay without a finite limit, but then it does
 not claim a finite worker-pool bottleneck.
+
+Analytical evaluation does not discard either supplied or inferred blocking to
+obtain a CPU-only prediction. The current analytical workflow rejects workloads
+with blocking; use simulation with complete characterization instead.
+
+An independently measured delay after releasing the service's own admission
+slot can instead be supplied as `service_post_release_delays.<service>` in the
+portable workload. It becomes `traffic_model.service_times.<service>.post_release_delay`
+in the frozen simulation model. It adds response time without occupying that
+service's CPU or slot; a synchronous caller still waits. It is not an automatic
+split of response latency and must not overlap network or client residuals.
+See the [measurement instructions](DEVOPS_PORTABLE_MEASUREMENT_GUIDE.md#optional-delay-after-releasing-the-services-slot).
+Analytical sizing currently rejects this feature. Omitting it preserves the
+previous semantics; no new measurements are silently invented.
+
+For CPU-only workloads, Poisson arrivals with unlimited processor-sharing
+admission use an insensitive mean formula matching the native kernel. Random
+replica dispatch is evaluated per replica, not as a shared queue. Fixed-slot
+round-robin dispatch uses a per-replica renewal-moment approximation, explicitly
+not an exact Poisson result. Non-Poisson or finite-admission processor sharing,
+including processor sharing with round-robin dispatch, requires simulation.
 
 ### 5. It records the resource conditions under which measurements are valid
 

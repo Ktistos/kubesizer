@@ -8,7 +8,9 @@ from metrics import (
 )
 
 from .replication_evidence import (
+    LatencyGrowthStatus,
     calculate_replication_evidence,
+    latency_growth_diagnostics,
     replication_diagnostics,
 )
 
@@ -18,6 +20,7 @@ class SimulationClassification(str, Enum):
     STRUCTURALLY_INFEASIBLE = "STRUCTURALLY_INFEASIBLE"
     STATISTICALLY_FEASIBLE = "STATISTICALLY_FEASIBLE"
     STATISTICALLY_INFEASIBLE = "STATISTICALLY_INFEASIBLE"
+    MODELED_NONSTATIONARY = "MODELED_NONSTATIONARY"
     CONTINUE_SAMPLING = "CONTINUE_SAMPLING"
     INCONCLUSIVE = "INCONCLUSIVE"
     SIMULATION_FAILURE = "SIMULATION_FAILURE"
@@ -33,6 +36,7 @@ class SequentialLookResult:
     failure_rate_intervals: tuple[tuple[str, IndependentReplicationRateInterval], ...]
     eligible_request_counts: tuple[tuple[str, int], ...]
     classification: SimulationClassification
+    latency_growth_diagnostics: tuple = ()
 
     @property
     def intervals(self):
@@ -76,6 +80,7 @@ class ConfigurationEvaluation:
     simulation_diagnostics: tuple[tuple[str, float | int], ...]
     failure_reason: str | None = None
     uncertainty_diagnostics: SimulationUncertaintyDiagnostics | None = None
+    latency_growth_diagnostics: tuple = ()
 
     @property
     def feasible(self):
@@ -389,6 +394,7 @@ class CalibratedConfigurationEvaluator:
             final_failure_intervals = ()
             final_counts = ()
             final_classification = SimulationClassification.INCONCLUSIVE
+            final_growth_diagnostics = ()
             for look_index, replication_count in enumerate(
                 self._look_schedule(), start=1
             ):
@@ -463,6 +469,15 @@ class CalibratedConfigurationEvaluator:
                         replications,
                         look_index,
                     )
+                    final_growth_diagnostics = latency_growth_diagnostics(
+                        replications,
+                        tuple(
+                            request_class
+                            for request_class, _ in self.profile.request_class_slos
+                        ),
+                        warmup_duration=self.profile.warmup_duration,
+                        measurement_duration=self.profile.measurement_duration,
+                    )
                 except ValueError as error:
                     return ConfigurationEvaluation(
                         configuration=configuration,
@@ -481,13 +496,22 @@ class CalibratedConfigurationEvaluator:
                         simulation_diagnostics=(),
                         failure_reason=str(error),
                     )
-                final_classification = self._classification(
-                    final_intervals,
-                    len(self.profile.request_class_slos),
-                    final_failure_intervals,
-                    len(self.profile.request_class_failure_rate_slos),
-                    replication_count == self.profile.maximum_optimization_replications,
-                )
+                if any(
+                    diagnostic.status == LatencyGrowthStatus.GROWTH_DETECTED
+                    for diagnostic in final_growth_diagnostics
+                ):
+                    final_classification = (
+                        SimulationClassification.MODELED_NONSTATIONARY
+                    )
+                else:
+                    final_classification = self._classification(
+                        final_intervals,
+                        len(self.profile.request_class_slos),
+                        final_failure_intervals,
+                        len(self.profile.request_class_failure_rate_slos),
+                        replication_count
+                        == self.profile.maximum_optimization_replications,
+                    )
                 looks.append(
                     SequentialLookResult(
                         look_index=look_index,
@@ -497,6 +521,7 @@ class CalibratedConfigurationEvaluator:
                         failure_rate_intervals=final_failure_intervals,
                         eligible_request_counts=final_counts,
                         classification=final_classification,
+                        latency_growth_diagnostics=final_growth_diagnostics,
                     )
                 )
                 previous_count = replication_count
@@ -508,6 +533,20 @@ class CalibratedConfigurationEvaluator:
                 failure_reason = (
                     "Minimum eligible-sample or nonempty-replication requirements "
                     "were not met at R_max."
+                )
+            elif (
+                final_classification
+                == SimulationClassification.MODELED_NONSTATIONARY
+            ):
+                classes = ", ".join(
+                    diagnostic.request_class
+                    for diagnostic in final_growth_diagnostics
+                    if diagnostic.status == LatencyGrowthStatus.GROWTH_DETECTED
+                )
+                failure_reason = (
+                    "Sustained early-to-late latency growth was detected across "
+                    f"independent replications for: {classes}. A finite-window "
+                    "average is not a stationary mean prediction."
                 )
             result = ConfigurationEvaluation(
                 configuration=configuration,
@@ -539,6 +578,7 @@ class CalibratedConfigurationEvaluator:
                 ),
                 failure_reason=failure_reason,
                 uncertainty_diagnostics=self._uncertainty_diagnostics(replications),
+                latency_growth_diagnostics=final_growth_diagnostics,
             )
             self._progress(
                 "configuration_evaluation_completed",

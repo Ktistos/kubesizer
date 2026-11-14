@@ -45,6 +45,30 @@ def measurement_methodology_contract():
             ),
             "request_class_label": "request_operation",
         },
+        "external_arrival_process": {
+            "source": (
+                "complete request-start timestamps from the declared external "
+                "boundary, normally an Istio/Envoy gateway access log or trace"
+            ),
+            "required_for": "latency_slo_recommendation",
+            "attribution": ["request_class", "entry_service_when_multi_entry"],
+            "timestamp_order": (
+                "nondecreasing; equal timestamps preserve observed request batches"
+            ),
+            "minimum_interarrival_gaps_per_stream": 30,
+            "simulation": (
+                "mean-rate-rescaled moving trace-block bootstrap preserving "
+                "local arrival ordering"
+            ),
+            "fallback": (
+                "exponential only for workloads without a declared latency SLO"
+            ),
+            "compression": "lossless gzip is accepted; time aggregation is not",
+            "forecast_boundary": (
+                "certification is conditional on the measured burst family and "
+                "declared load envelope"
+            ),
+        },
         "optional_service_edges": {
             "metric": "istio_requests_total",
             "reporter": "source",
@@ -80,6 +104,28 @@ def measurement_methodology_contract():
                 "derive component samples or distributions; never subtract "
                 "independently aggregated percentiles"
             ),
+            "automatic_client_to_entry_mean": {
+                "formula": (
+                    "aligned external-client response mean minus aligned "
+                    "application-entry response mean"
+                ),
+                "minimum_common_windows": 3,
+                "count_alignment": (
+                    "within five_percent_or_one_request in at least "
+                    "eighty_percent of candidate windows"
+                ),
+                "health_gate": "at_most_one_percent_errors",
+                "stability_gate": (
+                    "window residual coefficient_of_variation at most 0.20 "
+                    "and relative_range at most 0.50"
+                ),
+                "scope": "external_client_boundary_with_mean_slo_only",
+                "explicit_evidence_precedence": True,
+                "failure_semantics": (
+                    "analytical and simulation latency evaluation reject an "
+                    "unidentifiable required boundary"
+                ),
+            },
             "unmodeled_residual": (
                 "allowed only as explicitly named residual evidence, never folded "
                 "into service demand"
@@ -226,10 +272,12 @@ def measurement_methodology_contract():
                 "excessive_cpu_throttling",
                 "load_dependent_extrapolation",
                 "incomplete_simulation_blocking_characterization",
+                "missing_request_class_arrival_trace_for_latency_slo",
+                "missing_multi_entry_arrival_trace_attribution_for_latency_slo",
             ],
             "conditional_conditions": [
-                "missing_request_class_arrival_trace",
-                "unknown_multi_entry_trace_attribution",
+                "missing_request_class_arrival_trace_without_latency_slo",
+                "unknown_multi_entry_trace_attribution_without_latency_slo",
                 "inferred_call_order",
                 "missing_communication_latency",
                 "missing_concurrency_limit",

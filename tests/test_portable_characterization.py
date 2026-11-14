@@ -1,4 +1,6 @@
 import copy
+import gzip
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ from characterization import (
 )
 from native_backend import get_native_backend
 from performance_models import QueueingNetworkType, System
+from performance_models.workload import parse_duration_distribution
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "portable_evidence"
 
@@ -81,6 +84,12 @@ def test_measurement_contract_freezes_cross_cluster_counter_semantics():
     assert contract["optional_capacity_envelope"]["sample_unit"] == (
         "independent_fixed_replica_load_test_run"
     )
+    boundary_fit = contract["optional_latency_boundary_components"][
+        "automatic_client_to_entry_mean"
+    ]
+    assert boundary_fit["minimum_common_windows"] == 3
+    assert boundary_fit["scope"] == "external_client_boundary_with_mean_slo_only"
+    assert boundary_fit["explicit_evidence_precedence"] is True
     assert contract["statistically_controlled_stability_floor"]["headroom"] == {
         "input": "workload.sizing_policy.maximum_capacity_utilization",
         "default": 0.85,
@@ -99,6 +108,10 @@ def test_measurement_contract_freezes_cross_cluster_counter_semantics():
     assert contract["closed_loop_quality_experiment"]["sample_unit"] == (
         "independent_complete_load_test_run"
     )
+    arrivals = contract["external_arrival_process"]
+    assert arrivals["required_for"] == "latency_slo_recommendation"
+    assert "equal timestamps" in arrivals["timestamp_order"]
+    assert "without a declared latency SLO" in arrivals["fallback"]
     assert (
         contract["closed_loop_quality_experiment"]["right_censoring"]["feasibility"]
         == "never_certified_from_a_censored_cohort"
@@ -137,6 +150,87 @@ def test_measurement_manifest_requires_the_supported_methodology():
             base_path=EXAMPLE,
         )
 
+
+def test_arrival_samples_preserve_tied_gateway_timestamps(tmp_path):
+    arrivals = tmp_path / "external-arrival-samples.csv"
+    arrivals.write_text(
+        "timestamp,request_class\n"
+        + "".join(
+            f"{(index // 3) * 0.15:.3f},browse\n" for index in range(31)
+        ),
+        encoding="utf-8",
+    )
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["external_arrival_samples"] = str(arrivals)
+
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+    characterization = characterize_deployment(inputs)
+    (variant,) = build_simulation_workload_variants(inputs, characterization)
+    arrival = variant.workload["traffic_model"]["entry_services"]["browse"]["api"]
+
+    assert arrival["distribution"] == "arrival_trace"
+    assert arrival["timestamps"][:3] == pytest.approx([0.0, 0.0, 0.0])
+
+
+def test_arrival_samples_reject_zero_span_trace(tmp_path):
+    arrivals = tmp_path / "external-arrival-samples.csv"
+    arrivals.write_text(
+        "timestamp,request_class\n0.0,browse\n0.0,browse\n",
+        encoding="utf-8",
+    )
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["external_arrival_samples"] = str(arrivals)
+
+    with pytest.raises(ValueError, match="positive span"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
+
+
+def test_compressed_arrival_samples_are_supported(tmp_path):
+    arrivals = tmp_path / "external-arrival-samples.csv.gz"
+    with gzip.open(arrivals, "wt", encoding="utf-8", newline="") as stream:
+        stream.write(
+            "timestamp,request_class\n"
+            "0.000,browse\n"
+            "0.000,browse\n"
+            "0.100,browse\n"
+        )
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["external_arrival_samples"] = str(arrivals)
+
+    inputs = parse_portable_sizing_inputs(
+        _loaded_yaml("workload.yaml"),
+        manifest,
+        base_path=EXAMPLE,
+    )
+
+    assert len(inputs.measurements.external_arrival_samples) == 3
+
+
+def test_arrival_samples_reject_unknown_entry_attribution(tmp_path):
+    arrivals = tmp_path / "external-arrival-samples.csv"
+    arrivals.write_text(
+        "timestamp,request_class,entry_service\n"
+        "0.0,browse,unknown\n"
+        "0.1,browse,unknown\n",
+        encoding="utf-8",
+    )
+    manifest = _loaded_yaml("measurements.yaml")
+    manifest["external_arrival_samples"] = str(arrivals)
+
+    with pytest.raises(ValueError, match="is not an entry service"):
+        parse_portable_sizing_inputs(
+            _loaded_yaml("workload.yaml"),
+            manifest,
+            base_path=EXAMPLE,
+        )
 
 def test_workload_rejects_a_separate_arrival_rate_override():
     workload = _loaded_yaml("workload.yaml")
@@ -586,6 +680,10 @@ def test_simulation_builder_uses_safe_aligned_demand_and_declared_call_semantics
 def test_declared_load_forecast_certifies_the_maximum_measured_load():
     target = _loaded_yaml("workload.yaml")
     target["load_forecast"] = {"multipliers": [1.0, 1.25, 1.5]}
+    target["service_blocking_times"] = {
+        name: {"distribution": "deterministic", "mean": 0.001}
+        for name in target["services"]
+    }
     inputs = parse_portable_sizing_inputs(
         target,
         _loaded_yaml("measurements.yaml"),
@@ -685,6 +783,93 @@ def test_simulation_builder_fits_leaf_blocking_variability_from_low_load_evidenc
     )
 
 
+@pytest.mark.parametrize("delay", [{}, None, {"unknown": {"distribution": "deterministic", "mean": 0.01}}])
+def test_portable_post_release_delays_reject_invalid_service_maps(delay):
+    workload = _loaded_yaml("workload.yaml")
+    workload["service_post_release_delays"] = delay
+    with pytest.raises(ValueError, match="service_post_release_delays"):
+        parse_portable_sizing_inputs(
+            workload, _loaded_yaml("measurements.yaml"), base_path=EXAMPLE,
+        )
+
+
+def test_portable_post_release_delay_is_preserved_by_both_evaluator_builders():
+    workload = _loaded_yaml("workload.yaml")
+    delay = {"distribution": "deterministic", "mean": 0.001}
+    workload["service_post_release_delays"] = {"database": delay}
+    workload["service_blocking_times"] = {"api": delay, "database": delay}
+    inputs = parse_portable_sizing_inputs(
+        workload, _loaded_yaml("measurements.yaml"), base_path=EXAMPLE,
+    )
+    assert dict(inputs.workload.service_post_release_delays)["database"].mean == 0.001
+    characterization = characterize_deployment(inputs)
+    for builder in (build_simulation_workload_variants, build_analytical_workload_variants):
+        (variant,) = builder(inputs, characterization)
+        service = variant.workload["traffic_model"]["service_times"]["database"]
+        assert service["post_release_delay"] == delay
+        assert service["non_cpu_blocking_time"] == delay
+        assert any("outside its own CPU/admission" in item for item in variant.assumptions)
+
+
+def test_known_constant_post_release_delay_is_not_fitted_again_as_held_blocking(tmp_path):
+    inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=True)
+    characterization = characterize_deployment(inputs)
+    (before,) = build_simulation_workload_variants(inputs, characterization)
+    delay = parse_duration_distribution(
+        {"distribution": "deterministic", "mean": 0.001}, "delay",
+    )
+    changed = replace(inputs, workload=replace(
+        inputs.workload, service_post_release_delays=(("database", delay),),
+    ))
+    (after,) = build_simulation_workload_variants(changed, characterization)
+    before_services = before.workload["traffic_model"]["service_times"]
+    after_services = after.workload["traffic_model"]["service_times"]
+    old_blocking = before_services["database"]["non_cpu_blocking_time"]
+    new_blocking = after_services["database"]["non_cpu_blocking_time"]
+    assert new_blocking["mean"] == pytest.approx(old_blocking["mean"] - 0.001)
+    # Lognormal median = mean / sqrt(1 + SCV). A constant shifts both moments.
+    old_median = old_blocking["mean"] / (1.0 + old_blocking["scv"]) ** 0.5
+    new_median = new_blocking["mean"] / (1.0 + new_blocking["scv"]) ** 0.5
+    assert new_median == pytest.approx(old_median - 0.001)
+    # A parent's downstream response already includes the child's delay.
+    assert before_services["api"] == after_services["api"]
+
+
+def test_variable_post_release_delay_needs_independent_held_blocking_evidence(tmp_path):
+    inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=True)
+    delay = parse_duration_distribution({"distribution": "exponential", "rate": 1000.0}, "delay")
+    changed = replace(inputs, workload=replace(
+        inputs.workload, service_post_release_delays=(("database", delay),),
+    ))
+    characterization = characterize_deployment(changed)
+    (variant,) = build_simulation_workload_variants(changed, characterization)
+    assert any("variable post-release delay" in item for item in variant.model_issues)
+    assert "non_cpu_blocking_time" not in variant.workload["traffic_model"]["service_times"]["database"]
+    with pytest.raises(ValueError, match="incomplete fitted-variability model"):
+        build_characterized_system_variants(changed, characterization)
+
+    explicit = parse_duration_distribution({"distribution": "deterministic", "mean": 0.001}, "blocking")
+    changed = replace(changed, workload=replace(
+        changed.workload, service_blocking_times=(("database", explicit),),
+    ))
+    (variant,) = build_simulation_workload_variants(changed, characterization)
+    assert not any("variable post-release delay" in item for item in variant.model_issues)
+    service = variant.workload["traffic_model"]["service_times"]["database"]
+    assert service["non_cpu_blocking_time"]["mean"] == 0.001
+    assert service["post_release_delay"]["rate"] == 1000.0
+
+
+def test_post_release_delay_exceeding_response_evidence_remains_an_issue(tmp_path):
+    inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=True)
+    delay = parse_duration_distribution({"distribution": "deterministic", "mean": 1.0}, "delay")
+    changed = replace(inputs, workload=replace(
+        inputs.workload, service_post_release_delays=(("database", delay),),
+    ))
+    (variant,) = build_simulation_workload_variants(changed, characterize_deployment(changed))
+    assert any("database blocking" in item and "latency boundaries" in item for item in variant.model_issues)
+    assert "non_cpu_blocking_time" not in variant.workload["traffic_model"]["service_times"]["database"]
+
+
 def test_fitted_blocking_requires_declared_service_concurrency(tmp_path):
     inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=False)
     characterization = characterize_deployment(inputs)
@@ -696,27 +881,24 @@ def test_fitted_blocking_requires_declared_service_concurrency(tmp_path):
         build_simulation_workload_variants(inputs, characterization)
 
 
-def test_analytical_characterization_remains_available_without_fitted_blocking(
+def test_analytical_characterization_cannot_skip_required_blocking_evidence(
     tmp_path,
 ):
     inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=False)
     characterization = characterize_deployment(inputs)
 
-    (variant,) = build_analytical_workload_variants(inputs, characterization)
+    with pytest.raises(ValueError, match="concurrency_limit_per_replica"):
+        build_analytical_workload_variants(inputs, characterization)
 
+
+def test_analytical_characterization_preserves_inferred_blocking(tmp_path):
+    inputs = _low_load_leaf_blocking_inputs(tmp_path, declare_concurrency=True)
+    characterization = characterize_deployment(inputs)
+    (variant,) = build_analytical_workload_variants(inputs, characterization)
     database = variant.workload["traffic_model"]["service_times"]["database"]
-    assert "non_cpu_blocking_time" not in database
+    assert database["non_cpu_blocking_time"]["distribution"] == "lognormal"
+    assert database["non_cpu_blocking_time"]["mean"] > 0.0
     assert "input_uncertainty" not in variant.workload["traffic_model"]
-    assert any(
-        "excluded from the analytical model" in assumption
-        for assumption in variant.assumptions
-    )
-    ((_, system),) = build_characterized_system_variants(
-        inputs,
-        characterization,
-        evaluation_mode="analytical",
-    )
-    assert system.get_strict_analytical_incompatibilities() == ()
 
 
 def test_characterized_system_executes_in_mandatory_native_backend():

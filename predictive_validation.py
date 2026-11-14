@@ -216,9 +216,12 @@ def _model_structure_fingerprint(system):
     payload = get_native_backend().serialize_system(system)
     payload.pop("name", None)
     for service in payload["services"]:
-        service.pop("replicas", None)
-        service.pop("capacity", None)
-        service.pop("concurrency_capacity", None)
+        replicas = service.pop("replicas")
+        # Different replica counts are valid holdouts, different per-replica
+        # processing/admission limits are not. Absence still means unlimited.
+        service["capacity"] //= replicas
+        if "concurrency_capacity" in service:
+            service["concurrency_capacity"] //= replicas
     for stream in payload["external_streams"]:
         distribution = stream["interarrival_distribution"]
         stream["interarrival_distribution"] = {

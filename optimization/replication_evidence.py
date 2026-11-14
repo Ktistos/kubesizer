@@ -1,4 +1,7 @@
+import math
+import statistics
 from dataclasses import dataclass
+from enum import Enum
 
 from metrics import (
     ClusterBootstrapP95Interval,
@@ -22,6 +25,159 @@ class ReplicationEvidenceError(ValueError):
     def __init__(self, message, evidence):
         super().__init__(message)
         self.evidence = evidence
+
+
+class LatencyGrowthStatus(str, Enum):
+    """Finite-window screen for an unidentifiable stationary latency."""
+
+    GROWTH_DETECTED = "GROWTH_DETECTED"
+    NO_MATERIAL_GROWTH_DETECTED = "NO_MATERIAL_GROWTH_DETECTED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+@dataclass(frozen=True)
+class LatencyGrowthDiagnostic:
+    request_class: str
+    status: LatencyGrowthStatus
+    replication_count: int
+    early_mean_seconds: float | None = None
+    late_mean_seconds: float | None = None
+    late_minus_early_seconds: float | None = None
+    contrast_standard_error_seconds: float | None = None
+    practical_threshold_seconds: float | None = None
+    reason: str | None = None
+
+
+def latency_growth_diagnostics(
+    replications,
+    request_classes,
+    *,
+    warmup_duration,
+    measurement_duration,
+    minimum_requests_per_half=30,
+    relative_tolerance=0.10,
+    standard_error_multiplier=3.0,
+):
+    """Screen independent-replication early/late latency contrasts.
+
+    This does not prove stationarity.  It only rejects a stationary finite-mean
+    interpretation when late-arrival cohorts grow by a practically material
+    amount with a conservative standard-error margin.  Requests, rather than
+    time buckets, are never treated as independent observations.
+    """
+    replications = tuple(replications)
+    request_classes = tuple(request_classes)
+    numeric = {
+        "warmup_duration": warmup_duration,
+        "measurement_duration": measurement_duration,
+        "relative_tolerance": relative_tolerance,
+        "standard_error_multiplier": standard_error_multiplier,
+    }
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in numeric.values()
+    ):
+        raise ValueError("Latency-growth screen parameters must be finite numbers.")
+    if warmup_duration < 0.0 or measurement_duration <= 0.0:
+        raise ValueError("Warm-up must be non-negative and measurement positive.")
+    if relative_tolerance <= 0.0 or standard_error_multiplier <= 0.0:
+        raise ValueError("Latency-growth tolerances must be positive.")
+    if (
+        isinstance(minimum_requests_per_half, bool)
+        or not isinstance(minimum_requests_per_half, int)
+        or minimum_requests_per_half <= 0
+    ):
+        raise ValueError("minimum_requests_per_half must be a positive integer.")
+    if not request_classes:
+        raise ValueError("At least one request class is required.")
+
+    split = warmup_duration + measurement_duration / 2.0
+    end = warmup_duration + measurement_duration
+    results = []
+    for request_class in request_classes:
+        pairs = []
+        reason = None
+        for replication in replications:
+            try:
+                arrivals = tuple(
+                    replication.request_class_arrival_times[request_class]
+                )
+                latencies = tuple(replication.request_class_latencies[request_class])
+            except (AttributeError, KeyError, TypeError):
+                reason = "raw request arrival/latency cohorts are unavailable"
+                break
+            if len(arrivals) != len(latencies):
+                raise ValueError(
+                    f"Arrival and latency cohorts disagree for {request_class!r}."
+                )
+            if any(
+                not math.isfinite(arrival)
+                or not warmup_duration <= arrival < end
+                for arrival in arrivals
+            ):
+                raise ValueError(
+                    f"Arrival outside the measured cohort for {request_class!r}."
+                )
+            if any(not math.isfinite(value) or value < 0.0 for value in latencies):
+                raise ValueError(f"Invalid latency for {request_class!r}.")
+            early = tuple(
+                value
+                for arrival, value in zip(arrivals, latencies, strict=True)
+                if arrival < split
+            )
+            late = tuple(
+                value
+                for arrival, value in zip(arrivals, latencies, strict=True)
+                if arrival >= split
+            )
+            if min(len(early), len(late)) < minimum_requests_per_half:
+                reason = (
+                    "fewer than the required requests occur in one measurement half"
+                )
+                break
+            pairs.append((statistics.fmean(early), statistics.fmean(late)))
+
+        if reason is not None or len(pairs) < 3:
+            results.append(
+                LatencyGrowthDiagnostic(
+                    request_class=request_class,
+                    status=LatencyGrowthStatus.INCONCLUSIVE,
+                    replication_count=len(pairs),
+                    reason=reason or "fewer than three independent replications",
+                )
+            )
+            continue
+
+        early_mean = statistics.fmean(pair[0] for pair in pairs)
+        late_mean = statistics.fmean(pair[1] for pair in pairs)
+        differences = tuple(late - early for early, late in pairs)
+        difference = statistics.fmean(differences)
+        standard_error = statistics.stdev(differences) / math.sqrt(len(pairs))
+        threshold = relative_tolerance * (early_mean + late_mean) / 2.0
+        if difference - standard_error_multiplier * standard_error > threshold:
+            status = LatencyGrowthStatus.GROWTH_DETECTED
+        elif (
+            abs(difference) + standard_error_multiplier * standard_error
+            <= threshold
+        ):
+            status = LatencyGrowthStatus.NO_MATERIAL_GROWTH_DETECTED
+        else:
+            status = LatencyGrowthStatus.INCONCLUSIVE
+        results.append(
+            LatencyGrowthDiagnostic(
+                request_class=request_class,
+                status=status,
+                replication_count=len(pairs),
+                early_mean_seconds=early_mean,
+                late_mean_seconds=late_mean,
+                late_minus_early_seconds=difference,
+                contrast_standard_error_seconds=standard_error,
+                practical_threshold_seconds=threshold,
+            )
+        )
+    return tuple(results)
 
 
 def calculate_replication_evidence(
