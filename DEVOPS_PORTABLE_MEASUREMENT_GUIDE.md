@@ -53,9 +53,9 @@ reliably:
 - the future load forecast.
 
 Observed maximum concurrency is only a lower bound on a configured limit. Do
-not copy `max_active_requests` into `concurrency_limit_per_replica` unless a
-controlled saturation test and application configuration establish that it is
-the actual ceiling.
+not copy a passive peak into `concurrency_limit_per_replica` unless a controlled
+saturation test and application configuration establish that it is the actual
+ceiling.
 
 ## 2. Know which files are needed
 
@@ -229,7 +229,7 @@ start,end,service,namespace,pod,request_count,cpu_seconds
 The recommended full header is:
 
 ```csv
-start,end,service,namespace,pod,request_count,cpu_seconds,errors_4xx,errors_5xx,throttled_seconds,memory_bytes,mean_active_requests,max_active_requests,response_duration_sum_seconds
+start,end,service,namespace,pod,request_count,cpu_seconds,errors_4xx,errors_5xx,throttled_seconds,response_duration_sum_seconds
 ```
 
 Create one row per `(window, logical service, namespace, pod)`.
@@ -311,7 +311,7 @@ semantics using the gRPC response-status label. In every row:
 errors_4xx + errors_5xx <= request_count
 ```
 
-### 7.4 CPU throttling and memory
+### 7.4 CPU throttling
 
 Use the same application-container filters as CPU:
 
@@ -322,17 +322,6 @@ sum by (namespace, pod) (
 ```
 
 Store this counter increase as `throttled_seconds`.
-
-For memory context:
-
-```promql
-sum by (namespace, pod) (
-  avg_over_time(container_memory_working_set_bytes{container!="",container!="POD",container!="istio-proxy"}[5m])
-)
-```
-
-Store it as `memory_bytes`. Memory is retained as context; the current replica
-optimizer does not claim memory or Kubernetes scheduling feasibility.
 
 ### 7.5 Service response-duration sum
 
@@ -353,13 +342,6 @@ sum by (
 Store seconds in `response_duration_sum_seconds`. This permits a
 request-weighted service mean and supports the low-load non-CPU-blocking
 decomposition used by simulation.
-
-### 7.6 Active requests
-
-If the application exposes an in-flight request gauge with clear server-side
-semantics, record its window mean and maximum. There is no universally correct
-Istio gauge for every application queue, so omit these columns rather than
-mixing upstream connection state with admitted application work.
 
 ## 8. Build `service-class-intervals.csv`
 
@@ -606,16 +588,18 @@ For each relevant replica count:
 Use this header:
 
 ```csv
-run_id,service,replicas,offered_rate_rps,completed_rate_rps,error_rate,healthy,cpu_throttling_ratio
+run_id,service,replicas,offered_rate_rps,completed_rate_rps,healthy
 ```
 
 Important rules:
 
-- `error_rate` and `cpu_throttling_ratio` are fractions in `[0, 1]`;
 - `replicas` is the service's replica count in that run;
 - `offered_rate_rps` is the rate offered to that service after accounting for
   request-class visits, not blindly the external client rate;
 - `completed_rate_rps` is measured completed service throughput;
+- `healthy` is the result of the predeclared backlog, stationarity, restart,
+  error, throttling and safety-latency gates; keep the raw gate measurements in
+  the load-test record for auditability;
 - use at least three independent healthy runs per service and tested replica
   count under the default policy;
 - adjacent windows from one continuous run are not independent runs;

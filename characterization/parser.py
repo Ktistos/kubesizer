@@ -843,21 +843,6 @@ def _parse_service_intervals(path):
                     f"{label}.throttled_seconds",
                     nonnegative=True,
                 ),
-                memory_bytes=_optional_number(
-                    row, "memory_bytes", f"{label}.memory_bytes", nonnegative=True
-                ),
-                mean_active_requests=_optional_number(
-                    row,
-                    "mean_active_requests",
-                    f"{label}.mean_active_requests",
-                    nonnegative=True,
-                ),
-                maximum_active_requests=_optional_number(
-                    row,
-                    "maximum_active_requests",
-                    f"{label}.maximum_active_requests",
-                    nonnegative=True,
-                ),
                 response_duration_sum_seconds=_optional_number(
                     row,
                     "response_duration_sum_seconds",
@@ -1081,7 +1066,6 @@ def _parse_capacity(path):
             "replicas",
             "offered_rate_rps",
             "completed_rate_rps",
-            "error_rate",
             "healthy",
         },
         "capacity_observations",
@@ -1095,18 +1079,6 @@ def _parse_capacity(path):
             float(row["replicas"]), replicas
         ):
             raise ValueError(f"{label}.replicas must be an integer.")
-        error_rate = _finite(
-            row.get("error_rate"), f"{label}.error_rate", nonnegative=True
-        )
-        if error_rate > 1.0:
-            raise ValueError(f"{label}.error_rate cannot exceed one.")
-        throttling_ratio = _finite(
-            row.get("cpu_throttling_ratio") or 0.0,
-            f"{label}.cpu_throttling_ratio",
-            nonnegative=True,
-        )
-        if throttling_ratio > 1.0:
-            raise ValueError(f"{label}.cpu_throttling_ratio cannot exceed one.")
         observation = CapacityObservation(
             run_id=_name(row.get("run_id"), f"{label}.run_id"),
             service=_name(row.get("service"), f"{label}.service"),
@@ -1121,9 +1093,7 @@ def _parse_capacity(path):
                 f"{label}.completed_rate_rps",
                 nonnegative=True,
             ),
-            error_rate=error_rate,
             healthy=_boolean(row.get("healthy"), f"{label}.healthy"),
-            cpu_throttling_ratio=throttling_ratio,
         )
         identity = (observation.service, observation.replicas, observation.run_id)
         if identity in identities:

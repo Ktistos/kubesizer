@@ -64,7 +64,6 @@ def test_portable_package_derives_rates_demands_edges_and_histograms():
     assert api.observed_cpu_usage_cores_per_replica == pytest.approx(
         (0.08, 0.082, 0.084)
     )
-    assert api.maximum_memory_bytes_per_replica == 324009984
     assert dict(result.capabilities)["aligned_cpu_demand_windows"] is True
     assert dict(result.capabilities)["explicit_capacity_observations"] is False
 
@@ -324,7 +323,7 @@ def _capacity_manifest(tmp_path, rows):
     capacity = tmp_path / "capacity-observations.csv"
     capacity.write_text(
         "run_id,service,replicas,offered_rate_rps,completed_rate_rps,"
-        "error_rate,healthy,cpu_throttling_ratio\n" + "\n".join(rows) + "\n",
+        "healthy\n" + "\n".join(rows) + "\n",
         encoding="utf-8",
     )
     manifest = _loaded_yaml("measurements.yaml")
@@ -338,12 +337,12 @@ def test_empirical_capacity_envelope_is_bounded_by_observed_replica_count(
     manifest = _capacity_manifest(
         tmp_path,
         (
-            "api-1-a,api,1,15,15,0,true,0",
-            "api-1-b,api,1,15,14.5,0,true,0",
-            "api-1-c,api,1,15,14,0,true,0",
-            "api-2-a,api,2,32,31,0,true,0",
-            "api-2-b,api,2,32,30,0,true,0",
-            "api-2-c,api,2,32,29,0,true,0",
+            "api-1-a,api,1,15,15,true",
+            "api-1-b,api,1,15,14.5,true",
+            "api-1-c,api,1,15,14,true",
+            "api-2-a,api,2,32,31,true",
+            "api-2-b,api,2,32,30,true",
+            "api-2-c,api,2,32,29,true",
         ),
     )
     inputs = parse_portable_sizing_inputs(
@@ -369,9 +368,9 @@ def test_empirical_capacity_does_not_extrapolate_linearly(tmp_path):
     manifest = _capacity_manifest(
         tmp_path,
         (
-            "api-1-a,api,1,10,10,0,true,0",
-            "api-1-b,api,1,10,10,0,true,0",
-            "api-1-c,api,1,10,10,0,true,0",
+            "api-1-a,api,1,10,10,true",
+            "api-1-b,api,1,10,10,true",
+            "api-1-c,api,1,10,10,true",
         ),
     )
     inputs = parse_portable_sizing_inputs(
@@ -395,13 +394,13 @@ def test_unhealthy_capacity_run_blocks_conflicting_replica_count(tmp_path):
     manifest = _capacity_manifest(
         tmp_path,
         (
-            "api-2-a,api,2,32,31,0,true,0",
-            "api-2-b,api,2,32,30,0,true,0",
-            "api-2-c,api,2,32,29,0,true,0",
-            "api-2-failure,api,2,18,17,0.05,false,0",
-            "api-3-a,api,3,40,39,0,true,0",
-            "api-3-b,api,3,40,38,0,true,0",
-            "api-3-c,api,3,40,37,0,true,0",
+            "api-2-a,api,2,32,31,true",
+            "api-2-b,api,2,32,30,true",
+            "api-2-c,api,2,32,29,true",
+            "api-2-failure,api,2,18,17,false",
+            "api-3-a,api,3,40,39,true",
+            "api-3-b,api,3,40,38,true",
+            "api-3-c,api,3,40,37,true",
         ),
     )
     inputs = parse_portable_sizing_inputs(
@@ -423,8 +422,8 @@ def test_capacity_run_ids_must_be_unique_per_service_and_replica(tmp_path):
     manifest = _capacity_manifest(
         tmp_path,
         (
-            "same,api,1,10,10,0,true,0",
-            "same,api,1,11,11,0,true,0",
+            "same,api,1,10,10,true",
+            "same,api,1,11,11,true",
         ),
     )
 

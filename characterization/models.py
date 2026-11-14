@@ -123,9 +123,6 @@ class ServiceInterval:
     errors_4xx: float = 0.0
     errors_5xx: float = 0.0
     throttled_seconds: float = 0.0
-    memory_bytes: float | None = None
-    mean_active_requests: float | None = None
-    maximum_active_requests: float | None = None
     response_duration_sum_seconds: float | None = None
 
     @property
@@ -197,9 +194,7 @@ class CapacityObservation:
     replicas: int
     offered_rate_rps: float
     completed_rate_rps: float
-    error_rate: float
     healthy: bool
-    cpu_throttling_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -270,13 +265,10 @@ class ServiceCharacterization:
     observed_throughput_per_replica_rps: tuple[float, ...]
     maximum_healthy_throughput_per_replica_rps: float | None
     capacity_envelope: tuple[CapacityEnvelopePoint, ...]
-    observed_mean_active_requests_per_replica: tuple[float, ...]
     error_rate: float
     error_rate_4xx: float
     error_rate_5xx: float
     throttling_ratio: float
-    mean_memory_bytes_per_replica: float | None
-    maximum_memory_bytes_per_replica: float | None
     latency: LatencySummary
     outgoing_call_rates: tuple[tuple[str, float], ...]
     routing_probabilities: tuple[tuple[str, float], ...]

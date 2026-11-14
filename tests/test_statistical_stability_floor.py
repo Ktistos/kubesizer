@@ -112,13 +112,13 @@ def test_floor_uses_strict_capacity_margin_and_labels_untested_count(tmp_path):
     capacity = tmp_path / "capacity.csv"
     capacity.write_text(
         "run_id,service,replicas,offered_rate_rps,completed_rate_rps,"
-        "error_rate,healthy,cpu_throttling_ratio\n"
-        "api-a,api,1,12,12,0,true,0\n"
-        "api-b,api,1,12,12,0,true,0\n"
-        "api-c,api,1,12,12,0,true,0\n"
-        "db-a,database,1,40,40,0,true,0\n"
-        "db-b,database,1,40,40,0,true,0\n"
-        "db-c,database,1,40,40,0,true,0\n",
+        "healthy\n"
+        "api-a,api,1,12,12,true\n"
+        "api-b,api,1,12,12,true\n"
+        "api-c,api,1,12,12,true\n"
+        "db-a,database,1,40,40,true\n"
+        "db-b,database,1,40,40,true\n"
+        "db-c,database,1,40,40,true\n",
         encoding="utf-8",
     )
     manifest = _load_yaml("measurements.yaml")
@@ -144,13 +144,13 @@ def test_floor_reports_when_confidence_bounded_requirement_exceeds_bounds(tmp_pa
     capacity = tmp_path / "capacity.csv"
     capacity.write_text(
         "run_id,service,replicas,offered_rate_rps,completed_rate_rps,"
-        "error_rate,healthy,cpu_throttling_ratio\n"
-        "api-a,api,1,12,12,0,true,0\n"
-        "api-b,api,1,12,12,0,true,0\n"
-        "api-c,api,1,12,12,0,true,0\n"
-        "db-a,database,1,40,40,0,true,0\n"
-        "db-b,database,1,40,40,0,true,0\n"
-        "db-c,database,1,40,40,0,true,0\n",
+        "healthy\n"
+        "api-a,api,1,12,12,true\n"
+        "api-b,api,1,12,12,true\n"
+        "api-c,api,1,12,12,true\n"
+        "db-a,database,1,40,40,true\n"
+        "db-b,database,1,40,40,true\n"
+        "db-c,database,1,40,40,true\n",
         encoding="utf-8",
     )
     manifest = _load_yaml("measurements.yaml")

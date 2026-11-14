@@ -161,11 +161,6 @@ def _windowed_service_statistics(rows):
         errors_4xx = sum(item.errors_4xx for item in items)
         errors_5xx = sum(item.errors_5xx for item in items)
         throttled = sum(item.throttled_seconds for item in items)
-        active_values = [
-            item.mean_active_requests
-            for item in items
-            if item.mean_active_requests is not None
-        ]
         result[service].append(
             {
                 "start": start,
@@ -179,9 +174,6 @@ def _windowed_service_statistics(rows):
                 ),
                 "throughput_per_replica": (
                     requests / duration / pods if pods > 0 else None
-                ),
-                "active_per_replica": (
-                    sum(active_values) / pods if active_values and pods > 0 else None
                 ),
                 "errors_4xx": errors_4xx,
                 "errors_5xx": errors_5xx,
@@ -670,11 +662,6 @@ def characterize_deployment(inputs):
                 "normalized routing probabilities are descriptive only when each "
                 "source request selects exactly one next hop"
             )
-        memory_values = tuple(
-            row.memory_bytes
-            for row in interval_by_service[name]
-            if row.memory_bytes is not None
-        )
         services.append(
             ServiceCharacterization(
                 service=name,
@@ -700,11 +687,6 @@ def characterize_deployment(inputs):
                     max(healthy_capacity) if healthy_capacity else None
                 ),
                 capacity_envelope=capacity_envelope,
-                observed_mean_active_requests_per_replica=tuple(
-                    item["active_per_replica"]
-                    for item in service_windows
-                    if item["active_per_replica"] is not None
-                ),
                 error_rate=(total_errors / total_requests if total_requests else 0.0),
                 error_rate_4xx=(
                     total_errors_4xx / total_requests if total_requests else 0.0
@@ -713,12 +695,6 @@ def characterize_deployment(inputs):
                     total_errors_5xx / total_requests if total_requests else 0.0
                 ),
                 throttling_ratio=throttling_ratio,
-                mean_memory_bytes_per_replica=(
-                    sum(memory_values) / len(memory_values) if memory_values else None
-                ),
-                maximum_memory_bytes_per_replica=(
-                    max(memory_values) if memory_values else None
-                ),
                 latency=_latency_summary(
                     histogram_by_service[name],
                     interval_by_service[name],
@@ -785,13 +761,6 @@ def characterize_deployment(inputs):
         (
             "explicit_capacity_observations",
             bool(inputs.measurements.capacity_observations),
-        ),
-        (
-            "concurrency_measurements",
-            any(
-                service.observed_mean_active_requests_per_replica
-                for service in services
-            ),
         ),
     )
     return DeploymentCharacterization(
