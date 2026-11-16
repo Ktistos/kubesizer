@@ -40,7 +40,7 @@ from statistical_workflow import (
     validate_final_configuration,
 )
 
-CLI_VERSION = "0.4.0"
+CLI_VERSION = "0.5.0"
 DEFAULT_MAXIMUM_REPLICAS = 10
 DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
 
@@ -146,7 +146,9 @@ def _load_workflow_system(args):
         plan.inputs,
         plan.characterization,
         analytical_minimum=system.get_minimum_stable_replicas(),
-        maximum_configuration=(args.max_replicas,) * len(service_order),
+        maximum_configuration=system.constrain_maximum_replicas(
+            (args.max_replicas,) * len(service_order)
+        ),
         service_order=service_order,
     )
     stability_floor.assert_confidence_bounded_stable()
@@ -171,6 +173,9 @@ def _calibration_options(args: argparse.Namespace) -> CalibrationOptions:
         value = getattr(args, argument_name, None)
         if value is not None:
             replacements[field_name] = value
+    replacements["overall_alpha"] = options.overall_alpha / getattr(
+        args, "_stateful_candidate_count", 1
+    )
     return replace(options, **replacements)
 
 
@@ -603,6 +608,8 @@ def _run_replica_workflow(
     system,
     args,
     minimum_configuration=None,
+    *,
+    replica_costs=None,
 ):
     evaluation_mode = ReplicaEvaluationMode(args.replica_evaluation.upper())
     kind = system.get_request_class_latency_slo_kind()
@@ -641,6 +648,7 @@ def _run_replica_workflow(
             system,
             maximum_replicas=args.max_replicas,
             minimum_configuration=minimum_configuration,
+            replica_costs=replica_costs,
             progress_callback=_progress_callback(args),
         )
         return result, None, None
@@ -654,6 +662,7 @@ def _run_replica_workflow(
         system,
         profile,
         workers=args.workers,
+        replica_costs=replica_costs,
         progress_callback=_progress_callback(args),
     )
     validation = validate_final_configuration(
@@ -668,6 +677,8 @@ def _run_replica_workflow(
 
 
 def _command_run(args):
+    if getattr(args, "stateful_candidates", None):
+        return _command_stateful_candidates(args)
     (
         system,
         _,
@@ -696,7 +707,72 @@ def _command_run(args):
             "The selected replica configuration failed final validation"
             + (f": {reason}" if reason else ".")
         )
-    return {"services": _service_recommendations(system, result.configuration)}
+    output = {"services": _service_recommendations(system, result.configuration)}
+    evidence = getattr(result, "metrics", None)
+    if (
+        getattr(evidence, "evaluation_basis", None)
+        == "ANALYTICAL_MEAN_LATENCY_UPPER_BOUND"
+    ):
+        output["analytical_evidence"] = {
+            "basis": evidence.evaluation_basis,
+            "mean_latency_upper_bounds": evidence.upper_bounds,
+            "mean_latency_lower_bounds": evidence.lower_bounds,
+            "scope": "conditional on the declared queueing model; not an empirical deployment guarantee",
+        }
+    return output
+
+
+def _command_stateful_candidates(args):
+    from stateful_planning import compare_stateful_candidates, load_stateful_candidates
+
+    if args.measurements is not None:
+        raise CliUsageError(
+            "Stateful candidate sets use individually characterized frozen workloads; --measurements cannot be shared between topologies."
+        )
+    if args.workload != "workload.yaml":
+        raise CliUsageError("Use either --workload or --stateful-candidates.")
+    candidates = load_stateful_candidates(args.stateful_candidates)
+
+    def evaluate(candidate):
+        candidate_args = argparse.Namespace(
+            **{
+                key: value
+                for key, value in vars(args).items()
+                if key != "_progress_reporter"
+            }
+        )
+        candidate_args._stateful_candidate_count = len(candidates)
+        try:
+            if not args.quiet:
+                print(f"Evaluating topology {candidate.name}.", file=sys.stderr)
+            result, _profile, validation = _run_replica_workflow(
+                candidate.system, candidate_args, replica_costs=candidate.search_costs()
+            )
+            if validation is not None and not validation.passed:
+                raise RuntimeError(
+                    "Stateful candidate failed fresh-seed final validation: "
+                    + str(validation.failure_reason)
+                )
+            return result
+        finally:
+            reporter = getattr(candidate_args, "_progress_reporter", None)
+            if reporter is not None:
+                reporter.close()
+
+    comparison = compare_stateful_candidates(candidates, evaluate)
+    if comparison["selected"] is None:
+        reasons = "; ".join(
+            f"{row['name']}: {row.get('reason', row['status'])}"
+            for row in comparison["candidates"]
+        )
+        raise RuntimeError("No stateful topology candidate was accepted: " + reasons)
+    return {
+        "services": {
+            name: {"recommended_replicas": replicas}
+            for name, replicas in comparison["configuration"].items()
+        },
+        "stateful_planning": comparison,
+    }
 
 
 def _add_output_arguments(parser):
@@ -728,6 +804,10 @@ def _add_workload_argument(parser):
             "Versioned measurement-manifest YAML. When supplied, service facts "
             "come from workload.services and arrival rates from its evidence."
         ),
+    )
+    parser.add_argument(
+        "--stateful-candidates",
+        help="Finite candidate manifest with separately resolved topologies, workload evidence, and physical costs.",
     )
 
 

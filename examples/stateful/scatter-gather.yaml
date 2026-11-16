@@ -1,0 +1,76 @@
+# Synthetic mechanism example; all demands/rates are illustrative, not measurements.
+# Fixed members define one resolved topology. No product-level accuracy is claimed.
+request_classes:
+  search:
+    concurrency_weight: 1
+    calls:
+      api:
+        shard_1: 1
+        shard_2: 1
+      shard_1:
+        copy_1a: 0.5
+        copy_1b: 0.5
+      shard_2:
+        copy_2a: 0.5
+        copy_2b: 0.5
+    call_execution: "sequential"
+    call_policies:
+      api:
+        execution: "parallel"
+      shard_1:
+        execution: "choice"
+      shard_2:
+        execution: "choice"
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+traffic_model:
+  entry_services:
+    search:
+      api:
+        distribution: "exponential"
+        rate: 10
+  service_times:
+    api:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    shard_1:
+      distribution: "deterministic"
+      mean: 0.0001
+      concurrency_limit_per_replica: 64
+    shard_2:
+      distribution: "deterministic"
+      mean: 0.0001
+      concurrency_limit_per_replica: 64
+    copy_1a:
+      distribution: "deterministic"
+      mean: 0.005
+      concurrency_limit_per_replica: 64
+    copy_1b:
+      distribution: "deterministic"
+      mean: 0.005
+      concurrency_limit_per_replica: 64
+    copy_2a:
+      distribution: "deterministic"
+      mean: 0.005
+      concurrency_limit_per_replica: 64
+    copy_2b:
+      distribution: "deterministic"
+      mean: 0.005
+      concurrency_limit_per_replica: 64
+replica_constraints:
+  api:
+    minimum: 1
+    maximum: 4
+  shard_1:
+    fixed: 1
+  shard_2:
+    fixed: 1
+  copy_1a:
+    fixed: 1
+  copy_1b:
+    fixed: 1
+  copy_2a:
+    fixed: 1
+  copy_2b:
+    fixed: 1

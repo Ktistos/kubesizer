@@ -1,0 +1,41 @@
+# Synthetic mechanism example; not deployment measurements or validation results.
+analytical_call_model: "response_bounds"
+request_classes:
+  write:
+    concurrency_weight: 1
+    calls:
+      primary:
+        follower_1: 1
+        follower_2: 1
+    call_execution: "parallel"
+    call_policies:
+      primary:
+        completion: "quorum"
+        required: 1
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+traffic_model:
+  entry_services:
+    write:
+      primary:
+        distribution: "exponential"
+        rate: 2
+  service_times:
+    primary:
+      execution_model: "processor_sharing"
+      replica_queue_model: "pooled"
+      distribution: "exponential"
+      rate: 500
+    follower_1:
+      distribution: "exponential"
+      rate: 200
+    follower_2:
+      distribution: "exponential"
+      rate: 100
+replica_constraints:
+  primary:
+    fixed: 1
+  follower_1:
+    fixed: 1
+  follower_2:
+    fixed: 1

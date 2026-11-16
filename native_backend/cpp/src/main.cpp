@@ -24,7 +24,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 14;
+constexpr int kProtocolVersion = 15;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 constexpr int kDeadlinePriority = 2;
@@ -44,7 +44,14 @@ enum class EventKind {
 };
 enum class RunMode { FixedHorizon, MeasurementDrain };
 enum class FlowKind { Routing, Workflow, Calls };
-enum class CallExecution { Parallel, Sequential };
+enum class CallExecution { Parallel, Sequential, Choice };
+enum class CallCompletion { All, Quorum, Background };
+
+struct CallPolicy {
+    CallExecution execution{CallExecution::Parallel};
+    CallCompletion completion{CallCompletion::All};
+    std::int64_t required{};
+};
 enum class ExecutionModel { FixedSlots, ProcessorSharing };
 enum class ReplicaQueueModel { Pooled, IndependentRandom, IndependentRoundRobin };
 enum class DistributionKind {
@@ -102,6 +109,7 @@ struct RequestClass {
     std::vector<WorkflowVisit> workflow;
     std::vector<std::vector<WorkflowVisit>> calls;
     CallExecution call_execution{CallExecution::Parallel};
+    std::vector<CallPolicy> call_policies;
     std::optional<Distribution> latency_overhead;
     std::vector<Distribution> latency_components;
     double end_to_end_timeout{};
@@ -148,6 +156,7 @@ struct Request {
     bool outcome_recorded{};
     bool server_completed{};
     bool deadline_processed{};
+    std::int64_t live_visits{};
 };
 
 struct Visit {
@@ -162,6 +171,10 @@ struct Visit {
     std::size_t next_sequential_child{};
     double return_network_delay{};
     double remaining_work{};
+    std::int64_t returned_children{};
+    bool completion_started{};
+    bool response_completed{};
+    bool response_sample_recorded{};
 };
 
 struct Event {
@@ -1020,6 +1033,7 @@ class Kernel {
             0.0,
             0.0
         });
+        ++request->live_visits;
         return visits_[ownership_index].get();
     }
 
@@ -1351,13 +1365,23 @@ class Kernel {
         );
     }
 
-    void destroy_visit(Visit* visit, double now) {
-        if (collect_service_samples_) {
+    void record_visit_response(Visit* visit, double now) {
+        if (collect_service_samples_ && !visit->response_sample_recorded) {
             service_response_times_[visit->service].push_back(now - visit->arrival_time);
         }
+        visit->response_sample_recorded = true;
+    }
+
+    void destroy_visit(Visit* visit, double now) {
+        record_visit_response(visit, now);
         const std::size_t ownership_index = visit->ownership_index;
+        Request* request = visit->request;
         visits_[ownership_index].reset();
         free_visit_slots_.push_back(ownership_index);
+        if (--request->live_visits < 0) {
+            throw std::runtime_error("request live visit count became negative");
+        }
+        maybe_release_request(request);
     }
 
     void release_concurrency_and_destroy(Visit* visit, double now) {
@@ -1416,26 +1440,45 @@ class Kernel {
             throw std::runtime_error("call-graph child count became negative");
         }
         --parent->pending_children;
-        if (parent->pending_children != 0) return;
+        ++parent->returned_children;
+        // A quorum/background response can precede the remaining work. Keep
+        // the parent alive until every child return event has been consumed.
+        if (parent->completion_started) {
+            if (parent->response_completed && parent->pending_children == 0) {
+                destroy_visit(parent, now);
+            }
+            return;
+        }
         const RequestClass& request_class = workload_.request_classes[
             parent->request->request_class
         ];
+        const CallPolicy& policy = request_class.call_policies[parent->service];
         if (
-            request_class.call_execution == CallExecution::Sequential
+            policy.execution == CallExecution::Sequential
             && start_next_sequential_child(parent, now)
         ) {
             return;
         }
-        complete_call_visit(parent, now);
+        if (parent->pending_children == 0
+            || (policy.completion == CallCompletion::Quorum
+                && parent->returned_children >= policy.required)) {
+            complete_call_visit(parent, now);
+        }
     }
 
     void complete_call_visit(Visit* visit, double now, bool released = false) {
-        if (!released && defer_service_response(visit, now)) return;
+        if (!released) {
+            if (visit->completion_started) return;
+            visit->completion_started = true;
+            if (defer_service_response(visit, now)) return;
+        }
+        visit->response_completed = true;
+        record_visit_response(visit, now);
         Request* request = visit->request;
         Visit* parent = visit->parent;
         const double return_network_delay = visit->return_network_delay;
-        if (released) destroy_visit(visit, now);
-        else release_concurrency_and_destroy(visit, now);
+        if (!released) release_concurrency(visit, now);
+        if (visit->pending_children == 0) destroy_visit(visit, now);
         if (parent != nullptr) {
             const double return_time = now + return_network_delay;
             if (return_time == now) {
@@ -1498,12 +1541,25 @@ class Kernel {
             request->request_class
         ];
         if (request_class.flow_kind == FlowKind::Calls) {
-            for (const WorkflowVisit& child : request_class.calls[service]) {
+            const CallPolicy& policy = request_class.call_policies[service];
+            const auto& children = request_class.calls[service];
+            if (policy.execution == CallExecution::Choice && !children.empty()) {
+                std::vector<double> probabilities;
+                for (const WorkflowVisit& child : children) {
+                    probabilities.push_back(child.mean_visits);
+                }
+                std::discrete_distribution<std::size_t> choose(
+                    probabilities.begin(), probabilities.end()
+                );
+                schedule_child(visit, children[choose(random_)].service, now);
+                return;
+            }
+            for (const WorkflowVisit& child : children) {
                 const std::int64_t count = sample_workflow_visits(
                     child.mean_visits
                 );
                 for (std::int64_t occurrence = 0; occurrence < count; ++occurrence) {
-                    if (request_class.call_execution == CallExecution::Parallel) {
+                    if (policy.execution != CallExecution::Sequential) {
                         schedule_child(visit, child.service, now);
                     } else {
                         visit->sequential_children.push_back(child.service);
@@ -1511,12 +1567,13 @@ class Kernel {
                 }
             }
             if (
-                request_class.call_execution == CallExecution::Sequential
+                policy.execution == CallExecution::Sequential
                 && start_next_sequential_child(visit, now)
             ) {
                 return;
             }
-            if (visit->pending_children == 0) {
+            if (visit->pending_children == 0
+                || policy.completion == CallCompletion::Background) {
                 complete_call_visit(visit, now);
             }
             return;
@@ -1701,6 +1758,16 @@ class Kernel {
         free_request_slots_.push_back(ownership_index);
     }
 
+    void maybe_release_request(Request* request) {
+        const double timeout = workload_.request_classes[
+            request->request_class
+        ].end_to_end_timeout;
+        if (request->server_completed && request->live_visits == 0
+            && (timeout == 0.0 || request->deadline_processed)) {
+            release_request(request);
+        }
+    }
+
     void request_timeout(Request* request, double now) {
         ++processed_event_count_;
         request->deadline_processed = true;
@@ -1708,7 +1775,7 @@ class Kernel {
             record_request_outcome(request, now, true);
             return;
         }
-        release_request(request);
+        maybe_release_request(request);
     }
 
     void final_exit(Request* request, double now) {
@@ -1716,12 +1783,7 @@ class Kernel {
         request->server_completed = true;
         record_request_outcome(request, now, false);
         recorder_.final_exit(now);
-        const double timeout = workload_.request_classes[
-            request->request_class
-        ].end_to_end_timeout;
-        if (timeout == 0.0 || request->deadline_processed) {
-            release_request(request);
-        }
+        maybe_release_request(request);
     }
 
     const Workload& workload_;
@@ -2382,6 +2444,66 @@ Workload parse_workload(json_t* raw) {
                 throw std::runtime_error(
                     "unsupported call_execution: " + name
                 );
+            }
+        }
+        request_class.call_policies.assign(
+            workload.services.size(),
+            CallPolicy{request_class.call_execution, CallCompletion::All, 0}
+        );
+        json_t* raw_policies = json_object_get(item, "call_policies");
+        if (raw_policies != nullptr) {
+            if (!json_is_array(raw_policies)
+                || json_array_size(raw_policies) != workload.services.size()) {
+                throw std::runtime_error("call_policies needs one row per service");
+            }
+            std::size_t source;
+            json_t* raw_policy;
+            json_array_foreach(raw_policies, source, raw_policy) {
+                const char* execution = json_string_value(json_object_get(raw_policy, "execution"));
+                const char* completion = json_string_value(json_object_get(raw_policy, "completion"));
+                if (execution == nullptr || completion == nullptr) {
+                    throw std::runtime_error("call policy needs execution and completion strings");
+                }
+                CallPolicy& policy = request_class.call_policies[source];
+                const std::string execution_name(execution);
+                const std::string completion_name(completion);
+                if (execution_name == "parallel") policy.execution = CallExecution::Parallel;
+                else if (execution_name == "sequential") policy.execution = CallExecution::Sequential;
+                else if (execution_name == "choice") policy.execution = CallExecution::Choice;
+                else throw std::runtime_error("unsupported per-service call execution");
+                if (completion_name == "all") policy.completion = CallCompletion::All;
+                else if (completion_name == "quorum") policy.completion = CallCompletion::Quorum;
+                else if (completion_name == "background") policy.completion = CallCompletion::Background;
+                else throw std::runtime_error("unsupported per-service call completion");
+                policy.required = required_integer(raw_policy, "required");
+                const auto& children = request_class.calls[source];
+                if (policy.completion == CallCompletion::Quorum) {
+                    if (policy.execution != CallExecution::Parallel
+                        || policy.required <= 0
+                        || policy.required > static_cast<std::int64_t>(children.size())) {
+                        throw std::runtime_error("invalid quorum call policy");
+                    }
+                    std::vector<bool> seen(workload.services.size(), false);
+                    for (const WorkflowVisit& child : children) {
+                        if (child.mean_visits != 1.0 || seen[child.service]) {
+                            throw std::runtime_error("quorum requires distinct one-call targets");
+                        }
+                        seen[child.service] = true;
+                    }
+                } else if (policy.required != 0) {
+                    throw std::runtime_error("required is only valid for quorum completion");
+                }
+                if (policy.completion == CallCompletion::Background
+                    && policy.execution != CallExecution::Parallel) {
+                    throw std::runtime_error("background completion requires parallel calls");
+                }
+                if (policy.execution == CallExecution::Choice) {
+                    double total = 0.0;
+                    for (const WorkflowVisit& child : children) total += child.mean_visits;
+                    if (policy.completion != CallCompletion::All || std::abs(total - 1.0) > 1e-10) {
+                        throw std::runtime_error("choice needs probabilities summing to one");
+                    }
+                }
             }
         }
         if (request_class.flow_kind == FlowKind::Workflow

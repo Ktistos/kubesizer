@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 
 from performance_models import CommunicationLatencySpec, parse_duration_distribution
+from performance_models.call_policy import parse_replica_constraints
 
 from .models import (
     DEFAULT_MAXIMUM_CAPACITY_UTILIZATION,
@@ -409,6 +410,7 @@ def parse_workload_definition(value, *, base_path=None):
         "communication_latency",
         "service_blocking_times",
         "service_post_release_delays",
+        "replica_constraints",
     }
     if not isinstance(value, Mapping) or set(value) - allowed_top_level:
         raise ValueError(
@@ -425,6 +427,9 @@ def parse_workload_definition(value, *, base_path=None):
     if not isinstance(raw_classes, Mapping) or not raw_classes:
         raise ValueError("request_classes must be a nonempty mapping.")
     service_names = {service.name for service in services}
+    replica_constraints = parse_replica_constraints(
+        value.get("replica_constraints", {}), service_names
+    )
     classes = []
     allowed = {
         "concurrency_weight",
@@ -816,6 +821,7 @@ def parse_workload_definition(value, *, base_path=None):
         service_blocking_times=service_blocking_times,
         service_post_release_delays=post_release_delays,
         maximum_capacity_utilization=maximum_capacity_utilization,
+        replica_constraints=tuple(replica_constraints.items()),
     )
 
 

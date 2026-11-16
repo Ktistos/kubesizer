@@ -1,0 +1,16 @@
+# Illustrative finite design space. README.md describes the synthetic inputs;
+# replace it with real characterization evidence before empirical evaluation.
+version: 1
+candidates:
+  - name: one-follower
+    mechanism: primary with one asynchronous read follower
+    workload: primary-follower-one.yaml
+    base_cost: 3.0
+    elastic_replica_costs: {api: 0.5}
+    evidence_sources: [README.md]
+  - name: two-followers
+    mechanism: primary with two asynchronous read followers
+    workload: primary-follower.yaml
+    base_cost: 4.0
+    elastic_replica_costs: {api: 0.5}
+    evidence_sources: [README.md]

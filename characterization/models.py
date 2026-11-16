@@ -77,6 +77,7 @@ class WorkloadDefinition:
     service_blocking_times: tuple[tuple[str, object], ...] = ()
     maximum_capacity_utilization: float = DEFAULT_MAXIMUM_CAPACITY_UTILIZATION
     service_post_release_delays: tuple[tuple[str, object], ...] = ()
+    replica_constraints: tuple[tuple[str, tuple[int, int]], ...] = ()
 
     @property
     def service_names(self):

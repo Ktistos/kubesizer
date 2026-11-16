@@ -1,5 +1,11 @@
 # Kubesizer `workload.yaml` and `measurements.yaml` Guide
 
+The experimental stateful extension is documented in
+[STATEFUL_MODELING.md](docs/STATEFUL_MODELING.md). Portable workloads can declare
+`replica_constraints` to keep storage components fixed. Per-source quorum and
+background policies currently require a frozen model with explicit internal
+work evidence; the ordinary telemetry decomposition does not infer them.
+
 This guide describes the **portable evidence workflow**, where a DevOps engineer supplies:
 
 ```text

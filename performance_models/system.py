@@ -2,6 +2,7 @@ import copy
 import math
 from enum import Enum
 from .service import Service
+from .call_policy import CallPolicySpec, call_completion_bounds
 from .workload import (
     DistributionSpec,
     SINGLE_TRAFFIC_MODEL_NAME,
@@ -108,6 +109,9 @@ class System:
         self.__request_class_workflows = {}
         self.__request_class_call_graphs = {}
         self.__request_class_call_execution_modes = {}
+        self.__request_class_call_policies = {}
+        self.__replica_constraints = {}
+        self.__analytical_call_model = "strict"
         self.__request_class_fixed_latency_overheads = {}
         self.__request_class_latency_overhead_specs = {}
         self.__request_class_latency_boundaries = {}
@@ -152,6 +156,12 @@ class System:
             self.__request_class_call_execution_modes = dict(
                 parsed.request_class_call_execution_modes
             )
+            self.__request_class_call_policies = {
+                name: dict(policies)
+                for name, policies in parsed.request_class_call_policies.items()
+            }
+            self.__replica_constraints = dict(parsed.replica_constraints)
+            self.__analytical_call_model = parsed.analytical_call_model
             self.__request_class_fixed_latency_overheads = dict(
                 parsed.request_class_fixed_latency_overheads
             )
@@ -403,9 +413,7 @@ class System:
                     None
                     if self.__service_execution_models.get(service.get_name())
                     == "processor_sharing"
-                    else self.__service_processing_slots_per_replica[
-                        service.get_name()
-                    ]
+                    else self.__service_processing_slots_per_replica[service.get_name()]
                 )
                 for service in self.get_services().values()
             }
@@ -416,10 +424,14 @@ class System:
             }
         if not self.__service_replica_queue_models:
             self.__service_replica_queue_models = {
-                service.get_name(): "pooled"
-                for service in self.get_services().values()
+                service.get_name(): "pooled" for service in self.get_services().values()
             }
         self.__poisson_arrival_flags = self.__calculate_poisson_arrival_flags()
+        for name, (minimum, _maximum) in self.__replica_constraints.items():
+            service = self.get_service(name)
+            if service is None:
+                raise ValueError(f"Replica constraint service {name!r} is unreachable.")
+            service.set_replicas(minimum)
 
     def __initialize_distribution_metadata(self):
         if self.__traffic_distribution_spec is None:
@@ -541,7 +553,21 @@ class System:
                 }
                 reachable_by_class[request_class] = reachable
                 for service_id in reachable:
-                    flags[service_id] = False
+                    service = self.get_service_by_id(service_id)
+                    name = service.get_name()
+                    # A pure external entry's arrivals do not become
+                    # non-Poisson merely because its responses spawn calls.
+                    pure_external_poisson = (
+                        self.__analytical_call_model == "response_bounds"
+                        and service.get_gamma(request_class) > 0.0
+                        and self.__entry_arrival_distributions[request_class].get(name)
+                        == "exponential"
+                        and not any(
+                            targets.get(name, 0.0) > 0
+                            for targets in call_graph.values()
+                        )
+                    )
+                    flags[service_id] = flags[service_id] and pure_external_poisson
                 continue
             explicit_visits = self.__request_class_visit_ratios.get(request_class)
             if explicit_visits is not None:
@@ -645,9 +671,7 @@ class System:
                     == "exponential"
                 ),
                 replicas=(
-                    slots
-                    if queue_model != "pooled"
-                    else service.get_replicas() * slots
+                    slots if queue_model != "pooled" else service.get_replicas() * slots
                 ),
             )
         return tuple(models)
@@ -1205,7 +1229,9 @@ class System:
                         specification := self.__request_class_service_blocking_time_specs.get(
                             request_class,
                             {},
-                        ).get(service.get_name())
+                        ).get(
+                            service.get_name()
+                        )
                     )
                     is not None
                 },
@@ -1255,6 +1281,26 @@ class System:
         """Return parallel/sequential sibling-call semantics by class."""
         return dict(self.__request_class_call_execution_modes)
 
+    def get_request_class_call_policies(self):
+        return {
+            name: dict(policies)
+            for name, policies in self.__request_class_call_policies.items()
+        }
+
+    def get_replica_constraints(self):
+        return dict(self.__replica_constraints)
+
+    def get_analytical_call_model(self):
+        return self.__analytical_call_model
+
+    def constrain_maximum_replicas(self, maximum):
+        """Intersect search bounds with the declared, resolved topology."""
+        values = list(maximum)
+        for name, (_minimum, high) in self.__replica_constraints.items():
+            index = self.get_service(name).get_id()
+            values[index] = min(values[index], high)
+        return tuple(values)
+
     def get_service_blocking_time_distribution_specs(self):
         """Return shared non-CPU blocking-time distributions by service.
 
@@ -1284,6 +1330,14 @@ class System:
     def get_strict_analytical_incompatibilities(self):
         """Return declared semantics not certified by the analytical model."""
         incompatibilities = []
+        if (
+            any(self.__request_class_call_policies.values())
+            and self.__analytical_call_model != "response_bounds"
+        ):
+            incompatibilities.append(
+                "per-service call policies (choice, quorum, background, or mixed "
+                "execution) require simulation; analytical means are not certified"
+            )
         if self.__service_post_release_delay_specs:
             incompatibilities.append(
                 "post-release service response delays are not certified by the "
@@ -1306,10 +1360,19 @@ class System:
         held_concurrency_sources = sorted(
             {
                 source
-                for call_graph in self.__request_class_call_graphs.values()
+                for request_class, call_graph in self.__request_class_call_graphs.items()
                 for source, targets in call_graph.items()
                 if targets
                 and self.__service_concurrency_limits_per_replica[source] is not None
+                and self.__request_class_call_policies.get(request_class, {})
+                .get(
+                    source,
+                    CallPolicySpec(
+                        self.__request_class_call_execution_modes[request_class]
+                    ),
+                )
+                .completion
+                != "background"
             }
         )
         if held_concurrency_sources:
@@ -1602,6 +1665,15 @@ class System:
                 concurrency_minimum,
             )
 
+        for name, (low, high) in self.__replica_constraints.items():
+            index = self.get_service(name).get_id()
+            minimum_replicas[index] = max(minimum_replicas[index], low)
+            if minimum_replicas[index] > high:
+                raise ValueError(
+                    f"Fixed or bounded component {name!r} cannot satisfy the "
+                    "necessary stability floor; change the declared topology."
+                )
+
         return minimum_replicas
 
     def __concurrency_offered_loads(self, request_class_rates):
@@ -1634,9 +1706,7 @@ class System:
         utilizations = [0.0 for _ in range(len(self.get_services()))]
         for service in self.get_services().values():
             service_id = service.get_id()
-            limit = self.__service_concurrency_limits_per_replica[
-                service.get_name()
-            ]
+            limit = self.__service_concurrency_limits_per_replica[service.get_name()]
             if limit is None:
                 continue
             capacity = service.get_replicas() * limit
@@ -1688,9 +1758,7 @@ class System:
             result = 0.0
             for source_name, targets in call_graph.items():
                 source = self.get_service(source_name)
-                source_visits = (
-                    float(effective_rates[source.get_id()]) / external_rate
-                )
+                source_visits = float(effective_rates[source.get_id()]) / external_rate
                 for target_name, mean_calls in targets.items():
                     result += (
                         source_visits
@@ -1732,10 +1800,14 @@ class System:
                 probability = edge.get_routing_prob()
                 if target is None or probability <= 0.0:
                     continue
-                result += source_visits * probability * (
-                    self.__mean_one_way_latency(
-                        source.get_name(),
-                        target.get_name(),
+                result += (
+                    source_visits
+                    * probability
+                    * (
+                        self.__mean_one_way_latency(
+                            source.get_name(),
+                            target.get_name(),
+                        )
                     )
                 )
         return result
@@ -1746,6 +1818,10 @@ class System:
         These values are analytical means. They are not p95 estimates and do
         not carry simulation confidence intervals.
         """
+        if any(self.__request_class_call_policies.values()):
+            raise ValueError(
+                "Per-service call policies require simulation for end-to-end latency."
+            )
         service_latencies = self.solve().get_mean_latencies()
         class_rates = self.__calculate_request_class_arrival_rates()
         service_means, _ = self.__calculate_service_time_moments(class_rates)
@@ -1805,13 +1881,102 @@ class System:
                     effective_rates,
                     external_rate,
                 )
-                + self.__request_class_fixed_latency_overheads.get(
-                    request_class, 0.0
-                )
+                + self.__request_class_fixed_latency_overheads.get(request_class, 0.0)
             )
         return results
 
+    def get_request_class_latency_bounds(self):
+        """Conditional mean bounds for a finite call graph, never point predictions.
+
+        Local queue response means come from the existing analytical evaluator.
+        Completion inequalities need no independence assumption. Admission
+        holding, unsupported local execution, and blocking still fail closed.
+        """
+        if self.__analytical_call_model != "response_bounds":
+            raise ValueError(
+                "Declare analytical_call_model: response_bounds to evaluate call bounds."
+            )
+        reasons = self.get_strict_analytical_incompatibilities()
+        if reasons:
+            raise ValueError(
+                "Unsupported analytical response bounds: " + "; ".join(reasons)
+            )
+        local = self.solve()
+        if not local.get_stability():
+            raise ValueError("Response bounds require a stable queueing model.")
+        class_rates = self.__calculate_request_class_arrival_rates()
+        service_means, _ = self.__calculate_service_time_moments(class_rates)
+        queue_means = local.get_mean_latencies()
+        results = {}
+        for request_class in self.get_request_classes():
+            if request_class not in self.__request_class_call_graphs:
+                raise ValueError(
+                    "Analytical response bounds require calls for every request class."
+                )
+            calls = self.__request_class_call_graphs[request_class]
+            policies = self.__request_class_call_policies.get(request_class, {})
+            default = CallPolicySpec(
+                self.__request_class_call_execution_modes[request_class]
+            )
+            cache, visiting = {}, set()
+
+            def response(name):
+                if name in cache:
+                    return cache[name]
+                if name in visiting:
+                    raise ValueError(
+                        "Analytical response bounds require an acyclic call graph."
+                    )
+                visiting.add(name)
+                service_id = self.get_service(name).get_id()
+                demand = self.__request_class_service_time_specs[request_class][
+                    name
+                ].mean
+                own = (
+                    demand * queue_means[service_id] / service_means[service_id]
+                    if self.__service_execution_models[name] == "processor_sharing"
+                    else demand
+                    + max(0.0, queue_means[service_id] - service_means[service_id])
+                )
+                children = []
+                for target, count in calls.get(name, {}).items():
+                    low, high = response(target)
+                    transit = self.__mean_call_round_trip_latency(name, target)
+                    children.append((count, low + transit, high + transit))
+                low, high = call_completion_bounds(
+                    policies.get(name, default), children
+                )
+                visiting.remove(name)
+                cache[name] = (own + low, own + high)
+                return cache[name]
+
+            external_rate = sum(
+                s.get_gamma(request_class) for s in self.get_services().values()
+            )
+            lower = upper = self.__request_class_fixed_latency_overheads.get(
+                request_class, 0.0
+            )
+            for service in self.get_services().values():
+                rate = service.get_gamma(request_class)
+                if rate > 0:
+                    low, high = response(service.get_name())
+                    lower += rate / external_rate * low
+                    upper += rate / external_rate * high
+            results[request_class] = (lower, upper)
+        return results
+
     def configure_system_replicas(self, replicas_config):
+        replicas_config = tuple(replicas_config)
+        if len(replicas_config) != len(self.get_services()) or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in replicas_config
+        ):
+            raise ValueError(
+                "Configuration must define a positive integer per service."
+            )
+        for name, (low, high) in self.__replica_constraints.items():
+            if not low <= replicas_config[self.get_service(name).get_id()] <= high:
+                raise ValueError(f"Configuration violates replica_constraints.{name}.")
         for service in self.get_services().values():
             service_id = service.get_id()
             service.set_replicas(replicas_config[service_id])

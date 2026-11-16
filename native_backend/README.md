@@ -1,5 +1,12 @@
 # Kubesizer native simulation backend
 
+The stateful-performance branch uses protocol 15 and semantics v18. Per-source
+call policies add exclusive choice, quorum response, and background completion.
+Late branches retain valid ownership and resource load after an early client
+response. See [the stateful modeling guide](../docs/STATEFUL_MODELING.md) for
+the supported abstractions and analytical limits. Rebuild the backend when
+switching between this branch and an older protocol.
+
 Kubesizer uses this C++ event kernel as its required simulation executor.
 Python still owns workload construction, analytical stability checks, warm-up
 cutoff decisions, optimization, and reporting. There is no SimPy runtime

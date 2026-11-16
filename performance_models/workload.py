@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+from .call_policy import parse_call_policies, parse_replica_constraints
+
 
 SINGLE_TRAFFIC_MODEL_NAME = "traffic_model"
 CUSTOM_DISTRIBUTION_ABI_VERSION = 1
@@ -106,6 +108,9 @@ class ParsedWorkload:
     request_class_workflows: Mapping
     request_class_call_graphs: Mapping
     request_class_call_execution_modes: Mapping
+    request_class_call_policies: Mapping
+    replica_constraints: Mapping
+    analytical_call_model: str
     request_class_fixed_latency_overheads: Mapping
     request_class_latency_overhead_specs: Mapping
     request_class_latency_boundaries: Mapping
@@ -609,8 +614,7 @@ def _parse_distribution(specification, label, *, quantity, base_path):
             _finite_nonnegative(value, sample_label) for value in timestamps
         )
         if len(timestamps) < 2 or any(
-            right < left
-            for left, right in zip(timestamps, timestamps[1:])
+            right < left for left, right in zip(timestamps, timestamps[1:])
         ):
             raise ValueError(
                 f"{label}.source timestamps must contain at least two "
@@ -787,6 +791,7 @@ def _parse_request_classes(
     workflows = {}
     call_graphs = {}
     call_execution_modes = {}
+    call_policies = {}
     fixed_latency_overheads = {}
     latency_overhead_specs = {}
     latency_boundaries = {}
@@ -815,6 +820,7 @@ def _parse_request_classes(
             "workflow",
             "calls",
             "call_execution",
+            "call_policies",
         }
         unknown_fields = set(request_class) - allowed_fields
         flow_fields = {"routing", "visits", "workflow", "calls"} & set(request_class)
@@ -856,6 +862,8 @@ def _parse_request_classes(
                 f"Request class {request_class_name!r} must define "
                 "call_execution exactly when it defines calls."
             )
+        if "call_policies" in request_class and "calls" not in request_class:
+            raise ValueError("call_policies requires calls.")
         weighted = "concurrency_weight" in request_class
         weighted_classes.append(weighted)
         if weighted:
@@ -934,9 +942,8 @@ def _parse_request_classes(
                     f"request_classes.{request_class_name}.latency_components "
                     f"contains unsupported components {sorted(unknown_components)}."
                 )
-            if (
-                boundary == "ingress"
-                and ({"client_to_ingress", "client_to_entry"} & set(raw_components))
+            if boundary == "ingress" and (
+                {"client_to_ingress", "client_to_entry"} & set(raw_components)
             ):
                 raise ValueError(
                     f"Request class {request_class_name!r} cannot include "
@@ -1095,6 +1102,14 @@ def _parse_request_classes(
                 )
             call_graphs[request_class_name] = _freeze_mapping(class_calls)
             call_execution_modes[request_class_name] = call_execution
+            call_policies[request_class_name] = _freeze_mapping(
+                parse_call_policies(
+                    request_class.get("call_policies", {}),
+                    class_calls,
+                    call_execution,
+                    label=f"request_classes.{request_class_name}.call_policies",
+                )
+            )
             parsed[request_class_name] = _freeze_mapping({})
             continue
 
@@ -1197,6 +1212,7 @@ def _parse_request_classes(
         _freeze_mapping(workflows),
         _freeze_mapping(call_graphs),
         _freeze_mapping(call_execution_modes),
+        _freeze_mapping(call_policies),
         _freeze_mapping(fixed_latency_overheads),
         _freeze_mapping(latency_overhead_specs),
         _freeze_mapping(latency_boundaries),
@@ -1214,10 +1230,17 @@ def parse_workload_spec(workload, *, base_path=None):
     if not isinstance(workload, Mapping):
         raise ValueError("A structured workload must be a mapping.")
     expected_top_level = {"request_classes", "traffic_model"}
-    if set(workload) != expected_top_level:
+    if not expected_top_level <= set(workload) or set(workload) - expected_top_level - {
+        "replica_constraints",
+        "analytical_call_model",
+    }:
         raise ValueError(
-            "A workload must contain exactly request_classes and traffic_model."
+            "A workload must contain exactly request_classes and traffic_model, "
+            "with optional replica_constraints and analytical_call_model."
         )
+    analytical_call_model = workload.get("analytical_call_model", "strict")
+    if analytical_call_model not in ("strict", "response_bounds"):
+        raise ValueError("analytical_call_model must be strict or response_bounds.")
     raw_models = {SINGLE_TRAFFIC_MODEL_NAME: workload["traffic_model"]}
 
     request_classes = workload["request_classes"]
@@ -1234,6 +1257,9 @@ def parse_workload_spec(workload, *, base_path=None):
         raise ValueError("Every traffic model needs a nonempty service_times mapping.")
     service_names = tuple(raw_first_services)
     service_name_set = set(service_names)
+    replica_constraints = parse_replica_constraints(
+        workload.get("replica_constraints", {}), service_name_set
+    )
     if any(not isinstance(name, str) or not name for name in service_names):
         raise ValueError("Service names must be nonempty strings.")
     (
@@ -1242,6 +1268,7 @@ def parse_workload_spec(workload, *, base_path=None):
         workflows,
         call_graphs,
         call_execution_modes,
+        call_policies,
         fixed_latency_overheads,
         latency_overhead_specs,
         latency_boundaries,
@@ -1374,9 +1401,9 @@ def parse_workload_spec(workload, *, base_path=None):
                     )
                     service_blocking_times[service_name] = parsed_blocking_time
                     for request_class_name in request_classes:
-                        service_blocking_times_by_request_class[
-                            request_class_name
-                        ][service_name] = parsed_blocking_time
+                        service_blocking_times_by_request_class[request_class_name][
+                            service_name
+                        ] = parsed_blocking_time
                 else:
                     unknown_classes = set(raw_blocking_time) - set(request_classes)
                     if not raw_blocking_time or unknown_classes:
@@ -1395,12 +1422,13 @@ def parse_workload_spec(workload, *, base_path=None):
                             raw_blocking_time.items()
                         )
                     }
-                    for request_class_name, specification in (
-                        parsed_blocking_times.items()
-                    ):
-                        service_blocking_times_by_request_class[
-                            request_class_name
-                        ][service_name] = specification
+                    for (
+                        request_class_name,
+                        specification,
+                    ) in parsed_blocking_times.items():
+                        service_blocking_times_by_request_class[request_class_name][
+                            service_name
+                        ] = specification
             distribution_specification = {
                 key: value
                 for key, value in raw_service_time.items()
@@ -1569,9 +1597,7 @@ def parse_workload_spec(workload, *, base_path=None):
                 }
             ),
             service_execution_models=_freeze_mapping(service_execution_models),
-            service_replica_queue_models=_freeze_mapping(
-                service_replica_queue_models
-            ),
+            service_replica_queue_models=_freeze_mapping(service_replica_queue_models),
             processing_slots_per_replica=_freeze_mapping(processing_slots_per_replica),
             concurrency_limits_per_replica=_freeze_mapping(
                 concurrency_limits_per_replica
@@ -1595,6 +1621,9 @@ def parse_workload_spec(workload, *, base_path=None):
         request_class_workflows=workflows,
         request_class_call_graphs=call_graphs,
         request_class_call_execution_modes=call_execution_modes,
+        request_class_call_policies=call_policies,
+        replica_constraints=_freeze_mapping(replica_constraints),
+        analytical_call_model=analytical_call_model,
         request_class_fixed_latency_overheads=fixed_latency_overheads,
         request_class_latency_overhead_specs=latency_overhead_specs,
         request_class_latency_boundaries=latency_boundaries,

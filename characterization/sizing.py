@@ -87,9 +87,7 @@ def resolve_sizing_policy(inputs, policy=None):
     if policy is not None:
         return policy
     return SizingPolicy(
-        empirical_capacity_utilization=(
-            inputs.workload.maximum_capacity_utilization
-        )
+        empirical_capacity_utilization=(inputs.workload.maximum_capacity_utilization)
     )
 
 
@@ -113,7 +111,10 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
     for deployment_service in inputs.workload.services:
         evidence = service_characterizations[deployment_service.name]
         workload_rate = evidence.workload_arrival_rate_rps
-        minimum_replicas = 1
+        constraint = dict(inputs.workload.replica_constraints).get(
+            deployment_service.name
+        )
+        minimum_replicas = constraint[0] if constraint else 1
         warnings = list(evidence.warnings)
 
         safe_demand = _quantile(
@@ -154,8 +155,7 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
             adequate_capacity_points.append((point, lower_capacity))
             conflicting_failure = (
                 point.minimum_unhealthy_offered_rate_rps is not None
-                and workload_rate
-                >= point.minimum_unhealthy_offered_rate_rps
+                and workload_rate >= point.minimum_unhealthy_offered_rate_rps
             )
             if (
                 empirical_based is None
@@ -166,9 +166,7 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
                 empirical_based = point.replicas
 
         empirical_extrapolated = bool(
-            workload_rate > 0.0
-            and adequate_capacity_points
-            and empirical_based is None
+            workload_rate > 0.0 and adequate_capacity_points and empirical_based is None
         )
         if empirical_extrapolated:
             warnings.append(
@@ -195,6 +193,11 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
                 "no CPU-demand or demonstrated-capacity evidence."
             )
         recommended = max(available.values())
+        if constraint and recommended > constraint[1]:
+            raise ValueError(
+                f"Fixed or bounded component {deployment_service.name!r} cannot "
+                "meet the evidence-based sizing floor within replica_constraints."
+            )
         limiting = tuple(
             name for name, value in available.items() if value == recommended
         )
@@ -224,13 +227,9 @@ def recommend_initial_replicas(inputs, characterization, *, policy=None):
                 recommended_replicas=recommended,
                 cpu_based_replicas=cpu_based,
                 empirical_capacity_based_replicas=empirical_based,
-                empirical_capacity_evidence_replicas=tuple(
-                    empirical_evidence_replicas
-                ),
+                empirical_capacity_evidence_replicas=tuple(empirical_evidence_replicas),
                 empirical_capacity_extrapolated=empirical_extrapolated,
-                cpu_capacity_cores_per_replica=(
-                    deployment_service.cpu_capacity_cores
-                ),
+                cpu_capacity_cores_per_replica=(deployment_service.cpu_capacity_cores),
                 cpu_capacity_basis=deployment_service.cpu_capacity_basis,
                 workload_arrival_rate_rps=workload_rate,
                 estimated_cpu_utilization=estimated_cpu_utilization,

@@ -1,0 +1,75 @@
+# Synthetic mechanism example; all demands/rates are illustrative, not measurements.
+# Fixed members define one resolved topology. No product-level accuracy is claimed.
+request_classes:
+  write:
+    concurrency_weight: 1
+    calls:
+      api:
+        peer_1: 1
+        peer_2: 1
+        peer_3: 1
+      peer_1:
+        disk_1: 1
+      peer_2:
+        disk_2: 1
+      peer_3:
+        disk_3: 1
+    call_execution: "sequential"
+    call_policies:
+      api:
+        execution: "parallel"
+        completion: "quorum"
+        required: 2
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+traffic_model:
+  entry_services:
+    write:
+      api:
+        distribution: "exponential"
+        rate: 10
+  service_times:
+    api:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    peer_1:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    peer_2:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    peer_3:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    disk_1:
+      distribution: "deterministic"
+      mean: 0.003
+      concurrency_limit_per_replica: 64
+    disk_2:
+      distribution: "deterministic"
+      mean: 0.005
+      concurrency_limit_per_replica: 64
+    disk_3:
+      distribution: "deterministic"
+      mean: 0.01
+      concurrency_limit_per_replica: 64
+replica_constraints:
+  api:
+    minimum: 1
+    maximum: 4
+  peer_1:
+    fixed: 1
+  peer_2:
+    fixed: 1
+  peer_3:
+    fixed: 1
+  disk_1:
+    fixed: 1
+  disk_2:
+    fixed: 1
+  disk_3:
+    fixed: 1

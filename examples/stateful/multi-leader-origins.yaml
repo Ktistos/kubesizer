@@ -1,0 +1,71 @@
+# Synthetic mechanism example; all demands/rates are illustrative, not measurements.
+# Fixed members define one resolved topology. No product-level accuracy is claimed.
+request_classes:
+  write_at_a:
+    concurrency_weight: 0.5
+    calls:
+      leader_a:
+        disk_a: 1
+      disk_a:
+        leader_b: 1
+      leader_b:
+        disk_b: 1
+    call_execution: "sequential"
+    call_policies:
+      disk_a:
+        execution: "parallel"
+        completion: "background"
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+  write_at_b:
+    concurrency_weight: 0.5
+    calls:
+      leader_b:
+        disk_b: 1
+      disk_b:
+        leader_a: 1
+      leader_a:
+        disk_a: 1
+    call_execution: "sequential"
+    call_policies:
+      disk_b:
+        execution: "parallel"
+        completion: "background"
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+traffic_model:
+  entry_services:
+    write_at_a:
+      leader_a:
+        distribution: "exponential"
+        rate: 5
+    write_at_b:
+      leader_b:
+        distribution: "exponential"
+        rate: 5
+  service_times:
+    leader_a:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    leader_b:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    disk_a:
+      distribution: "deterministic"
+      mean: 0.004
+      concurrency_limit_per_replica: 64
+    disk_b:
+      distribution: "deterministic"
+      mean: 0.004
+      concurrency_limit_per_replica: 64
+replica_constraints:
+  leader_a:
+    fixed: 1
+  leader_b:
+    fixed: 1
+  disk_a:
+    fixed: 1
+  disk_b:
+    fixed: 1

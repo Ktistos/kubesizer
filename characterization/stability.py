@@ -104,6 +104,15 @@ def estimate_statistical_stability_floor(
         len(service_order),
         "maximum_configuration",
     )
+    constraints = dict(inputs.workload.replica_constraints)
+    maximum = tuple(
+        min(high, constraints[name][1]) if name in constraints else high
+        for name, high in zip(service_order, maximum)
+    )
+    analytical_minimum = tuple(
+        max(low, constraints[name][0]) if name in constraints else low
+        for name, low in zip(service_order, analytical_minimum)
+    )
     if any(high < low for low, high in zip(analytical_minimum, maximum)):
         raise ValueError("Maximum bounds cannot be below analytical stability.")
 

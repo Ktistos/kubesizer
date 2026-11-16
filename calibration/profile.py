@@ -674,9 +674,7 @@ def _json_scalar(value):
             (str, bool, int, float, type(None)),
         ):
             return converted
-    raise TypeError(
-        f"Object of type {type(value).__name__} is not JSON serializable"
-    )
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _fingerprint(value):
@@ -695,9 +693,7 @@ def _distribution_fingerprint(specification):
             if name not in nonsemantic_fields
         ],
         "samples": list(specification.samples),
-        "sample_clusters": [
-            list(cluster) for cluster in specification.sample_clusters
-        ],
+        "sample_clusters": [list(cluster) for cluster in specification.sample_clusters],
     }
 
 
@@ -717,6 +713,8 @@ def experiment_fingerprints(system):
         "get_request_class_call_execution_modes",
         lambda: {},
     )()
+    call_policies = getattr(system, "get_request_class_call_policies", lambda: {})()
+    replica_constraints = getattr(system, "get_replica_constraints", lambda: {})()
     concurrency_limits = getattr(
         system,
         "get_service_concurrency_limits_per_replica",
@@ -769,6 +767,10 @@ def experiment_fingerprints(system):
     )()
     topology = {
         "network_type": system.get_type().value,
+        "replica_constraints": replica_constraints,
+        "analytical_call_model": getattr(
+            system, "get_analytical_call_model", lambda: "strict"
+        )(),
         "services": [
             {
                 "id": service.get_id(),
@@ -832,6 +834,12 @@ def experiment_fingerprints(system):
                     )
                 ],
                 "call_execution": call_execution_modes.get(request_class),
+                "call_policies": {
+                    source: policy.to_dict()
+                    for source, policy in sorted(
+                        call_policies.get(request_class, {}).items()
+                    )
+                },
             }
             for request_class in request_classes
         ],
@@ -872,9 +880,7 @@ def experiment_fingerprints(system):
                 "components": [
                     {
                         "name": component_name,
-                        "specification": _distribution_fingerprint(
-                            specification
-                        ),
+                        "specification": _distribution_fingerprint(specification),
                     }
                     for component_name, specification in sorted(
                         latency_component_specs.get(request_class, {}).items()
@@ -1013,9 +1019,7 @@ def experiment_fingerprints(system):
             "cross_node_one_way": _distribution_fingerprint(
                 communication_latency.cross_node_one_way
             ),
-            "cross_node_probability": (
-                communication_latency.cross_node_probability
-            ),
+            "cross_node_probability": (communication_latency.cross_node_probability),
         }
     post_release_delays = getattr(
         system,

@@ -156,6 +156,7 @@ class CalibratedOptimizationResult:
     def relative_bound_gap(self):
         return getattr(self.optimization_result, "relative_bound_gap", None)
 
+
 @dataclass(frozen=True)
 class RequestClassRecommendationEvidence:
     request_class: str
@@ -327,6 +328,9 @@ def _maximum_configuration(system, maximum_replicas):
         for value in maximum
     ):
         raise ValueError("maximum_replicas must define a positive bound per service.")
+    maximum = getattr(system, "constrain_maximum_replicas", lambda values: values)(
+        maximum
+    )
     minimum = tuple(system.get_minimum_stable_replicas())
     if any(high < low for low, high in zip(minimum, maximum)):
         raise ValueError("Maximum bounds cannot be below the stable minimum.")

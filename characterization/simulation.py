@@ -95,9 +95,9 @@ def _arrival_specification(
             timestamps[-1] - timestamps[0],
         )
         mean = sum(raw_interarrivals) / len(raw_interarrivals)
-        variance = sum(
-            (interval - mean) ** 2 for interval in raw_interarrivals
-        ) / len(raw_interarrivals)
+        variance = sum((interval - mean) ** 2 for interval in raw_interarrivals) / len(
+            raw_interarrivals
+        )
         scv = variance / (mean * mean)
         tied_arrivals = sum(interval == 0.0 for interval in raw_interarrivals)
         return {
@@ -114,9 +114,7 @@ def _arrival_specification(
         if not class_samples:
             reason = "no complete raw arrival trace was supplied"
         elif not timestamps:
-            reason = (
-                "raw arrival timestamps are not attributable to this entry service"
-            )
+            reason = "raw arrival timestamps are not attributable to this entry service"
         elif len(timestamps) < 2 or timestamps[-1] <= timestamps[0]:
             reason = "the attributed arrival trace has no positive time span"
         else:
@@ -257,9 +255,7 @@ def _request_class_specification(
         )
     elif inferred_latency_components:
         specification["latency_boundary"] = request_class.latency_boundary
-        specification["latency_components"] = copy.deepcopy(
-            inferred_latency_components
-        )
+        specification["latency_components"] = copy.deepcopy(inferred_latency_components)
     elif request_class.latency_boundary != "unspecified":
         specification["latency_boundary"] = request_class.latency_boundary
     if request_class.end_to_end_timeout_seconds > 0.0:
@@ -554,8 +550,7 @@ def _build_characterized_workload_variants(
         for item in characterization.external_request_classes
     }
     external_characterizations = {
-        item.request_class: item
-        for item in characterization.external_request_classes
+        item.request_class: item for item in characterization.external_request_classes
     }
     missing_rates = [
         request_class.name
@@ -820,6 +815,16 @@ def _build_characterized_workload_variants(
                 name=variant_name,
                 workload={
                     "request_classes": request_classes,
+                    **(
+                        {
+                            "replica_constraints": {
+                                name: {"minimum": bounds[0], "maximum": bounds[1]}
+                                for name, bounds in inputs.workload.replica_constraints
+                            }
+                        }
+                        if inputs.workload.replica_constraints
+                        else {}
+                    ),
                     "traffic_model": {
                         "entry_services": entry_services,
                         "service_times": service_times,
@@ -923,9 +928,7 @@ def build_characterized_system_variants(
         input_uncertainty_block_length=input_uncertainty_block_length,
     )
     incomplete = tuple(
-        (variant.name, issue)
-        for variant in variants
-        for issue in variant.model_issues
+        (variant.name, issue) for variant in variants for issue in variant.model_issues
     )
     if incomplete:
         details = "; ".join(

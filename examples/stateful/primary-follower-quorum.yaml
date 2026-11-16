@@ -1,0 +1,120 @@
+# Synthetic mechanism example; all demands/rates are illustrative, not measurements.
+# Fixed members define one resolved topology. No product-level accuracy is claimed.
+request_classes:
+  read:
+    concurrency_weight: 0.8
+    calls:
+      api:
+        read_router: 1
+      read_router:
+        reader_1: 0.7
+        reader_2: 0.3
+      reader_1:
+        disk_1: 1
+      reader_2:
+        disk_2: 1
+    call_execution: "sequential"
+    call_policies:
+      read_router:
+        execution: "choice"
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+  write:
+    concurrency_weight: 0.2
+    calls:
+      api:
+        primary: 1
+      primary:
+        primary_disk: 1
+      primary_disk:
+        reader_1: 1
+        reader_2: 1
+      reader_1:
+        disk_1: 1
+      reader_2:
+        disk_2: 1
+    call_execution: "sequential"
+    call_policies:
+      primary_disk:
+        execution: "parallel"
+        completion: "quorum"
+        required: 1
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+traffic_model:
+  entry_services:
+    read:
+      api:
+        distribution: "exponential"
+        rate: 8
+    write:
+      api:
+        distribution: "exponential"
+        rate: 2
+  service_times:
+    api:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    read_router:
+      distribution: "deterministic"
+      mean: 0.0001
+      concurrency_limit_per_replica: 64
+    primary:
+      distribution: "deterministic"
+      mean: 0.002
+      concurrency_limit_per_replica: 64
+    primary_disk:
+      distribution: "deterministic"
+      mean: 0.003
+      concurrency_limit_per_replica: 64
+    reader_1:
+      concurrency_limit_per_replica: 64
+      read:
+        distribution: "deterministic"
+        mean: 0.001
+      write:
+        distribution: "deterministic"
+        mean: 0.0025
+    reader_2:
+      concurrency_limit_per_replica: 64
+      read:
+        distribution: "deterministic"
+        mean: 0.001
+      write:
+        distribution: "deterministic"
+        mean: 0.0025
+    disk_1:
+      concurrency_limit_per_replica: 64
+      read:
+        distribution: "deterministic"
+        mean: 0.003
+      write:
+        distribution: "deterministic"
+        mean: 0.004
+    disk_2:
+      concurrency_limit_per_replica: 64
+      read:
+        distribution: "deterministic"
+        mean: 0.003
+      write:
+        distribution: "deterministic"
+        mean: 0.004
+replica_constraints:
+  api:
+    minimum: 1
+    maximum: 4
+  read_router:
+    fixed: 1
+  primary:
+    fixed: 1
+  primary_disk:
+    fixed: 1
+  reader_1:
+    fixed: 1
+  reader_2:
+    fixed: 1
+  disk_1:
+    fixed: 1
+  disk_2:
+    fixed: 1

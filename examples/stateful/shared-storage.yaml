@@ -1,0 +1,52 @@
+# Synthetic mechanism example; all demands/rates are illustrative, not measurements.
+# Fixed members define one resolved topology. No product-level accuracy is claimed.
+request_classes:
+  read:
+    concurrency_weight: 1
+    calls:
+      api:
+        compute_1: 0.5
+        compute_2: 0.5
+      compute_1:
+        shared_disk: 1
+      compute_2:
+        shared_disk: 1
+    call_execution: "sequential"
+    call_policies:
+      api:
+        execution: "choice"
+    end_to_end_latency_slos:
+      mean_seconds: 0.1
+traffic_model:
+  entry_services:
+    read:
+      api:
+        distribution: "exponential"
+        rate: 10
+  service_times:
+    api:
+      distribution: "deterministic"
+      mean: 0.001
+      concurrency_limit_per_replica: 64
+    compute_1:
+      distribution: "deterministic"
+      mean: 0.002
+      concurrency_limit_per_replica: 64
+    compute_2:
+      distribution: "deterministic"
+      mean: 0.002
+      concurrency_limit_per_replica: 64
+    shared_disk:
+      distribution: "deterministic"
+      mean: 0.008
+      concurrency_limit_per_replica: 64
+replica_constraints:
+  api:
+    minimum: 1
+    maximum: 4
+  compute_1:
+    fixed: 1
+  compute_2:
+    fixed: 1
+  shared_disk:
+    fixed: 1

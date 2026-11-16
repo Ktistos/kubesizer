@@ -7,12 +7,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 
-PROTOCOL_VERSION = 14
+PROTOCOL_VERSION = 15
 SIMULATOR_SEMANTICS_VERSION = (
     "native-event-kernel-joint-input-blocks-burst-traces-concurrency-"
     "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-"
     "ps-replica-queues-measured-latency-components-rate-preserving-traces-"
-    "post-release-delays-v17"
+    "post-release-delays-source-policies-quorum-background-choice-v18"
 )
 
 
@@ -207,6 +207,7 @@ class CppSimulationBackend:
         workflows = system.get_request_class_workflows()
         call_graphs = system.get_request_class_call_graphs()
         call_execution_modes = system.get_request_class_call_execution_modes()
+        call_policies = system.get_request_class_call_policies()
         overhead_specs = system.get_request_class_latency_overhead_distribution_specs()
         latency_components = getattr(
             system,
@@ -281,6 +282,21 @@ class CppSimulationBackend:
                         request_class,
                         "parallel",
                     ),
+                    "call_policies": [
+                        (
+                            call_policies[request_class][service.get_name()].to_dict()
+                            if service.get_name()
+                            in call_policies.get(request_class, {})
+                            else {
+                                "execution": call_execution_modes.get(
+                                    request_class, "parallel"
+                                ),
+                                "completion": "all",
+                                "required": 0,
+                            }
+                        )
+                        for service in services
+                    ],
                     "latency_overhead_distribution": (
                         _serialize_distribution(overhead_specs[request_class])
                         if request_class in overhead_specs
@@ -364,7 +380,8 @@ class CppSimulationBackend:
                     ],
                     "post_release_delay": (
                         _serialize_distribution(post_release_specs[service.get_name()])
-                        if service.get_name() in post_release_specs else None
+                        if service.get_name() in post_release_specs
+                        else None
                     ),
                 }
                 for service in services

@@ -20,14 +20,16 @@ class AnalyticalClassification(str, Enum):
     ANALYTICALLY_INFEASIBLE = "ANALYTICALLY_INFEASIBLE"
     ANALYTICALLY_UNSTABLE = "ANALYTICALLY_UNSTABLE"
     STRUCTURALLY_INFEASIBLE = "STRUCTURALLY_INFEASIBLE"
+    INCONCLUSIVE = "INCONCLUSIVE"
 
 
 @dataclass(frozen=True)
 class AnalyticalReplicaSizingEvaluation:
     """Mean-latency evidence for an analytical-only replica evaluation.
 
-    The values are analytical expectations. They are not p95 latency estimates
-    and have no statistical confidence guarantee.
+    Point expectations and optional conditional completion bounds are kept in
+    separate fields and labeled by evaluation_basis. Neither represents p95
+    evidence or a statistical confidence guarantee.
     """
 
     configuration: tuple[int, ...]
@@ -39,6 +41,8 @@ class AnalyticalReplicaSizingEvaluation:
     request_class_mean_latencies: tuple[tuple[str, float], ...]
     request_class_mean_latency_limits: tuple[tuple[str, float], ...]
     evaluation_basis: str = "ANALYTICAL_MEAN_LATENCY"
+    request_class_mean_latency_upper_bounds: tuple[tuple[str, float], ...] = ()
+    request_class_mean_latency_lower_bounds: tuple[tuple[str, float], ...] = ()
 
     @property
     def means(self):
@@ -47,6 +51,14 @@ class AnalyticalReplicaSizingEvaluation:
     @property
     def limits(self):
         return dict(self.request_class_mean_latency_limits)
+
+    @property
+    def upper_bounds(self):
+        return dict(self.request_class_mean_latency_upper_bounds)
+
+    @property
+    def lower_bounds(self):
+        return dict(self.request_class_mean_latency_lower_bounds)
 
     def ranking_key(self):
         return (0 if self.feasible else 1, self.cost, self.tie_breaker)
@@ -140,6 +152,13 @@ class _BoundedReplicaSizingProblem(GraphSearchProblem):
             self._service_count,
             exceeded_configuration_message,
         )
+        self._maximum = getattr(
+            system, "constrain_maximum_replicas", lambda values: values
+        )(self._maximum)
+        if any(high < low for low, high in zip(self._initial, self._maximum)):
+            raise ValueError(
+                "Replica constraints are below the required minimum configuration."
+            )
         self._replica_costs = _replica_costs(replica_costs, self._service_count)
         self._structural_feasibility = structural_feasibility
         self._progress_callback = progress_callback
@@ -304,6 +323,7 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
             ),
         )
         self.__evidence_cache = {}
+        self.__latency_bounds_cache = {}
 
     def __normalize_limits(self, values):
         limits = dict(values)
@@ -328,7 +348,17 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
         return normalized
 
     def _request_class_means(self):
-        values = self._system.get_request_class_mean_latencies()
+        if (
+            getattr(self._system, "get_analytical_call_model", lambda: "strict")()
+            == "response_bounds"
+        ):
+            bounds = self._system.get_request_class_latency_bounds()
+            self.__latency_bounds_cache[tuple(self._system.get_system_replicas())] = (
+                bounds
+            )
+            values = {name: high for name, (_low, high) in bounds.items()}
+        else:
+            values = self._system.get_request_class_mean_latencies()
         return tuple(
             (request_class, float(values[request_class]))
             for request_class in self.__request_classes
@@ -390,6 +420,17 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
                 else AnalyticalClassification.ANALYTICALLY_INFEASIBLE
             )
 
+        bounds = self.__latency_bounds_cache.get(configuration, {})
+        if (
+            bounds
+            and not feasible
+            and classification == AnalyticalClassification.ANALYTICALLY_INFEASIBLE
+        ):
+            if not any(
+                bounds[name][0] > limit for name, limit in self.__limits.items()
+            ):
+                classification = AnalyticalClassification.INCONCLUSIVE
+
         evaluation = AnalyticalReplicaSizingEvaluation(
             configuration=configuration,
             feasible=feasible,
@@ -397,10 +438,28 @@ class AnalyticalReplicaSizingProblem(_BoundedReplicaSizingProblem):
             tie_breaker=tie_breaker,
             analytical_metrics=analytical,
             classification=classification,
-            request_class_mean_latencies=class_means,
+            request_class_mean_latencies=(
+                ()
+                if self._system.get_analytical_call_model() == "response_bounds"
+                else class_means
+            ),
+            request_class_mean_latency_upper_bounds=(
+                class_means
+                if self._system.get_analytical_call_model() == "response_bounds"
+                else ()
+            ),
             request_class_mean_latency_limits=tuple(self.__limits.items()),
+            request_class_mean_latency_lower_bounds=tuple(
+                (name, low) for name, (low, _high) in bounds.items()
+            ),
             evaluation_basis=(
-                "ANALYTICAL_MEAN_LATENCY" if self.__limits else "ANALYTICAL_STABILITY"
+                "ANALYTICAL_MEAN_LATENCY_UPPER_BOUND"
+                if self._system.get_analytical_call_model() == "response_bounds"
+                else (
+                    "ANALYTICAL_MEAN_LATENCY"
+                    if self.__limits
+                    else "ANALYTICAL_STABILITY"
+                )
             ),
         )
         return self._record_evaluation(configuration, evaluation)
