@@ -30,8 +30,11 @@ from characterization import (
     load_and_prepare_initial_sizing,
 )
 from optimization import (
+    NoFeasibleConfigurationError,
     ReplicaEvaluationMode,
+    SimulationClassification,
 )
+from optimization.selection import pareto_replica_configurations
 from performance_models import QueueingNetworkType, System
 from runtime_estimation import estimate_workflow_runtime
 from statistical_workflow import (
@@ -40,7 +43,7 @@ from statistical_workflow import (
     validate_final_configuration,
 )
 
-CLI_VERSION = "0.4.0"
+CLI_VERSION = "0.5.0"
 DEFAULT_MAXIMUM_REPLICAS = 10
 DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
 
@@ -568,6 +571,7 @@ def _prepare_runtime_reporting(
             options=_calibration_options(args),
             maximum_replicas=args.max_replicas,
             workers=args.workers,
+            pareto=True,
         )
     except Exception:
         reporter.runtime_estimation_failed()
@@ -641,36 +645,80 @@ def _run_replica_workflow(
     if kind is None and evaluation_mode == ReplicaEvaluationMode.SIMULATION:
         raise CliUsageError("Simulation optimization requires workload latency SLOs.")
 
+    accept = None
+    candidate_count = 0
+    failed_validations = []
     if evaluation_mode == ReplicaEvaluationMode.ANALYTICAL:
-        result = optimize_with_analytical_model(
+        evaluations = optimize_with_analytical_model(
             system,
             maximum_replicas=args.max_replicas,
             minimum_configuration=minimum_configuration,
             progress_callback=_progress_callback(args),
             analytical_semantics=args.analytical_semantics,
+            evaluate_all=True,
         )
-        return result, None, None
+        latency_basis = "analytical_mean" if kind else None
+    else:
+        profile = _run_calibration(
+            system,
+            args,
+            minimum_configuration=minimum_configuration,
+        )
+        evaluations = optimize_with_calibrated_simulation(
+            system,
+            profile,
+            workers=args.workers,
+            progress_callback=_progress_callback(args),
+            evaluate_all=True,
+        )
+        latency_basis = "simulation_search_upper_bound"
+        # A failed validation can expose a candidate the search initially dominated.
+        candidate_count = sum(evaluation.feasible for evaluation in evaluations)
+        if candidate_count:
+            _notify_progress(args, "final_validation_started")
 
-    profile = _run_calibration(
-        system,
-        args,
-        minimum_configuration=minimum_configuration,
-    )
-    result = optimize_with_calibrated_simulation(
-        system,
-        profile,
-        workers=args.workers,
-        progress_callback=_progress_callback(args),
-    )
-    validation = validate_final_configuration(
-        system,
-        result.configuration,
-        profile,
-        workers=args.workers,
-        progress_callback=_progress_callback(args),
-    )
-    _notify_progress(args, "final_validation_completed")
-    return result, profile, validation
+        def accept(evaluation):
+            validation = validate_final_configuration(
+                system,
+                evaluation.configuration,
+                profile,
+                workers=args.workers,
+                validation_candidate_count=candidate_count,
+            )
+            if not validation.passed:
+                failed_validations.append(validation.failure_reason)
+            return validation.passed
+
+    frontier = pareto_replica_configurations(evaluations, accept=accept)
+    if candidate_count:
+        _notify_progress(args, "final_validation_completed")
+    if not frontier:
+        if failed_validations:
+            reason = failed_validations[-1]
+            raise RuntimeError(
+                "All eligible replica configurations failed final validation"
+                + (f": {reason}" if reason else ".")
+            )
+        raise NoFeasibleConfigurationError(
+            "No reliably feasible configuration exists in the reachable replica space."
+        )
+    return {
+        "latency_slo_kind": kind,
+        "latency_basis": latency_basis,
+        "inconclusive_search_configurations": sum(
+            evaluation.classification == SimulationClassification.INCONCLUSIVE
+            for evaluation in evaluations
+        ),
+        "failed_final_validations": len(failed_validations),
+        "pareto_set": [
+            {
+                "replica_cost": evaluation.cost,
+                "worst_slo_ratio": evaluation.tie_breaker if kind else None,
+                "services": _service_recommendations(system, evaluation.configuration),
+            }
+            for evaluation in frontier
+        ],
+    }
 
 
 def _command_run(args):
@@ -691,18 +739,11 @@ def _command_run(args):
         system,
         args,
     )
-    result, _profile, validation = _run_replica_workflow(
+    return _run_replica_workflow(
         system,
         args,
         minimum_configuration,
     )
-    if validation is not None and not validation.passed:
-        reason = getattr(validation, "failure_reason", None)
-        raise RuntimeError(
-            "The selected replica configuration failed final validation"
-            + (f": {reason}" if reason else ".")
-        )
-    return {"services": _service_recommendations(system, result.configuration)}
 
 
 def _add_output_arguments(parser):

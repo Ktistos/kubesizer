@@ -28,6 +28,7 @@ from optimization import (
     optimize_replica_configuration as _optimize_replica_configuration,
     validate_final_configuration as _validate_final_configuration,
 )
+from optimization.selection import evaluate_replica_configurations
 
 
 @dataclass(frozen=True)
@@ -558,6 +559,7 @@ def optimize_with_calibrated_simulation(
     progress_callback=None,
     predictive_validation=None,
     require_predictive_validation=False,
+    evaluate_all=False,
 ):
     """Run exact, statistically controlled uniform-cost replica sizing."""
     if predictive_validation is None:
@@ -589,6 +591,10 @@ def optimize_with_calibrated_simulation(
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
     )
+    if evaluate_all:
+        return evaluate_replica_configurations(
+            problem, progress_callback=progress_callback
+        )
     if progress_callback is not None:
         progress_callback(
             "replica_optimization_started",
@@ -785,6 +791,7 @@ def validate_final_configuration(
     progress_callback=None,
     predictive_validation=None,
     require_predictive_validation=False,
+    validation_candidate_count=1,
 ):
     """Run the fixed fresh-seed holdout for the locked optimizer candidate."""
     if predictive_validation is None:
@@ -801,6 +808,7 @@ def validate_final_configuration(
         calibration_profile,
         workers=workers,
         progress_callback=progress_callback,
+        validation_candidate_count=validation_candidate_count,
     )
     if report_directory is not None:
         save_final_validation(result, report_directory)

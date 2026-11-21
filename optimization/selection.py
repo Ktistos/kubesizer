@@ -1,4 +1,5 @@
 import math
+from itertools import product
 
 from .uniform_cost import UniformCostReplicaOptimizer
 
@@ -11,6 +12,51 @@ def replica_configuration_count(calibration_profile):
             calibration_profile.maximum_replica_configuration,
         )
     )
+
+
+def evaluate_replica_configurations(problem, *, progress_callback=None):
+    """Evaluate the full bounded grid needed for cost and latency trade-offs."""
+    count = problem.configuration_count()
+    if progress_callback is not None:
+        progress_callback("replica_optimization_started", {
+            "completed_configurations": 0,
+            "total_configurations": count,
+            "search_space_configurations": count,
+        })
+    bounds = zip(problem.initial_state(), problem.maximum_configuration(), strict=True)
+    evaluations = tuple(
+        problem.evaluate(configuration)
+        for configuration in product(*(range(low, high + 1) for low, high in bounds))
+    )
+    if progress_callback is not None:
+        progress_callback("replica_optimization_completed", {
+            "completed_configurations": len(evaluations),
+            "search_space_configurations": count,
+        })
+    return evaluations
+
+
+def pareto_replica_configurations(evaluations, *, accept=None):
+    """Return nondominated feasible vectors under cost and worst SLO ratio.
+
+    Only an accepted candidate can dominate another one. The objectives come
+    from the search, so rejecting a finalist can expose a replacement.
+    """
+    candidates = sorted(
+        (evaluation for evaluation in evaluations if evaluation.feasible),
+        key=lambda evaluation: (
+            evaluation.cost, evaluation.tie_breaker, evaluation.configuration
+        ),
+    )
+    frontier = []
+    best = (math.inf, math.inf)
+    for candidate in candidates:
+        rank = (candidate.tie_breaker, candidate.cost)
+        if rank > best or (accept is not None and not accept(candidate)):
+            continue
+        frontier.append(candidate)
+        best = rank
+    return tuple(frontier)
 
 
 def optimize_replica_configuration(

@@ -66,24 +66,13 @@ def _fake_system(*, slo_kind="mean"):
     )
 
 
-def _fake_replica_result():
-    metrics = SimpleNamespace(
-        classification=_Classification(),
-        evaluation_basis="ANALYTICAL_MEAN_LATENCY",
-        means={"request": 0.5},
-        limits={"request": 1.0},
-    )
+def _candidate(replicas, ratio, *, feasible=True):
     return SimpleNamespace(
-        configuration=(1,),
-        cost=0.0,
-        objective_value=1.0,
-        metrics=metrics,
-        explored_states=1,
-        path=((1,),),
-        method="UNIFORM_COST_EXACT",
-        termination_reason="LOWER_BOUND_MATCHED",
-        minimality_proven=True,
-        optimality_proven=True,
+        configuration=(replicas,),
+        cost=float(replicas),
+        tie_breaker=ratio,
+        feasible=feasible,
+        classification=_Classification() if feasible else "INCONCLUSIVE",
     )
 
 
@@ -305,7 +294,7 @@ def test_recommendation_is_service_centric():
     }
 
 
-def test_analytical_run_emits_replica_only_recommendation(
+def test_analytical_run_emits_tradeoffs_beyond_the_first_passing_cost(
     monkeypatch,
     capsys,
 ):
@@ -318,7 +307,9 @@ def test_analytical_run_emits_replica_only_recommendation(
     monkeypatch.setattr(
         kubesizer_cli,
         "optimize_with_analytical_model",
-        lambda *args, **kwargs: _fake_replica_result(),
+        lambda *args, **kwargs: (
+            _candidate(3, 0.80), _candidate(1, 0.95), _candidate(2, 0.75)
+        ),
     )
     exit_code = kubesizer_cli.main(
         [
@@ -333,13 +324,19 @@ def test_analytical_run_emits_replica_only_recommendation(
 
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert output["result"] == {
-        "services": {
-            "api": {
-                "recommended_replicas": 1,
-            }
-        }
-    }
+    assert output["result"]["latency_basis"] == "analytical_mean"
+    assert output["result"]["pareto_set"] == [
+        {
+            "replica_cost": 1.0,
+            "worst_slo_ratio": 0.95,
+            "services": {"api": {"recommended_replicas": 1}},
+        },
+        {
+            "replica_cost": 2.0,
+            "worst_slo_ratio": 0.75,
+            "services": {"api": {"recommended_replicas": 2}},
+        },
+    ]
 
 
 def test_failed_final_validation_does_not_emit_a_recommendation(
@@ -358,8 +355,18 @@ def test_failed_final_validation_does_not_emit_a_recommendation(
     )
     monkeypatch.setattr(
         kubesizer_cli,
-        "_run_replica_workflow",
-        lambda *args: (_fake_replica_result(), object(), validation),
+        "_run_calibration",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "optimize_with_calibrated_simulation",
+        lambda *args, **kwargs: (_candidate(1, 0.9),),
+    )
+    monkeypatch.setattr(
+        kubesizer_cli,
+        "validate_final_configuration",
+        lambda *args, **kwargs: validation,
     )
 
     exit_code = kubesizer_cli.main(
@@ -380,12 +387,19 @@ def test_failed_final_validation_does_not_emit_a_recommendation(
     assert "failed final validation" in output["error"]["message"]
 
 
-def test_simulation_workflow_always_runs_internal_final_validation(monkeypatch):
+def test_simulation_pareto_validates_options_and_reconsiders_after_a_failure(monkeypatch):
     system = _fake_system(slo_kind="percentile")
     profile = SimpleNamespace(to_dict=lambda: {"profile": "test"})
-    validation = SimpleNamespace(passed=True)
-    result = _fake_replica_result()
+    evaluations = (
+        _candidate(1, 0.75),
+        _candidate(2, 0.80),
+        _candidate(3, 0.85),
+        _candidate(4, 0.65),
+        _candidate(5, 0.65),
+        _candidate(6, 0.60, feasible=False),
+    )
     observed = {}
+    tested = []
     arguments = SimpleNamespace(
         replica_evaluation="simulation",
         max_replicas=10,
@@ -400,13 +414,23 @@ def test_simulation_workflow_always_runs_internal_final_validation(monkeypatch):
     monkeypatch.setattr(kubesizer_cli, "_run_calibration", run_calibration)
 
     def optimize(*args, **kwargs):
-        return result
+        assert args[1] is profile
+        assert kwargs["evaluate_all"]
+        return evaluations
+
+    def validate(system, configuration, calibration_profile, *, workers, validation_candidate_count):
+        assert calibration_profile is profile
+        assert validation_candidate_count == 5
+        tested.append(configuration)
+        if configuration == (1,):
+            return SimpleNamespace(passed=False, failure_reason="above SLO")
+        return SimpleNamespace(passed=True)
 
     monkeypatch.setattr(kubesizer_cli, "optimize_with_calibrated_simulation", optimize)
     monkeypatch.setattr(
         kubesizer_cli,
         "validate_final_configuration",
-        lambda *args, **kwargs: validation,
+        validate,
     )
     monkeypatch.setattr(
         kubesizer_cli,
@@ -414,18 +438,17 @@ def test_simulation_workflow_always_runs_internal_final_validation(monkeypatch):
         lambda args: None,
     )
 
-    selected, selected_profile, selected_validation = (
-        kubesizer_cli._run_replica_workflow(
-            system,
-            arguments,
-            (2,),
-        )
+    result = kubesizer_cli._run_replica_workflow(
+        system,
+        arguments,
+        (1,),
     )
 
-    assert selected is result
-    assert selected_profile is profile
-    assert selected_validation is validation
-    assert observed["minimum_configuration"] == (2,)
+    assert tested == [(1,), (2,), (4,)]
+    assert [row["replica_cost"] for row in result["pareto_set"]] == [2.0, 4.0]
+    assert result["failed_final_validations"] == 1
+    assert result["inconclusive_search_configurations"] == 1
+    assert observed["minimum_configuration"] == (1,)
 
 
 @pytest.mark.parametrize(

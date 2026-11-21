@@ -2,6 +2,7 @@
 
 from optimization import AnalyticalReplicaSizingProblem
 from optimization.selection import (
+    evaluate_replica_configurations,
     optimize_replica_configuration as _optimize_replica_configuration,
 )
 
@@ -32,6 +33,7 @@ def optimize_with_analytical_model(
     structural_feasibility=None,
     progress_callback=None,
     analytical_semantics="baseline",
+    evaluate_all=False,
 ):
     """Optimize analytical stability and optional mean latency without simulation.
 
@@ -93,7 +95,12 @@ def optimize_with_analytical_model(
         structural_feasibility=structural_feasibility,
         progress_callback=progress_callback,
     )
-    return _optimize_replica_configuration(
+    if evaluate_all and request_class_mean_latency_limits:
+        return evaluate_replica_configurations(
+            problem, progress_callback=progress_callback
+        )
+    result = _optimize_replica_configuration(
         problem,
         progress_callback=progress_callback,
     )
+    return (result.metrics,) if evaluate_all else result

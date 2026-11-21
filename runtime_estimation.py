@@ -218,6 +218,7 @@ def calculate_workflow_runtime_estimate(
     maximum_replicas=10,
     workers=1,
     safety_factor=DEFAULT_RUNTIME_SAFETY_FACTOR,
+    pareto=False,
 ):
     """Project all configured maximum work from measured machine-local rates."""
     options = options or CalibrationOptions()
@@ -372,10 +373,12 @@ def calculate_workflow_runtime_estimate(
         + rates.bootstrap_seconds_per_replication_time_unit_per_class
         * optimization_bootstrap_work
     )
-    ordinary_replica_configuration_count = min(
-        replica_configuration_count,
-        1 + sum(high > low for low, high in zip(minimum, maximum)),
-    )
+    ordinary_replica_configuration_count = replica_configuration_count
+    if not pareto:
+        ordinary_replica_configuration_count = min(
+            replica_configuration_count,
+            1 + sum(high > low for low, high in zip(minimum, maximum)),
+        )
     ordinary_measurement_duration = durations[0]
     ordinary_per_replication_horizon = (
         ordinary_warmup_duration + ordinary_measurement_duration
@@ -401,6 +404,18 @@ def calculate_workflow_runtime_estimate(
         * ordinary_optimization_bootstrap_work
     )
 
+    validation_configuration_count = replica_configuration_count if pareto else 1
+    validation_resample_factor = 1.0
+    if validation_configuration_count > 1:
+        failure_slos = getattr(system, "get_request_class_failure_rate_slos", lambda: {})()
+        constraints = len(system.get_request_classes()) + len(failure_slos)
+        required_resamples = math.ceil(
+            2 * validation_configuration_count * constraints
+            * options.minimum_bootstrap_tail_draws / options.overall_alpha
+        ) + 1
+        validation_resample_factor = max(
+            1.0, required_resamples / options.bootstrap_resample_count
+        )
     final_simulation_work = (
         options.final_validation_replications * per_replication_horizon
     )
@@ -417,6 +432,7 @@ def calculate_workflow_runtime_estimate(
         )
         + rates.bootstrap_seconds_per_replication_time_unit_per_class
         * final_bootstrap_work
+        * validation_resample_factor
     )
     ordinary_final_simulation_work = (
         options.final_validation_replications * ordinary_per_replication_horizon
@@ -434,6 +450,14 @@ def calculate_workflow_runtime_estimate(
         )
         + rates.bootstrap_seconds_per_replication_time_unit_per_class
         * ordinary_final_bootstrap_work
+        * validation_resample_factor
+    )
+    ordinary_final_seconds *= validation_configuration_count
+    final_seconds *= validation_configuration_count
+    ordinary_search_scope = (
+        f"all {replica_configuration_count:,} configurations"
+        if pareto
+        else f"stable anchor plus {ordinary_replica_configuration_count - 1} immediate neighbours"
     )
 
     stages = (
@@ -452,8 +476,7 @@ def calculate_workflow_runtime_estimate(
             ordinary_planning_seconds=(ordinary_optimization_seconds * safety_factor),
             configured_ceiling_seconds=optimization_seconds * safety_factor,
             ordinary_work=(
-                f"stable anchor plus {ordinary_replica_configuration_count - 1} "
-                f"immediate neighbours at R_min={options.minimum_optimization_replications}"
+                f"{ordinary_search_scope} at R_min={options.minimum_optimization_replications}"
             ),
             ceiling_work=(
                 f"all {replica_configuration_count:,} configurations at up to "
@@ -465,7 +488,12 @@ def calculate_workflow_runtime_estimate(
             ordinary_planning_seconds=ordinary_final_seconds * safety_factor,
             configured_ceiling_seconds=final_seconds * safety_factor,
             ordinary_work=(
-                f"one configuration with {options.final_validation_replications} "
+                (
+                    f"up to {validation_configuration_count:,} configurations with "
+                    if pareto
+                    else "one configuration with "
+                )
+                + f"{options.final_validation_replications} "
                 "fresh replications and ordinary draining"
             ),
             ceiling_work=(
@@ -497,6 +525,7 @@ def estimate_workflow_runtime(
     maximum_replicas=10,
     workers=1,
     safety_factor=DEFAULT_RUNTIME_SAFETY_FACTOR,
+    pareto=False,
 ):
     options = options or CalibrationOptions()
     rates = benchmark_runtime_rates(
@@ -511,6 +540,7 @@ def estimate_workflow_runtime(
         maximum_replicas=maximum_replicas,
         workers=workers,
         safety_factor=safety_factor,
+        pareto=pareto,
     )
 
 

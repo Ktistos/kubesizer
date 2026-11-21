@@ -1,53 +1,47 @@
 # Replica optimization method and guarantees
 
-Kubesizer makes one optimization decision: the replica count for each modeled
-service. It does not optimize Kubernetes node placement or claim that a
-recommendation is schedulable on a particular cluster.
+Kubesizer chooses the replica count for each modeled service. The CLI returns
+the configurations that trade off replica cost against latency headroom.
 
-## One exact search method
+## Cost and latency frontier
 
-`UniformCostReplicaOptimizer` is the only optimizer. There is no search-mode
-option, randomized approximation, multi-start search, VNS, or automatic switch
-to a cheaper method.
+The CLI evaluates the replica grid between the stability floor and the
+configured per-service upper bounds. The analytical stability floor applies
+to a directly modeled workload. Portable measurement input uses the
+confidence-bounded stability floor. Each replica costs one unit in the CLI.
 
-The search begins at the hard per-service lower bound: analytical stability for
-a directly modeled workload, or the confidence-bounded statistical stability
-floor for portable measurement input. A state is a replica vector. Each edge
-adds one replica, and its edge cost is that service's configured replica cost.
-The priority queue therefore visits states in nondecreasing total added cost.
-Analytical utilization may order states of exactly equal cost, but it cannot
-change which cost level is searched first.
+A configuration dominates another when it costs no more and its worst latency
+ratio is no higher, with at least one strict improvement. The ratio is the
+highest latency divided by its SLO across request classes. Analytical
+evaluation uses predicted means. Simulation uses the upper confidence bounds
+computed during the search. Equal objective values keep both configurations.
+An analytical workload without latency SLOs uses stability and cost alone.
 
-## Feasibility semantics
+## Feasibility and validation
 
 Analytical evaluation gives a conclusive feasible or infeasible result under
-the supported mean-latency model. Simulation evaluation may also be
-statistically inconclusive. An inconclusive state is never accepted as
-feasible.
+the supported mean-latency model. Simulation may also be statistically
+inconclusive. The result reports how many search evaluations remained
+inconclusive.
 
-Search stops after it has evaluated every reachable state whose cost is no
-greater than the best feasible state's cost. If all cheaper states were
-conclusively infeasible, the result is the minimum weighted replica cost inside
-the declared bounds. If a cheaper state was statistically inconclusive, the
-returned vector is feasible but minimum cost is explicitly reported as not
-proven.
+Simulation independently validates each option using fresh seeds.
+The final confidence budget accounts for all search-feasible candidates and
+their SLO constraints. A candidate that fails validation leaves other
+candidates eligible for the frontier. The displayed latency ratio still
+comes from the search. If every candidate fails, the CLI returns an error.
 
-Fresh final validation is separate from optimization in simulation mode. A
-configuration is emitted by the CLI only if that validation passes.
+These bounds and decisions apply to the declared model and replica grid.
+Inconclusive candidates can contain other trade-offs. The Python
+single-plan workflow still uses `UniformCostReplicaOptimizer` and reports
+whether the minimum cost was established under its model.
 
-## Result metadata
+## CLI result
 
-The exact result records:
-
-- the replica vector, weighted objective, explored-state count, and search path;
-- whether bounded-model minimality was proven;
-- any statistically unresolved cheaper configurations;
-- simulation replication count and runtime;
-- the valid lower bound and absolute or relative bound gap.
-
-“Exact” applies only to the finite declared replica bounds and the selected
-analytical or frozen simulation model. It is not a claim that the model captures
-unmeasured deployment behavior, and it is not a Kubernetes scheduling result.
+The JSON envelope contains `result.pareto_set` in increasing cost order.
+Each option has `replica_cost`, `worst_slo_ratio`, and `services`. Each
+service contains `recommended_replicas`. The result also identifies the
+latency basis and counts failed final validations. With stability-only sizing
+the latency basis and ratio are null.
 
 ## Runtime consequence
 
@@ -58,6 +52,6 @@ bounded space contains
 product over i of (U_i - L_i + 1)
 ```
 
-configurations. Exact search may need to evaluate all of them. The runtime
-preflight reports this full ceiling; large bounds must be reduced by the user
-instead of silently changing optimization semantics.
+configurations. Frontier search evaluates all of them for workloads with
+latency SLOs. Simulation can require additional replications for final
+validation. Use `--max-replicas` to restrict the search to a practical size.

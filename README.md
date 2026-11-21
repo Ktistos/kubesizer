@@ -1,8 +1,10 @@
-# Kubesizer: analytical replica sizing
+# Kubesizer: replica sizing
 
-Kubesizer estimates service utilization and mean request latency, then finds
-the lowest-cost replica configuration within explicit bounds using exact
-uniform-cost search. It runs offline and requires Python, NumPy and PyYAML.
+Kubesizer evaluates replica configurations within explicit bounds and returns
+the Pareto set of configurations that meet the SLOs. Each option gives its
+replica cost, worst latency-to-SLO ratio and replica count per service.
+It runs offline and requires Python, NumPy and PyYAML. Simulation also requires
+the [C++ backend](native_backend/README.md).
 
 ```sh
 python -m pip install -r requirements.txt
@@ -19,30 +21,22 @@ variation. Network arrival variability is propagated approximately. Explicit
 latency components, including client-to-entry residuals, contribute their means.
 Exact replica search does not make an approximate latency formula exact.
 
-The baseline accepts mean SLOs and rejects unsupported blocking/held-concurrency
-semantics, percentile SLOs and end-to-end deadlines. Direct mean calculations
-remain available for exploratory diagnostics. Simulation, native compilation,
-node placement and scalable search are absent from this version.
+Analytical evaluation accepts mean SLOs under its supported assumptions.
+Simulation is the default and can evaluate mean and percentile SLOs. Every
+returned simulation option passes final validation with fresh seeds.
 
 Optional portable measurements derive CPU demand, request rates, call counts
 and boundary residuals. Capacity evidence establishes a measured replica floor
-before the analytical optimizer searches. A CPU demand measured in CPU-seconds
+before replica evaluation. A CPU demand measured in CPU-seconds
 per request is converted using the declared CPU capacity; aggregate CPU counters
 do not reveal per-request demand variability or a hidden worker-pool limit.
 
-The `feature/statistical-simulation-workflow` branch preserves simulation work.
-Historical reports and schemas are retained under `docs/history/`; their
-simulation commands refer to that branch.
+Historical reports and schemas are retained under `docs/history/`.
 
 See [the input guide](WORKLOAD_AND_MEASUREMENT_GUIDE.md),
 [the measurement guide](DEVOPS_PORTABLE_MEASUREMENT_GUIDE.md) and
 [the optimizer description](OPTIMIZATION_METHODS.md).
 
-This feature branch also provides opt-in
-[experimental layered analytical semantics](docs/EXPERIMENTAL_ANALYTICAL_SEMANTICS.md).
-The analytical-only baseline is committed separately on master; the experimental
-evaluator is not a validated replacement for it.
-
-The [retrospective STELAR replay](results/stelar-layered-analytical-20261001/REPORT.md)
-found worse mean-latency accuracy for the enriched approximation. It is retained
-for investigation only and has not been promoted to master.
+The opt-in [experimental layered evaluator](docs/EXPERIMENTAL_ANALYTICAL_SEMANTICS.md)
+is available for investigation. Its mean-latency accuracy was lower in the
+[retrospective STELAR replay](results/stelar-layered-analytical-20261001/REPORT.md).

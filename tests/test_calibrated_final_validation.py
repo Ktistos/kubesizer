@@ -110,6 +110,20 @@ def test_final_validation_uses_mean_interval_for_mean_slo_profile():
     assert result.intervals["checkout"].estimate == pytest.approx(0.3)
 
 
+def test_pareto_validation_allocates_confidence_across_candidates():
+    raw = make_system()
+    profile = make_profile(raw)
+    system = FakeFinalSystem(raw, (0.5, 0.5))
+
+    result = validate_final_configuration(
+        system, (1,), profile, validation_candidate_count=10
+    )
+
+    assert result.passed
+    assert result.seeds == profile.final_validation_seeds
+    assert result.intervals["checkout"].upper_tail_probability == pytest.approx(0.9975)
+
+
 def test_final_validation_requires_terminal_failure_rate_bound_too():
     raw = make_system()
     profile = make_profile(

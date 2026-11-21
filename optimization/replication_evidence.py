@@ -189,12 +189,15 @@ def calculate_replication_evidence(
     seed_scope,
     seed_suffix=(),
     require_complete=False,
+    bootstrap_resample_count=None,
 ):
     """Build latency and failure intervals from the same replication cohorts."""
     replications = tuple(replications)
     latency_intervals = []
     failure_intervals = []
     counts = []
+    if bootstrap_resample_count is None:
+        bootstrap_resample_count = profile.bootstrap_resample_count
 
     def evidence():
         return ReplicationEvidence(
@@ -246,7 +249,7 @@ def calculate_replication_evidence(
                 clusters,
                 request_class=request_class,
                 slo=slo,
-                resample_count=profile.bootstrap_resample_count,
+                resample_count=bootstrap_resample_count,
                 seed=profile.optimization_seed_policy.deterministic_seed(
                     "bootstrap",
                     seed_scope,

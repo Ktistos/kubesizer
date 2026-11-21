@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+from math import ceil
 
 from calibration import validate_profile_for_experiment
 
@@ -63,12 +64,19 @@ def validate_final_configuration(
     *,
     workers=1,
     progress_callback=None,
+    validation_candidate_count=1,
 ):
     """Run one fixed fresh-seed holdout using familywise cluster-bootstrap CIs."""
     configuration = tuple(configuration)
     profile = calibration_profile
     if progress_callback is not None and not callable(progress_callback):
         raise TypeError("progress_callback must be callable or None.")
+    if (
+        isinstance(validation_candidate_count, bool)
+        or not isinstance(validation_candidate_count, int)
+        or validation_candidate_count < 1
+    ):
+        raise ValueError("validation_candidate_count must be a positive integer.")
 
     def result(
         classification,
@@ -185,9 +193,16 @@ def validate_final_configuration(
             )
         tail_alpha = fixed_experiment_tail_alpha(
             profile.overall_alpha,
-            len(profile.request_class_slos)
-            + len(profile.request_class_failure_rate_slos),
+            validation_candidate_count * (
+                len(profile.request_class_slos) + len(profile.request_class_failure_rate_slos)
+            ),
         )
+        bootstrap_resample_count = None
+        if validation_candidate_count > 1:
+            bootstrap_resample_count = max(
+                profile.bootstrap_resample_count,
+                ceil(profile.minimum_bootstrap_tail_draws / tail_alpha) + 1,
+            )
         try:
             evidence = calculate_replication_evidence(
                 profile,
@@ -196,6 +211,7 @@ def validate_final_configuration(
                 tail_alpha=tail_alpha,
                 seed_scope="final-validation",
                 require_complete=True,
+                bootstrap_resample_count=bootstrap_resample_count,
             )
         except ReplicationEvidenceError as error:
             evidence = error.evidence
