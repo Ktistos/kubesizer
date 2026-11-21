@@ -444,6 +444,14 @@ def _calibrate_one(
             )
         raise
     diagnostics = calibration_diagnostics_summary(warmup, measurement, options)
+    diagnostics["capacity_projection_scope"] = (
+        "static_traffic_equations"
+        if getattr(system, "has_static_stability_model", lambda: True)()
+        else "structural_projection_only_not_a_stability_certificate"
+    )
+    diagnostics["component_measurement_provenance"] = getattr(
+        system, "get_component_measurement_provenance", lambda: {}
+    )()
     profile_representatives = representatives
     analytical_minimum = tuple(system.get_minimum_stable_replicas())
     if (

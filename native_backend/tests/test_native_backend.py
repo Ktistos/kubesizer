@@ -361,6 +361,17 @@ def test_mm1_native_outputs_are_statistically_consistent_with_known_limits():
     assert estimated_p95 == pytest.approx(theoretical_p95, rel=0.15)
 
 
+def test_native_warmup_keeps_aligned_final_bucket_with_a_large_bucket_count():
+    system = make_single_service_system(gamma=0.01, mu=4.0)
+    # The rounded ratio is 31999.999999999996. The native kernel correctly
+    # recognizes the aligned horizon and returns all 32,000 buckets.
+    ensemble = system.run_warmup_ensemble(
+        seeds=(23,), horizon=5588.215296540003, bucket_width=0.1746317280168751,
+        workers=1,
+    )
+    assert len(ensemble.active_requests) == 32_000
+
+
 
 def test_zero_arrival_workload_remains_empty_without_special_casing():
     system = make_single_service_system(gamma=0.0, mu=4.0)

@@ -515,7 +515,12 @@ class CalibratedReplicaSizingProblem(_BoundedReplicaSizingProblem):
         self._system.configure_system_replicas(configuration)
         analytical = self._system.solve()
         utilizations = tuple(analytical.get_mean_utilizations())
-        if not analytical.get_stability() or not utilizations:
+        from performance_models.components import simulation_configuration_supported
+
+        if (
+            not simulation_configuration_supported(self._system, analytical)
+            or not utilizations
+        ):
             raise ValueError(
                 "Calibrated uniform-cost search requires stable bounded states."
             )

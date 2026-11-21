@@ -2,6 +2,7 @@ import copy
 import math
 from enum import Enum
 from .service import Service
+from .components import simulation_configuration_supported
 from .call_policy import CallPolicySpec, call_completion_bounds
 from .workload import (
     DistributionSpec,
@@ -110,6 +111,7 @@ class System:
         self.__request_class_call_graphs = {}
         self.__request_class_call_execution_modes = {}
         self.__request_class_call_policies = {}
+        self.__request_class_stage_workflows = {}
         self.__replica_constraints = {}
         self.__analytical_call_model = "strict"
         self.__request_class_fixed_latency_overheads = {}
@@ -117,10 +119,14 @@ class System:
         self.__request_class_latency_boundaries = {}
         self.__request_class_latency_component_specs = {}
         self.__request_class_end_to_end_timeouts = {}
+        self.__request_class_completion_boundaries = {}
         self.__service_processing_slots_per_replica = {}
         self.__service_concurrency_limits_per_replica = {}
         self.__service_execution_models = {}
         self.__service_replica_queue_models = {}
+        self.__service_cpu_bandwidths = {}
+        self.__service_component_policies = {}
+        self.__component_measurement_provenance = {}
         self.__service_blocking_time_specs = {}
         self.__service_post_release_delay_specs = {}
         self.__request_class_service_blocking_time_specs = {}
@@ -133,6 +139,9 @@ class System:
                 base_path=workload_base_path,
             )
             self.__traffic_distribution_spec = parsed.traffic_model
+            self.__component_measurement_provenance = dict(
+                parsed.component_measurement_provenance
+            )
             self.__request_class_latency_slos = dict(parsed.request_class_latency_slos)
             self.__request_class_failure_rate_slos = dict(
                 parsed.request_class_failure_rate_slos
@@ -160,6 +169,9 @@ class System:
                 name: dict(policies)
                 for name, policies in parsed.request_class_call_policies.items()
             }
+            self.__request_class_stage_workflows = dict(
+                parsed.request_class_stage_workflows
+            )
             self.__replica_constraints = dict(parsed.replica_constraints)
             self.__analytical_call_model = parsed.analytical_call_model
             self.__request_class_fixed_latency_overheads = dict(
@@ -180,6 +192,9 @@ class System:
             self.__request_class_end_to_end_timeouts = dict(
                 parsed.request_class_end_to_end_timeouts
             )
+            self.__request_class_completion_boundaries = dict(
+                parsed.request_class_completion_boundaries
+            )
             self.__service_processing_slots_per_replica = dict(
                 parsed.traffic_model.processing_slots_per_replica
             )
@@ -191,6 +206,13 @@ class System:
             )
             self.__service_replica_queue_models = dict(
                 parsed.traffic_model.service_replica_queue_models
+            )
+            self.__service_cpu_bandwidths = {
+                name: dict(specification)
+                for name, specification in parsed.traffic_model.service_cpu_bandwidths.items()
+            }
+            self.__service_component_policies = copy.deepcopy(
+                dict(parsed.traffic_model.service_component_policies)
             )
             self.__service_blocking_time_specs = dict(
                 parsed.traffic_model.service_blocking_times
@@ -412,7 +434,7 @@ class System:
                 service.get_name(): (
                     None
                     if self.__service_execution_models.get(service.get_name())
-                    == "processor_sharing"
+                    in {"processor_sharing", "delay"}
                     else self.__service_processing_slots_per_replica[service.get_name()]
                 )
                 for service in self.get_services().values()
@@ -646,6 +668,19 @@ class System:
             slots = self.__service_processing_slots_per_replica[name]
             limit = self.__service_concurrency_limits_per_replica[name]
             queue_model = self.__service_replica_queue_models[name]
+            if name in self.__service_component_policies:
+                models[service_id] = AnalyticalQueueingModel.UNSUPPORTED
+                continue
+            if self.__service_execution_models[name] == "delay":
+                models[service_id] = (
+                    AnalyticalQueueingModel.DELAY
+                    if limit is None
+                    else AnalyticalQueueingModel.UNSUPPORTED
+                )
+                continue
+            if name in self.__service_cpu_bandwidths:
+                models[service_id] = AnalyticalQueueingModel.UNSUPPORTED
+                continue
             if limit is not None and limit < slots:
                 models[service_id] = AnalyticalQueueingModel.UNSUPPORTED
                 continue
@@ -850,6 +885,7 @@ class System:
         )
 
     def __calculate_request_class_arrival_rates(self):
+        self.__validate_stage_entry_shares()
         rates = {}
         for request_class in self.get_request_classes():
             call_graph = self.__request_class_call_graphs.get(request_class)
@@ -965,6 +1001,9 @@ class System:
 
         capacities = servers * mus
         utilizations = lambdas / capacities
+        for service in self.get_services().values():
+            if self.__service_execution_models[service.get_name()] == "delay":
+                utilizations[service.get_id()] = 0.0
         arrival_scvs = self.__calculate_effective_arrival_scvs(
             request_class_rates,
             utilizations,
@@ -1003,7 +1042,9 @@ class System:
                     # For nonrenewal network traffic this remains an explicitly
                     # variability-adjusted approximation, not a Poisson claim.
                     arrival_scv /= service.get_replicas()
-            if model is AnalyticalQueueingModel.UNSUPPORTED:
+            if model is AnalyticalQueueingModel.DELAY:
+                latency = service_means[service_id]
+            elif model is AnalyticalQueueingModel.UNSUPPORTED:
                 # Keep capacity/utilization diagnostics usable by simulation,
                 # but never expose an unsupported latency as a finite estimate.
                 latency = math.inf
@@ -1041,8 +1082,12 @@ class System:
             utilizations,
             latencies,
             (
-                self.__is_stable(utilizations)
-                and self.__is_stable(concurrency_utilizations)
+                (
+                    self.__is_stable(utilizations)
+                    and self.__is_stable(concurrency_utilizations)
+                )
+                if self.has_static_stability_model()
+                else None
             ),
         )
 
@@ -1065,7 +1110,7 @@ class System:
         self.require_simulation_compatible_workload()
         if analytical_metrics is None:
             analytical_metrics = self.solve()
-        if not analytical_metrics.get_stability():
+        if not simulation_configuration_supported(self, analytical_metrics):
             return analytical_metrics
 
         sim_duration = float(sim_duration)
@@ -1125,7 +1170,7 @@ class System:
     def run_warmup_ensemble(self, *, seeds, horizon, bucket_width, workers=1):
         """Run native empty-start replications and aggregate buckets online."""
         self.require_simulation_compatible_workload()
-        if not self.solve().get_stability():
+        if not simulation_configuration_supported(self):
             raise ValueError("Warm-up pilots require a stable replica configuration.")
         return get_native_backend().warmup_ensemble(
             self,
@@ -1151,7 +1196,7 @@ class System:
         p95 per replication, suitable for across-replication inference.
         """
         self.require_simulation_compatible_workload()
-        if not self.solve().get_stability():
+        if not simulation_configuration_supported(self):
             raise ValueError("Measurement replications require a stable configuration.")
         return get_native_backend().measurement_replications(
             self,
@@ -1205,6 +1250,11 @@ class System:
         concurrency_utilizations = self.get_concurrency_utilization_lower_bounds()
         return {
             service.get_name(): {
+                "capacity_projection_scope": (
+                    "static_traffic_equations"
+                    if self.has_static_stability_model()
+                    else "structural_projection_only_not_a_stability_certificate"
+                ),
                 "model": models[service.get_id()].value,
                 "exact": models[service.get_id()].exact,
                 "arrival_scv": arrival_scvs[service.get_id()],
@@ -1222,6 +1272,7 @@ class System:
                 "replica_queue_model": self.__service_replica_queue_models[
                     service.get_name()
                 ],
+                "cpu_bandwidth": self.__service_cpu_bandwidths.get(service.get_name()),
                 "non_cpu_blocking_time_by_request_class": {
                     request_class: specification.mean
                     for request_class in self.get_request_classes()
@@ -1249,6 +1300,10 @@ class System:
     def get_workload_spec(self):
         """Return an isolated copy suitable for constructing another System."""
         return copy.deepcopy(self.__workload_spec)
+
+    def get_component_measurement_provenance(self):
+        """Return consumed evidence mappings, content hashes and typed estimates."""
+        return copy.deepcopy(self.__component_measurement_provenance)
 
     def get_request_class_concurrency_weights(self):
         """Return normalized external-traffic shares by request class."""
@@ -1286,6 +1341,32 @@ class System:
             name: dict(policies)
             for name, policies in self.__request_class_call_policies.items()
         }
+
+    def get_request_class_stage_workflows(self):
+        """Executable stage graphs whose resource identities own shared capacity."""
+        self.__validate_stage_entry_shares()
+        return dict(self.__request_class_stage_workflows)
+
+    def __validate_stage_entry_shares(self):
+        # Stage moment mixtures are frozen from entry shares. Scaling every
+        # stream is safe; changing their proportions requires fresh projection.
+        for name, plan in self.__request_class_stage_workflows.items():
+            original = self.__entry_arrival_specs[name]
+            initial_total = sum(s.rate for s in original.values())
+            current = {r: self.get_service(r).get_gamma(name) for r in plan.entries}
+            total = sum(current.values())
+            if total <= 0 or any(
+                not math.isclose(
+                    current[r] / total,
+                    original[r].rate / initial_total,
+                    rel_tol=1e-12,
+                    abs_tol=1e-14,
+                )
+                for r in plan.entries
+            ):
+                raise ValueError(
+                    "Changing staged entry shares requires reconstructing the workload and its resource moments."
+                )
 
     def get_replica_constraints(self):
         return dict(self.__replica_constraints)
@@ -1330,6 +1411,41 @@ class System:
     def get_strict_analytical_incompatibilities(self):
         """Return declared semantics not certified by the analytical model."""
         incompatibilities = []
+        if any(
+            stage.retry
+            for plan in self.__request_class_stage_workflows.values()
+            for stage in plan.stages.values()
+        ):
+            incompatibilities.append(
+                "bounded retries and attempt deadlines require simulation"
+            )
+        if "all_work" in self.__request_class_completion_boundaries.values():
+            incompatibilities.append("all-work job completion requires simulation")
+        if self.__service_component_policies:
+            incompatibilities.append(
+                "component admission/rate/failure/lifecycle policies require simulation"
+            )
+        if self.__service_cpu_bandwidths:
+            incompatibilities.append(
+                "periodic CPU quota and parallel execution require simulation"
+            )
+        if (
+            self.__request_class_stage_workflows
+            and self.__analytical_call_model != "response_bounds"
+        ):
+            incompatibilities.append(
+                "staged workflows require analytical_call_model: response_bounds or simulation"
+            )
+        if any(
+            stage.hold_resource
+            and stage.calls
+            and stage.policy.completion != "background"
+            for plan in self.__request_class_stage_workflows.values()
+            for stage in plan.stages.values()
+        ):
+            incompatibilities.append(
+                "staged synchronous calls hold parent resource concurrency"
+            )
         if (
             any(self.__request_class_call_policies.values())
             and self.__analytical_call_model != "response_bounds"
@@ -1411,12 +1527,36 @@ class System:
         """Return client-visible terminal deadlines; zero disables a deadline."""
         return dict(self.__request_class_end_to_end_timeouts)
 
+    def get_request_class_completion_boundaries(self):
+        return {
+            c: self.__request_class_completion_boundaries.get(c, "client_response")
+            for c in self.get_request_classes()
+        }
+
     def require_simulation_compatible_workload(self):
         """Reject mean-flow-only visits that do not define executable paths."""
+        from .components import resource_can_fail
+
+        if any(
+            resource_can_fail(p) for p in self.__service_component_policies.values()
+        ) or any(
+            stage.retry and stage.retry["attempt_timeout_seconds"] > 0
+            for plan in self.__request_class_stage_workflows.values()
+            for stage in plan.stages.values()
+        ):
+            missing = set(self.__request_class_latency_slos) - set(
+                self.__request_class_failure_rate_slos
+            )
+            if missing:
+                raise ValueError(
+                    "Rejecting/failing component models require maximum_terminal_failure_rate alongside latency SLOs for "
+                    + ", ".join(sorted(missing))
+                )
         visit_classes = tuple(
             sorted(
                 set(self.__request_class_visit_ratios)
                 - set(self.__request_class_workflows)
+                - set(self.__request_class_stage_workflows)
             )
         )
         if visit_classes:
@@ -1560,6 +1700,21 @@ class System:
         """Return how requests are dispatched to queues across replicas."""
         return dict(self.__service_replica_queue_models)
 
+    def get_service_cpu_bandwidths(self):
+        """Return independently enforced per-replica CPU quota declarations."""
+        return copy.deepcopy(self.__service_cpu_bandwidths)
+
+    def get_service_component_policies(self):
+        """Return explicit resource policies, isolated from the live model."""
+        return copy.deepcopy(self.__service_component_policies)
+
+    def has_static_stability_model(self):
+        return not self.__service_component_policies and not any(
+            stage.retry or getattr(stage, "cache", None)
+            for plan in self.__request_class_stage_workflows.values()
+            for stage in plan.stages.values()
+        )
+
     def get_joint_input_uncertainty(self):
         """Return aligned input-window uncertainty sampled once per replication."""
         return self.__joint_input_uncertainty
@@ -1602,6 +1757,12 @@ class System:
         _, values = self.__calculate_service_time_moments(request_class_rates)
         return values
 
+    def get_service_time_means(self):
+        """Return visit-rate-weighted processing demands in service-ID order."""
+        request_class_rates = self.__calculate_request_class_arrival_rates()
+        values, _ = self.__calculate_service_time_moments(request_class_rates)
+        return values
+
     def get_service_time_distribution_specs(self):
         """Return canonical specs; simulation rejects heterogeneous class specs."""
         return dict(self.__service_time_specs)
@@ -1629,6 +1790,13 @@ class System:
         ``p`` effective processing slots, the strict stability condition is
         ``offered_load < replicas * p``.
         """
+        if not self.has_static_stability_model():
+            # Rejection/retry/conditional work cannot use static traffic
+            # equations as a proven necessary capacity floor.
+            return [
+                self.__replica_constraints.get(s.get_name(), (1, 1))[0]
+                for s in sorted(self.get_services().values(), key=lambda s: s.get_id())
+            ]
         request_class_rates = self.__calculate_request_class_arrival_rates()
         concurrency_offered_loads = self.__concurrency_offered_loads(
             request_class_rates
@@ -1648,7 +1816,11 @@ class System:
             processing_slots = self.__service_processing_slots_per_replica[
                 service.get_name()
             ]
-            processing_minimum = math.floor(offered_load / processing_slots) + 1
+            processing_minimum = (
+                1
+                if self.__service_execution_models[service.get_name()] == "delay"
+                else math.floor(offered_load / processing_slots) + 1
+            )
             concurrency_limit = self.__service_concurrency_limits_per_replica[
                 service.get_name()
             ]
@@ -1818,9 +1990,16 @@ class System:
         These values are analytical means. They are not p95 estimates and do
         not carry simulation confidence intervals.
         """
-        if any(self.__request_class_call_policies.values()):
+        if self.__service_cpu_bandwidths:
             raise ValueError(
-                "Per-service call policies require simulation for end-to-end latency."
+                "Periodic CPU quota requires simulation for latency prediction."
+            )
+        if (
+            any(self.__request_class_call_policies.values())
+            or self.__request_class_stage_workflows
+        ):
+            raise ValueError(
+                "Per-service call policies and staged workflows require simulation or explicit analytical bounds for end-to-end latency."
             )
         service_latencies = self.solve().get_mean_latencies()
         class_rates = self.__calculate_request_class_arrival_rates()
@@ -1909,6 +2088,50 @@ class System:
         queue_means = local.get_mean_latencies()
         results = {}
         for request_class in self.get_request_classes():
+            if request_class in self.__request_class_stage_workflows:
+                plan = self.__request_class_stage_workflows[request_class]
+                cache = {}
+
+                def stage_response(name):
+                    if name in cache:
+                        return cache[name]
+                    stage = plan.stages[name]
+                    own = stage.delay.mean if stage.delay else 0.0
+                    if stage.resource is not None:
+                        index = self.get_service(stage.resource).get_id()
+                        demand = stage.service_time.mean * stage.work_units
+                        own += (
+                            demand * queue_means[index] / service_means[index]
+                            if self.__service_execution_models[stage.resource]
+                            == "processor_sharing"
+                            else demand
+                            + max(0.0, queue_means[index] - service_means[index])
+                        )
+                    transit = self.__mean_call_round_trip_latency(None, None)
+                    children = []
+                    for target, count in stage.calls.items():
+                        low, high = stage_response(target)
+                        children.append((count, low + transit, high + transit))
+                    low, high = call_completion_bounds(stage.policy, children)
+                    next_low, next_high = (
+                        stage_response(stage.next_stage)
+                        if stage.next_stage
+                        else (0.0, 0.0)
+                    )
+                    cache[name] = own + low + next_low, own + high + next_high
+                    return cache[name]
+
+                entries = self.__entry_arrival_specs[request_class]
+                total = sum(spec.rate for spec in entries.values())
+                lower = upper = self.__request_class_fixed_latency_overheads.get(
+                    request_class, 0.0
+                )
+                for resource, entry in plan.entries.items():
+                    low, high = stage_response(entry)
+                    lower += entries[resource].rate / total * low
+                    upper += entries[resource].rate / total * high
+                results[request_class] = (lower, upper)
+                continue
             if request_class not in self.__request_class_call_graphs:
                 raise ValueError(
                     "Analytical response bounds require calls for every request class."

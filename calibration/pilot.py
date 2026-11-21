@@ -3,9 +3,11 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
 from metrics import SimulationMetricsCollector, time_weighted_bucket_averages
+from metrics.time_weighted_buckets import complete_bucket_count
 
 from .ensemble import warmup_ensemble_from_native
 from performance_models import QueueingNetworkType, System
+from performance_models.components import simulation_configuration_supported
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,7 @@ def _build_replication(
         for busy_series, capacity in zip(busy_buckets, replica_configuration)
     )
 
-    expected_bucket_count = math.floor(pilot_horizon / bucket_width + 1e-12)
+    expected_bucket_count = complete_bucket_count(pilot_horizon, bucket_width)
     all_series = (
         (active_buckets,)
         + queue_buckets
@@ -171,7 +173,7 @@ def _run_replication_worker(task):
     )
     system.configure_system_replicas(task.replica_configuration)
     analytical_metrics = system.solve()
-    if not analytical_metrics.get_stability():
+    if not simulation_configuration_supported(system, analytical_metrics):
         raise ValueError("Warm-up pilots require a stable replica configuration.")
     return _run_configured_replication(
         system,
@@ -203,7 +205,7 @@ def run_warmup_pilot_replication(
     try:
         system.configure_system_replicas(parameters.minimum_replica_configuration)
         analytical_metrics = system.solve()
-        if not analytical_metrics.get_stability():
+        if not simulation_configuration_supported(system, analytical_metrics):
             raise ValueError("Warm-up pilots require a stable replica configuration.")
         return _run_configured_replication(
             system,
@@ -295,7 +297,7 @@ def run_warmup_replications_for_configuration(
     if workers > 1:
         try:
             system.configure_system_replicas(replica_configuration)
-            if not system.solve().get_stability():
+            if not simulation_configuration_supported(system):
                 raise ValueError(
                     "Warm-up pilots require a stable replica configuration."
                 )
@@ -323,7 +325,7 @@ def run_warmup_replications_for_configuration(
     try:
         system.configure_system_replicas(replica_configuration)
         analytical_metrics = system.solve()
-        if not analytical_metrics.get_stability():
+        if not simulation_configuration_supported(system, analytical_metrics):
             raise ValueError("Warm-up pilots require a stable replica configuration.")
 
         for offset, seed in enumerate(seeds):

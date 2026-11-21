@@ -11,7 +11,8 @@ def _as_finite_number(value, name):
     return value
 
 
-def _complete_bucket_count(horizon, bucket_width):
+def complete_bucket_count(horizon, bucket_width):
+    """Count complete buckets using the native warm-up alignment tolerance."""
     ratio = horizon / bucket_width
     nearest_integer = round(ratio)
     if math.isclose(ratio, nearest_integer, rel_tol=1e-12, abs_tol=1e-12):
@@ -61,7 +62,7 @@ def time_weighted_bucket_averages(history, bucket_width, horizon):
     if validated_history[0][0] != 0.0:
         raise ValueError("history must begin at time zero.")
 
-    bucket_count = _complete_bucket_count(horizon, bucket_width)
+    bucket_count = complete_bucket_count(horizon, bucket_width)
     bucket_averages = []
     event_index = 1
     current_time = 0.0

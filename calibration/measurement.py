@@ -1,4 +1,5 @@
 import math
+from performance_models.components import simulation_configuration_supported
 from dataclasses import dataclass
 
 from metrics import (
@@ -45,9 +46,7 @@ def _latency_clusters_for_duration(
     clusters = []
     for replication in replications:
         if measurement_duration > replication.measurement_duration:
-            raise ValueError(
-                "Cannot select a cohort beyond the simulated duration."
-            )
+            raise ValueError("Cannot select a cohort beyond the simulated duration.")
         boundary = replication.warmup_duration + measurement_duration
         clusters.append(
             _ArrivalCohortLatencyView(
@@ -272,9 +271,7 @@ def _measurement_candidate_diagnostic(
     for request_class in request_classes:
         interval = intervals[(duration, request_class)]
         doubled = intervals[(doubled_duration, request_class)]
-        sample_count, nonempty_count = cohort_counts[
-            (duration, request_class)
-        ]
+        sample_count, nonempty_count = cohort_counts[(duration, request_class)]
         intervals_available = interval is not None and doubled is not None
         p95_change = (
             _relative_change(interval.estimate, doubled.estimate)
@@ -292,8 +289,7 @@ def _measurement_candidate_diagnostic(
         precision_limit = (
             max(
                 options.absolute_ci_half_width_target,
-                options.relative_ci_half_width_target
-                * interval.estimate,
+                options.relative_ci_half_width_target * interval.estimate,
             )
             if interval is not None
             else -math.inf
@@ -301,8 +297,7 @@ def _measurement_candidate_diagnostic(
         width_stability_limit = (
             max(
                 options.absolute_ci_half_width_target,
-                options.ci_width_stability_tolerance
-                * interval.estimate,
+                options.ci_width_stability_tolerance * interval.estimate,
             )
             if interval is not None
             else -math.inf
@@ -323,24 +318,18 @@ def _measurement_candidate_diagnostic(
                 ci_width_relative_change=width_change,
                 ci_half_width_absolute_change=half_width_change,
                 sample_requirement_passed=(
-                    sample_count
-                    >= options.minimum_eligible_samples_per_class
+                    sample_count >= options.minimum_eligible_samples_per_class
                 ),
                 nonempty_replication_requirement_passed=(
-                    nonempty_count
-                    >= options.minimum_nonempty_replications_per_class
+                    nonempty_count >= options.minimum_nonempty_replications_per_class
                 ),
                 precision_requirement_passed=(
-                    interval is not None
-                    and interval.half_width <= precision_limit
+                    interval is not None and interval.half_width <= precision_limit
                 ),
                 p95_stability_passed=(
-                    p95_change
-                    <= options.measurement_stability_tolerance
+                    p95_change <= options.measurement_stability_tolerance
                 ),
-                ci_width_stability_passed=(
-                    half_width_change <= width_stability_limit
-                ),
+                ci_width_stability_passed=(half_width_change <= width_stability_limit),
             )
         )
     return MeasurementCandidateDiagnostic(
@@ -391,14 +380,9 @@ def calibrate_measurement_duration(
     service_count = len(system.get_services())
     minimum = tuple(system.get_minimum_stable_replicas())
     for configuration in configurations:
-        if (
-            len(configuration) != service_count
-            or any(
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value <= 0
-                for value in configuration
-            )
+        if len(configuration) != service_count or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in configuration
         ):
             raise ValueError("Representative configurations are invalid.")
         if any(value < required for value, required in zip(configuration, minimum)):
@@ -419,7 +403,7 @@ def calibrate_measurement_duration(
     try:
         for configuration in configurations:
             system.configure_system_replicas(configuration)
-            if not system.solve().get_stability():
+            if not simulation_configuration_supported(system):
                 raise MeasurementCalibrationError(
                     f"Representative configuration {configuration} is analytically unstable."
                 )
@@ -460,11 +444,7 @@ def calibrate_measurement_duration(
                         },
                     )
                 analysis_durations = tuple(
-                    dict.fromkeys(
-                        value
-                        for pair in pairs
-                        for value in pair
-                    )
+                    dict.fromkeys(value for pair in pairs for value in pair)
                 )
                 intervals, cohort_counts = _analyze_measurement_durations(
                     replications,

@@ -17,10 +17,12 @@ CPU and disk can be separate named queues connected by calls when the declared
 operation order supports that decomposition. Disk service time must exclude
 disk queue waiting. Network delay distributions represent transit delay, not
 bandwidth contention; a shared bottleneck requires an explicit resource queue.
-Repeated stages using the same resource with different continuation rules,
-multi-round transactions, locks, and state-dependent retries need further
-engine support. Splitting a shared device into independent stage resources is
-not a faithful workaround.
+Finite [staged workflows](STAGED_RESOURCE_WORKFLOWS.md) now allow different
+execution phases to revisit the same resource with different demands and
+continuations, including overlapping local/remote branches. Splitting a
+shared device into independent resource queues remains incorrect. Stateful
+transaction protocols, lock managers and state-dependent retries still need
+explicit additional models rather than an assumption based on an image name.
 
 ## Call policies
 

@@ -92,9 +92,9 @@ def test_statistical_calibration_report_writes_machine_human_csv_and_plots(
     assert (tmp_path / "p95_vs_measurement_duration.svg").is_file()
     assert (tmp_path / "ci_width_vs_measurement_duration.svg").is_file()
     assert len(artifacts.plot_paths) == 2
-    assert "Global warm-up W: 5" in (
-        tmp_path / "calibration_report.md"
-    ).read_text(encoding="utf-8")
+    assert "Global warm-up W: 5" in (tmp_path / "calibration_report.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_failed_calibration_persists_stage_and_nonfinite_diagnostics(tmp_path):
@@ -112,3 +112,18 @@ def test_failed_calibration_persists_stage_and_nonfinite_diagnostics(tmp_path):
     assert "No calibration profile was created" in markdown_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_diagnostic_json_normalizes_numpy_scalar_flags_and_counts():
+    import json
+    import numpy as np
+    from calibration.statistical_reporting import _json_value
+
+    value = {
+        "rounds": [
+            {"passed": np.bool_(True), "count": np.int64(12), "mean": np.float32(0.5)}
+        ]
+    }
+    assert json.loads(json.dumps(_json_value(value), allow_nan=False)) == {
+        "rounds": [{"passed": True, "count": 12, "mean": 0.5}]
+    }

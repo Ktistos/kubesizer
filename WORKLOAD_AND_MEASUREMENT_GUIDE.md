@@ -5,6 +5,12 @@ The experimental stateful extension is documented in
 `replica_constraints` to keep storage components fixed. Per-source quorum and
 background policies currently require a frozen model with explicit internal
 work evidence; the ordinary telemetry decomposition does not infer them.
+Optional evidence for brokers, pools, caches, shared links, external APIs and
+fixed serverless instance pools is documented in
+[PORTABLE_COMPONENTS.md](docs/PORTABLE_COMPONENTS.md). That versioned module
+resolves explicit resource/phase measurements in a frozen workload; it does
+not assume that the basic `measurements.yaml` decomposition identifies these
+internal mechanisms automatically.
 
 This guide describes the **portable evidence workflow**, where a DevOps engineer supplies:
 
@@ -421,3 +427,13 @@ The easiest way to remember the files is:
 Kubesizer does not require a node-resource file and does not produce a node
 assignment. Apply the resulting replica counts through the normal Kubernetes
 scheduler and deployment policies.
+
+# Staged resource workflows
+
+The native frozen workload format also supports `stage_workflow` per request
+class. Different execution phases can share/revisit the same physical resource,
+with stage-specific work, local continuations, overlap and acknowledgement
+rules. These explicitly characterized inputs are separate from automatic
+portable-telemetry decomposition. See
+[STAGED_RESOURCE_WORKFLOWS.md](docs/STAGED_RESOURCE_WORKFLOWS.md) for schema,
+examples and analytical limits.

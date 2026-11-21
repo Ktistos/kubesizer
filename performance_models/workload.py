@@ -9,7 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from .call_policy import parse_call_policies, parse_replica_constraints
-
+from .components import RESOURCE_POLICY_FIELDS, parse_resource_policies
 
 SINGLE_TRAFFIC_MODEL_NAME = "traffic_model"
 CUSTOM_DISTRIBUTION_ABI_VERSION = 1
@@ -64,6 +64,8 @@ class TrafficModelSpec:
     service_blocking_times_by_request_class: Mapping
     service_execution_models: Mapping
     service_replica_queue_models: Mapping
+    service_cpu_bandwidths: Mapping
+    service_component_policies: Mapping
     processing_slots_per_replica: Mapping
     concurrency_limits_per_replica: Mapping
     input_uncertainty: JointInputUncertaintySpec | None
@@ -103,12 +105,14 @@ class EndToEndLatencySLOSpec:
 
 @dataclass(frozen=True)
 class ParsedWorkload:
+    component_measurement_provenance: Mapping
     request_classes: Mapping
     request_class_visit_ratios: Mapping
     request_class_workflows: Mapping
     request_class_call_graphs: Mapping
     request_class_call_execution_modes: Mapping
     request_class_call_policies: Mapping
+    request_class_stage_workflows: Mapping
     replica_constraints: Mapping
     analytical_call_model: str
     request_class_fixed_latency_overheads: Mapping
@@ -116,6 +120,7 @@ class ParsedWorkload:
     request_class_latency_boundaries: Mapping
     request_class_latency_component_specs: Mapping
     request_class_end_to_end_timeouts: Mapping
+    request_class_completion_boundaries: Mapping
     concurrency_weights: Mapping
     request_class_latency_slos: Mapping
     request_class_failure_rate_slos: Mapping
@@ -785,6 +790,7 @@ def _parse_request_classes(
     *,
     require_concurrency_weights=False,
     base_path=None,
+    allow_component_failures=False,
 ):
     parsed = {}
     visit_ratios = {}
@@ -810,6 +816,7 @@ def _parse_request_classes(
             "concurrency_weight",
             "end_to_end_latency_slos",
             "end_to_end_timeout_seconds",
+            "completion_boundary",
             "maximum_terminal_failure_rate",
             "fixed_latency_overhead_seconds",
             "latency_overhead",
@@ -823,6 +830,13 @@ def _parse_request_classes(
             "call_policies",
         }
         unknown_fields = set(request_class) - allowed_fields
+        if request_class.get("completion_boundary", "client_response") not in {
+            "client_response",
+            "all_work",
+        }:
+            raise ValueError(
+                f"Request class {request_class_name!r} has an invalid completion_boundary."
+            )
         flow_fields = {"routing", "visits", "workflow", "calls"} & set(request_class)
         if len(flow_fields) != 1 or unknown_fields:
             raise ValueError(
@@ -1018,7 +1032,10 @@ def _parse_request_classes(
                     "maximum_terminal_failure_rate must be greater than zero "
                     "and less than one."
                 )
-            if end_to_end_timeouts[request_class_name] <= 0.0:
+            if (
+                end_to_end_timeouts[request_class_name] <= 0.0
+                and not allow_component_failures
+            ):
                 raise ValueError(
                     f"Request class {request_class_name!r} declares a terminal "
                     "failure-rate SLO but no positive end_to_end_timeout_seconds."
@@ -1229,6 +1246,11 @@ def parse_workload_spec(workload, *, base_path=None):
 
     if not isinstance(workload, Mapping):
         raise ValueError("A structured workload must be a mapping.")
+    from .component_measurements import compile_component_measurements
+
+    workload, component_provenance = compile_component_measurements(
+        workload, base_path=base_path
+    )
     expected_top_level = {"request_classes", "traffic_model"}
     if not expected_top_level <= set(workload) or set(workload) - expected_top_level - {
         "replica_constraints",
@@ -1241,6 +1263,9 @@ def parse_workload_spec(workload, *, base_path=None):
     analytical_call_model = workload.get("analytical_call_model", "strict")
     if analytical_call_model not in ("strict", "response_bounds"):
         raise ValueError("analytical_call_model must be strict or response_bounds.")
+    from .stages import prepare_stage_workflows
+
+    workload, stage_workflows = prepare_stage_workflows(workload, base_path=base_path)
     raw_models = {SINGLE_TRAFFIC_MODEL_NAME: workload["traffic_model"]}
 
     request_classes = workload["request_classes"]
@@ -1282,6 +1307,17 @@ def parse_workload_spec(workload, *, base_path=None):
         service_name_set,
         require_concurrency_weights=True,
         base_path=base_path,
+        allow_component_failures=(
+            any(
+                isinstance(s, Mapping) and RESOURCE_POLICY_FIELDS & set(s)
+                for s in raw_first_services.values()
+            )
+            or any(
+                stage.retry
+                for plan in stage_workflows.values()
+                for stage in plan.stages.values()
+            )
+        ),
     )
 
     models = {}
@@ -1315,6 +1351,8 @@ def parse_workload_spec(workload, *, base_path=None):
         service_post_release_delays = {}
         service_execution_models = {}
         service_replica_queue_models = {}
+        service_cpu_bandwidths = {}
+        service_component_policies = {}
         processing_slots_per_replica = {}
         concurrency_limits_per_replica = {}
         service_times_by_request_class = {
@@ -1329,10 +1367,10 @@ def parse_workload_spec(workload, *, base_path=None):
             if not isinstance(raw_service_time, Mapping):
                 raise ValueError(f"{service_path} must be a mapping.")
             execution_model = raw_service_time.get("execution_model", "fixed_slots")
-            if execution_model not in {"fixed_slots", "processor_sharing"}:
+            if execution_model not in {"fixed_slots", "processor_sharing", "delay"}:
                 raise ValueError(
                     f"{service_path}.execution_model must be fixed_slots or "
-                    "processor_sharing."
+                    "processor_sharing or delay."
                 )
             replica_queue_model = raw_service_time.get(
                 "replica_queue_model",
@@ -1342,10 +1380,49 @@ def parse_workload_spec(workload, *, base_path=None):
                 "pooled",
                 "independent_random",
                 "independent_round_robin",
+                "independent_key_hash",
             }:
                 raise ValueError(
                     f"{service_path}.replica_queue_model must be pooled, "
-                    "independent_random, or independent_round_robin."
+                    "independent_random, independent_round_robin, or independent_key_hash."
+                )
+            if "cpu_bandwidth" in raw_service_time:
+                bandwidth = raw_service_time["cpu_bandwidth"]
+                label = f"{service_path}.cpu_bandwidth"
+                fields = {"quota_seconds", "period_seconds", "parallelism"}
+                if not isinstance(bandwidth, Mapping) or set(bandwidth) != fields:
+                    raise ValueError(f"{label} requires exactly {sorted(fields)}.")
+                if (
+                    execution_model != "processor_sharing"
+                    or replica_queue_model == "pooled"
+                ):
+                    raise ValueError(
+                        f"{label} requires processor_sharing with independent replica queues."
+                    )
+                quota = _finite_positive(
+                    bandwidth["quota_seconds"], f"{label}.quota_seconds"
+                )
+                period = _finite_positive(
+                    bandwidth["period_seconds"], f"{label}.period_seconds"
+                )
+                parallelism = _positive_integer(
+                    bandwidth["parallelism"], f"{label}.parallelism"
+                )
+                if (
+                    not 0.001 <= period <= 1
+                    or quota < 0.001
+                    or parallelism > 4096
+                    or not 0 < quota / period <= parallelism
+                ):
+                    raise ValueError(
+                        f"{label} has an invalid period, quota or parallelism."
+                    )
+                service_cpu_bandwidths[service_name] = _freeze_mapping(
+                    dict(
+                        quota_seconds=quota,
+                        period_seconds=period,
+                        parallelism=parallelism,
+                    )
                 )
             processing_slots = _positive_integer(
                 raw_service_time.get("processing_slots_per_replica", 1),
@@ -1363,7 +1440,7 @@ def parse_workload_spec(workload, *, base_path=None):
             concurrency_limit = (
                 None
                 if raw_concurrency_limit is None
-                and execution_model == "processor_sharing"
+                and execution_model in {"processor_sharing", "delay"}
                 else _positive_integer(
                     (
                         processing_slots
@@ -1382,6 +1459,27 @@ def parse_workload_spec(workload, *, base_path=None):
             concurrency_limits_per_replica[service_name] = concurrency_limit
             service_execution_models[service_name] = execution_model
             service_replica_queue_models[service_name] = replica_queue_model
+            policies = parse_resource_policies(
+                raw_service_time,
+                label=service_path,
+                execution_model=execution_model,
+                queue_model=replica_queue_model,
+                concurrency_limit=concurrency_limit,
+                base_path=base_path,
+                request_classes=request_classes,
+            )
+            if policies:
+                service_component_policies[service_name] = policies
+                cache = policies.get("cache", {})
+                if cache.get("mode") == "fixed_hit_ratio":
+                    observed = cache["observed_replicas"]
+                    if service_name in replica_constraints and replica_constraints[
+                        service_name
+                    ] != (observed, observed):
+                        raise ValueError(
+                            "Fixed hit-ratio cache must keep its observed replica count."
+                        )
+                    replica_constraints[service_name] = (observed, observed)
             raw_blocking_time = raw_service_time.get("non_cpu_blocking_time")
             if "post_release_delay" in raw_service_time:
                 service_post_release_delays[service_name] = parse_duration_distribution(
@@ -1433,11 +1531,13 @@ def parse_workload_spec(workload, *, base_path=None):
                 key: value
                 for key, value in raw_service_time.items()
                 if key
-                not in {
+                not in RESOURCE_POLICY_FIELDS
+                | {
                     "processing_slots_per_replica",
                     "concurrency_limit_per_replica",
                     "execution_model",
                     "replica_queue_model",
+                    "cpu_bandwidth",
                     "non_cpu_blocking_time",
                     "post_release_delay",
                 }
@@ -1568,6 +1668,17 @@ def parse_workload_spec(workload, *, base_path=None):
             missing_service_times = reachable - set(
                 service_times_by_request_class[request_class_name]
             )
+            for resource in reachable:
+                if "cache" not in service_component_policies.get(resource, {}):
+                    continue
+                plan = stage_workflows.get(request_class_name)
+                if plan is None or not any(
+                    stage.resource == resource and stage.cache
+                    for stage in plan.stages.values()
+                ):
+                    raise ValueError(
+                        f"Cache resource {resource!r} requires explicit cache-operation stages for {request_class_name!r}."
+                    )
             if missing_service_times:
                 raise ValueError(
                     f"Traffic model {model_name!r} has no service-time "
@@ -1598,6 +1709,8 @@ def parse_workload_spec(workload, *, base_path=None):
             ),
             service_execution_models=_freeze_mapping(service_execution_models),
             service_replica_queue_models=_freeze_mapping(service_replica_queue_models),
+            service_cpu_bandwidths=_freeze_mapping(service_cpu_bandwidths),
+            service_component_policies=_freeze_mapping(service_component_policies),
             processing_slots_per_replica=_freeze_mapping(processing_slots_per_replica),
             concurrency_limits_per_replica=_freeze_mapping(
                 concurrency_limits_per_replica
@@ -1615,13 +1728,24 @@ def parse_workload_spec(workload, *, base_path=None):
             ),
         )
 
+    for resource, policy in service_component_policies.items():
+        if "cache" in policy and not any(
+            stage.resource == resource and stage.cache
+            for plan in stage_workflows.values()
+            for stage in plan.stages.values()
+        ):
+            raise ValueError(
+                f"Cache resource {resource!r} has no cache-operation stages."
+            )
     return ParsedWorkload(
+        component_measurement_provenance=component_provenance,
         request_classes=routing,
         request_class_visit_ratios=visit_ratios,
         request_class_workflows=workflows,
         request_class_call_graphs=call_graphs,
         request_class_call_execution_modes=call_execution_modes,
         request_class_call_policies=call_policies,
+        request_class_stage_workflows=_freeze_mapping(stage_workflows),
         replica_constraints=_freeze_mapping(replica_constraints),
         analytical_call_model=analytical_call_model,
         request_class_fixed_latency_overheads=fixed_latency_overheads,
@@ -1629,6 +1753,12 @@ def parse_workload_spec(workload, *, base_path=None):
         request_class_latency_boundaries=latency_boundaries,
         request_class_latency_component_specs=latency_component_specs,
         request_class_end_to_end_timeouts=end_to_end_timeouts,
+        request_class_completion_boundaries=_freeze_mapping(
+            {
+                c: raw.get("completion_boundary", "client_response")
+                for c, raw in request_classes.items()
+            }
+        ),
         concurrency_weights=concurrency_weights,
         request_class_latency_slos=request_class_latency_slos,
         request_class_failure_rate_slos=request_class_failure_rate_slos,

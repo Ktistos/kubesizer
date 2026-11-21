@@ -6,13 +6,14 @@ import subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from metrics.time_weighted_buckets import complete_bucket_count
 
-PROTOCOL_VERSION = 15
+PROTOCOL_VERSION = 18
 SIMULATOR_SEMANTICS_VERSION = (
     "native-event-kernel-joint-input-blocks-burst-traces-concurrency-"
     "distributed-overhead-synchronous-calls-dual-resources-deadlines-cpu-"
     "ps-replica-queues-measured-latency-components-rate-preserving-traces-"
-    "post-release-delays-source-policies-quorum-background-choice-v18"
+    "post-release-delays-source-policies-quorum-background-choice-shared-resource-stages-cpu-bandwidth-components-v21"
 )
 
 
@@ -156,6 +157,71 @@ def _serialize_distribution(specification):
     return result
 
 
+def serialize_stage_workflow(plan, system):
+    """Stage nodes reference resource IDs; they do not allocate new queues."""
+    indices = {name: i for i, name in enumerate(plan.stages)}
+    return {
+        "entries": [
+            indices[plan.entries[name]] if name in plan.entries else -1
+            for name in system.get_services()
+        ],
+        "stages": [
+            {
+                "name": name,
+                "retry": (
+                    {
+                        **dict(stage.retry),
+                        "backoff": (
+                            _serialize_distribution(stage.retry["backoff"])
+                            if stage.retry["backoff"] is not None
+                            else None
+                        ),
+                    }
+                    if stage.retry is not None
+                    else None
+                ),
+                "cache": (
+                    {
+                        **dict(stage.cache),
+                        "hit": indices.get(stage.cache["hit"], -1),
+                        "miss": indices.get(stage.cache["miss"], -1),
+                    }
+                    if stage.cache is not None
+                    else None
+                ),
+                "resource": (
+                    system.get_service(stage.resource).get_id()
+                    if stage.resource is not None
+                    else -1
+                ),
+                "service_time": (
+                    _serialize_distribution(stage.service_time)
+                    if stage.service_time
+                    else None
+                ),
+                "blocking_time": (
+                    _serialize_distribution(stage.blocking_time)
+                    if stage.blocking_time
+                    else None
+                ),
+                "delay": _serialize_distribution(stage.delay) if stage.delay else None,
+                "work_units": stage.work_units,
+                "unit": stage.unit,
+                "hold_resource": stage.hold_resource,
+                "calls": [
+                    {"service": indices[target], "mean_visits": count}
+                    for target, count in stage.calls.items()
+                ],
+                "call_policy": stage.policy.to_dict(),
+                "next": (
+                    indices[stage.next_stage] if stage.next_stage is not None else -1
+                ),
+            }
+            for name, stage in plan.stages.items()
+        ],
+    }
+
+
 class CppSimulationBackend:
     """Versioned subprocess adapter for the required native event kernel."""
 
@@ -208,6 +274,7 @@ class CppSimulationBackend:
         call_graphs = system.get_request_class_call_graphs()
         call_execution_modes = system.get_request_class_call_execution_modes()
         call_policies = system.get_request_class_call_policies()
+        stage_workflows = system.get_request_class_stage_workflows()
         overhead_specs = system.get_request_class_latency_overhead_distribution_specs()
         latency_components = getattr(
             system,
@@ -225,9 +292,18 @@ class CppSimulationBackend:
             lambda: None,
         )()
         timeouts = system.get_request_class_end_to_end_timeouts()
+        completion_boundaries = getattr(
+            system, "get_request_class_completion_boundaries", lambda: {}
+        )()
         concurrency_limits = system.get_service_concurrency_limits_per_replica()
         processing_slots = system.get_service_processing_slots_per_replica()
         execution_models = system.get_service_execution_models()
+        cpu_bandwidths = getattr(system, "get_service_cpu_bandwidths", lambda: {})()
+        from performance_models.components import serialize_resource_policies
+
+        component_policies = getattr(
+            system, "get_service_component_policies", lambda: {}
+        )()
         replica_queue_models = getattr(
             system,
             "get_service_replica_queue_models",
@@ -252,9 +328,20 @@ class CppSimulationBackend:
                     "name": request_class,
                     "concurrency_weight": concurrency_weights[request_class],
                     "flow_kind": (
-                        "workflow"
-                        if request_class in workflows
-                        else ("calls" if request_class in call_graphs else "routing")
+                        "stages"
+                        if request_class in stage_workflows
+                        else (
+                            "workflow"
+                            if request_class in workflows
+                            else (
+                                "calls" if request_class in call_graphs else "routing"
+                            )
+                        )
+                    ),
+                    "stage_workflow": (
+                        serialize_stage_workflow(stage_workflows[request_class], system)
+                        if request_class in stage_workflows
+                        else None
                     ),
                     "routing": routing,
                     "workflow": [
@@ -318,6 +405,9 @@ class CppSimulationBackend:
                         ).items()
                     ],
                     "end_to_end_timeout": timeouts.get(request_class, 0.0),
+                    "completion_boundary": completion_boundaries.get(
+                        request_class, "client_response"
+                    ),
                 }
             )
 
@@ -343,6 +433,10 @@ class CppSimulationBackend:
                     "name": service.get_name(),
                     "execution_model": execution_models[service.get_name()],
                     "replica_queue_model": replica_queue_models[service.get_name()],
+                    "cpu_bandwidth": cpu_bandwidths.get(service.get_name()),
+                    "component_policies": serialize_resource_policies(
+                        component_policies.get(service.get_name(), {})
+                    ),
                     "replicas": service.get_replicas(),
                     "capacity": (
                         service.get_replicas() * processing_slots[service.get_name()]
@@ -542,7 +636,7 @@ class CppSimulationBackend:
         try:
             means = result["means"]
             variances = result["sample_variances"]
-            bucket_count = math.floor(horizon / bucket_width + 1e-12)
+            bucket_count = complete_bucket_count(horizon, bucket_width)
             service_count = len(system.get_services())
             active = _numeric_tuple(
                 means["active_requests"],

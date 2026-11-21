@@ -1,0 +1,39 @@
+# Synthetic overlap example; not a calibrated PostgreSQL protocol model.
+analytical_call_model: response_bounds
+replica_constraints:
+  primary_cpu: {fixed: 1}
+  primary_disk: {fixed: 1}
+  follower_1: {fixed: 1}
+  follower_2: {fixed: 1}
+request_classes:
+  write:
+    concurrency_weight: 1
+    end_to_end_latency_slos: {mean_seconds: 0.1}
+    stage_workflow:
+      entries: {primary_cpu: start}
+      stages:
+        start:
+          calls: {local_cpu: 1, replication: 1}
+          next: finalize
+        local_cpu:
+          resource: primary_cpu
+          service_time: {distribution: deterministic, mean: 0.002}
+          next: flush
+        flush:
+          resource: primary_disk
+          service_time: {distribution: deterministic, mean: 0.004}
+        replication:
+          calls: {apply_1: 1, apply_2: 1}
+          call_policy: {completion: quorum, required: 1}
+        apply_1: {resource: follower_1, service_time: {distribution: deterministic, mean: 0.008}}
+        apply_2: {resource: follower_2, service_time: {distribution: deterministic, mean: 0.02}}
+        finalize: {resource: primary_cpu, service_time: {distribution: deterministic, mean: 0.001}}
+traffic_model:
+  entry_services:
+    write:
+      primary_cpu: {distribution: exponential, rate: 2}
+  service_times:
+    primary_cpu: {replica_queue_model: pooled}
+    primary_disk: {replica_queue_model: pooled}
+    follower_1: {replica_queue_model: pooled}
+    follower_2: {replica_queue_model: pooled}

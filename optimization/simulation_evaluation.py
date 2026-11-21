@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from performance_models.components import simulation_configuration_supported
 from enum import Enum
 
 from calibration import CalibrationProfile, validate_profile_for_experiment
@@ -378,7 +379,7 @@ class CalibratedConfigurationEvaluator:
         try:
             self.system.configure_system_replicas(configuration)
             analytical_metrics = self.system.solve()
-            if not analytical_metrics.get_stability():
+            if not simulation_configuration_supported(self.system, analytical_metrics):
                 return self._failure(
                     configuration,
                     SimulationClassification.ANALYTICALLY_UNSTABLE,
@@ -534,10 +535,7 @@ class CalibratedConfigurationEvaluator:
                     "Minimum eligible-sample or nonempty-replication requirements "
                     "were not met at R_max."
                 )
-            elif (
-                final_classification
-                == SimulationClassification.MODELED_NONSTATIONARY
-            ):
+            elif final_classification == SimulationClassification.MODELED_NONSTATIONARY:
                 classes = ", ".join(
                     diagnostic.request_class
                     for diagnostic in final_growth_diagnostics

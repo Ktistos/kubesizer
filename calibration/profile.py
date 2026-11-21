@@ -15,7 +15,6 @@ from native_backend import SIMULATOR_SEMANTICS_VERSION
 
 from .seeds import SEED_POLICY_VERSION, SeedPolicy, default_seed_policy
 
-
 CALIBRATION_PROFILE_VERSION = 11
 P95_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-percentile-bootstrap-v1"
 MEAN_CONFIDENCE_INTERVAL_METHOD = "replication-cluster-mean-bootstrap-v1"
@@ -714,6 +713,9 @@ def experiment_fingerprints(system):
         lambda: {},
     )()
     call_policies = getattr(system, "get_request_class_call_policies", lambda: {})()
+    from native_backend.backend import serialize_stage_workflow
+
+    stage_workflows = getattr(system, "get_request_class_stage_workflows", lambda: {})()
     replica_constraints = getattr(system, "get_replica_constraints", lambda: {})()
     concurrency_limits = getattr(
         system,
@@ -735,6 +737,10 @@ def experiment_fingerprints(system):
         "get_service_replica_queue_models",
         lambda: {service.get_name(): "pooled" for service in services},
     )()
+    cpu_bandwidths = getattr(system, "get_service_cpu_bandwidths", lambda: {})()
+    from performance_models.components import serialize_resource_policies
+
+    component_policies = getattr(system, "get_service_component_policies", lambda: {})()
     fixed_latency_overheads = getattr(
         system,
         "get_request_class_fixed_latency_overheads",
@@ -765,6 +771,9 @@ def experiment_fingerprints(system):
         "get_request_class_end_to_end_timeouts",
         lambda: {},
     )()
+    completion_boundaries = getattr(
+        system, "get_request_class_completion_boundaries", lambda: {}
+    )()
     topology = {
         "network_type": system.get_type().value,
         "replica_constraints": replica_constraints,
@@ -779,12 +788,19 @@ def experiment_fingerprints(system):
                 "processing_slots_per_replica": processing_slots[service.get_name()],
                 "execution_model": execution_models[service.get_name()],
                 "replica_queue_model": replica_queue_models[service.get_name()],
+                "cpu_bandwidth": cpu_bandwidths.get(service.get_name()),
+                "component_policies": serialize_resource_policies(
+                    component_policies.get(service.get_name(), {})
+                ),
             }
             for service in services
         ],
         "request_classes": [
             {
                 "name": request_class,
+                "completion_boundary": completion_boundaries.get(
+                    request_class, "client_response"
+                ),
                 "routes": [
                     {
                         "service": service.get_name(),
@@ -834,6 +850,11 @@ def experiment_fingerprints(system):
                     )
                 ],
                 "call_execution": call_execution_modes.get(request_class),
+                "stage_workflow": (
+                    serialize_stage_workflow(stage_workflows[request_class], system)
+                    if request_class in stage_workflows
+                    else None
+                ),
                 "call_policies": {
                     source: policy.to_dict()
                     for source, policy in sorted(
@@ -1031,6 +1052,9 @@ def experiment_fingerprints(system):
             name: _distribution_fingerprint(specification)
             for name, specification in sorted(post_release_delays.items())
         }
+    provenance = getattr(system, "get_component_measurement_provenance", lambda: {})()
+    if provenance:
+        workload["component_measurement_provenance"] = provenance
     return _fingerprint(topology), _fingerprint(workload)
 
 

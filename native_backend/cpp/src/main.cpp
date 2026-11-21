@@ -9,7 +9,9 @@
 #include <cstdlib>
 #include <deque>
 #include <dlfcn.h>
+#include <functional>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -24,7 +26,7 @@
 
 namespace {
 
-constexpr int kProtocolVersion = 15;
+constexpr int kProtocolVersion = 18;
 constexpr int kUrgentPriority = 0;
 constexpr int kNormalPriority = 1;
 constexpr int kDeadlinePriority = 2;
@@ -33,17 +35,21 @@ enum class EventKind {
     ExternalArrival,
     Admit,
     ServiceCompletion,
+    CpuBandwidthBoundary,
     BlockingCompletion,
     ServiceResponse,
     Grant,
     Resume,
     ConcurrencyGrant,
     CallReturn,
+    StageReady,
+    StageContinuationReturn,
     FinalExit,
-    RequestTimeout
+    RequestTimeout, AdmissionTimeout, RateWake, InstanceReady, InstanceIdle,
+    RetryReady, AttemptDeadline
 };
 enum class RunMode { FixedHorizon, MeasurementDrain };
-enum class FlowKind { Routing, Workflow, Calls };
+enum class FlowKind { Routing, Workflow, Calls, Stages };
 enum class CallExecution { Parallel, Sequential, Choice };
 enum class CallCompletion { All, Quorum, Background };
 
@@ -52,8 +58,8 @@ struct CallPolicy {
     CallCompletion completion{CallCompletion::All};
     std::int64_t required{};
 };
-enum class ExecutionModel { FixedSlots, ProcessorSharing };
-enum class ReplicaQueueModel { Pooled, IndependentRandom, IndependentRoundRobin };
+enum class ExecutionModel { FixedSlots, ProcessorSharing, Delay };
+enum class ReplicaQueueModel { Pooled, IndependentRandom, IndependentRoundRobin, IndependentKeyHash };
 enum class DistributionKind {
     Exponential,
     Deterministic,
@@ -79,6 +85,31 @@ struct Distribution {
     std::vector<double> custom_parameters;
 };
 
+struct CacheSpec {
+    bool fixed_ratio{};
+    std::uint64_t capacity{};
+    double ttl{};
+    int observed_replicas{};
+    std::vector<double> hit_ratios;
+    std::vector<std::string> keys;
+    std::vector<std::uint64_t> sizes;
+    std::vector<std::vector<int>> accesses;
+    std::vector<bool> cyclic;
+};
+
+struct CacheState {
+    struct Entry { std::list<int>::iterator position; double expires; };
+    std::list<int> lru;
+    std::unordered_map<int, Entry> entries;
+    std::priority_queue<std::pair<double,int>,std::vector<std::pair<double,int>>,std::greater<std::pair<double,int>>> expiry;
+    std::uint64_t bytes{};
+    CacheState() = default;
+    CacheState(const CacheState&) = delete;
+    CacheState& operator=(const CacheState&) = delete;
+    CacheState(CacheState&&) noexcept = default;
+    CacheState& operator=(CacheState&&) noexcept = default;
+};
+
 struct Service {
     std::string name;
     int replicas{};
@@ -89,6 +120,19 @@ struct Service {
     std::vector<Distribution> service_times;
     std::vector<std::optional<Distribution>> blocking_times;
     std::optional<Distribution> post_release_delay;
+    double cpu_quota{};
+    double cpu_period{};
+    int cpu_parallelism{};
+    int pending_capacity{-1};
+    double pending_timeout{};
+    double token_rate{};
+    int token_burst{};
+    bool token_reject{};
+    double failure_probability{};
+    std::optional<Distribution> startup_delay;
+    double idle_timeout{};
+    bool initially_warm{true};
+    std::optional<CacheSpec> cache;
 };
 
 struct Route {
@@ -101,6 +145,27 @@ struct WorkflowVisit {
     double mean_visits{};
 };
 
+struct Stage {
+    std::string name;
+    int resource{-1};
+    std::optional<Distribution> service_time;
+    std::optional<Distribution> blocking_time;
+    std::optional<Distribution> delay;
+    double work_units{1.0};
+    bool hold_resource{};
+    std::vector<WorkflowVisit> calls;
+    CallPolicy policy;
+    int next{-1};
+    int retry_max{};
+    std::optional<Distribution> retry_backoff;
+    double attempt_timeout{};
+    bool cache_operation{};
+    int cache_action{}; // lookup=0, put=1, invalidate=2
+    int cache_hit{-1};
+    int cache_miss{-1};
+    bool cache_fill{true};
+};
+
 struct RequestClass {
     std::string name;
     double concurrency_weight{};
@@ -110,9 +175,12 @@ struct RequestClass {
     std::vector<std::vector<WorkflowVisit>> calls;
     CallExecution call_execution{CallExecution::Parallel};
     std::vector<CallPolicy> call_policies;
+    std::vector<Stage> stages;
+    std::vector<int> stage_entries;
     std::optional<Distribution> latency_overhead;
     std::vector<Distribution> latency_components;
     double end_to_end_timeout{};
+    bool all_work_completion{};
 };
 
 struct ExternalStream {
@@ -157,6 +225,10 @@ struct Request {
     bool server_completed{};
     bool deadline_processed{};
     std::int64_t live_visits{};
+    bool failed{};
+    bool deferred_response{};
+    bool work_failed{};
+    std::vector<int> cache_keys;
 };
 
 struct Visit {
@@ -175,6 +247,22 @@ struct Visit {
     bool completion_started{};
     bool response_completed{};
     bool response_sample_recorded{};
+    int stage{-1};
+    bool stage_phase_done{};
+    bool continuation_pending{};
+    bool is_continuation{};
+    bool resource_released{};
+    bool admitted{};
+    bool failed{};
+    std::int64_t failed_children{};
+    std::uint64_t serial{};
+    std::uint64_t wait_generation{};
+    std::uint64_t retry_generation{};
+    std::uint64_t child_attempt{};
+    int attempts_started{};
+    bool attempt_active{};
+    bool cache_missed{};
+    std::uint64_t cache_incarnation{};
 };
 
 struct Event {
@@ -187,6 +275,9 @@ struct Event {
     int index{};
     int queue{-1};
     std::uint64_t generation{};
+    std::size_t visit_slot{};
+    std::uint64_t visit_serial{};
+    bool failed{};
 };
 
 struct ProcessorSharingEntry {
@@ -479,6 +570,16 @@ class Kernel {
         processor_sharing_last_update_(workload.services.size()),
         processor_sharing_virtual_work_(workload.services.size()),
         processor_sharing_generation_(workload.services.size()),
+        cpu_budget_(workload.services.size()),
+        cpu_next_period_(workload.services.size()),
+        startup_waiting_(workload.services.size()),
+        instance_state_(workload.services.size()),
+        instance_generation_(workload.services.size()),
+        tokens_(workload.services.size()),
+        token_updated_(workload.services.size()),
+        token_wake_scheduled_(workload.services.size()),
+        caches_(workload.services.size()), cache_access_positions_(workload.services.size()),
+        cache_incarnations_(workload.services.size()),
         trace_states_(workload.external_streams.size()),
         recorder_(capacities(workload), capture_history, bucket_width, horizon),
         service_response_times_(workload.services.size()),
@@ -496,12 +597,31 @@ class Kernel {
             processor_sharing_last_update_[service].assign(queues, 0.0);
             processor_sharing_virtual_work_[service].assign(queues, 0.0);
             processor_sharing_generation_[service].assign(queues, 0);
+            // Service demand is normalized by quota/period, so one period
+            // replenishes 'period' normalized CPU-seconds per replica.
+            cpu_budget_[service].assign(queues, workload.services[service].cpu_period);
+            cpu_next_period_[service].assign(queues, workload.services[service].cpu_period);
+            startup_waiting_[service].resize(queues);
+            const auto& spec = workload.services[service];
+            instance_state_[service].assign(queues, spec.initially_warm ? 2 : 0);
+            instance_generation_[service].assign(queues, 0);
+            tokens_[service].assign(queues, spec.token_burst);
+            token_updated_[service].assign(queues, 0.0);
+            token_wake_scheduled_[service].assign(queues, false);
+            caches_[service].resize(queues);
+            cache_incarnations_[service].assign(queues, 0);
+            cache_access_positions_[service].assign(workload.request_classes.size(), 0);
         }
         initialize_input_uncertainty();
     }
 
     KernelSummary run() {
         const auto start = std::chrono::steady_clock::now();
+        for (std::size_t s = 0; s < workload_.services.size(); ++s) {
+            if (!workload_.services[s].startup_delay.has_value()) continue;
+            for (std::size_t q = 0; q < instance_state_[s].size(); ++q)
+                maybe_idle_instance(static_cast<int>(s), static_cast<int>(q), 0.0);
+        }
         for (std::size_t stream = 0; stream < workload_.external_streams.size(); ++stream) {
             schedule_next_external(static_cast<int>(stream), 0.0);
         }
@@ -637,7 +757,8 @@ class Kernel {
         int index,
         Visit* visit = nullptr,
         std::uint64_t generation = 0,
-        int queue = -1
+        int queue = -1,
+        bool failed = false
     ) {
         future_events_.push({
             time,
@@ -648,7 +769,10 @@ class Kernel {
             visit,
             index,
             queue,
-            generation
+            generation,
+            visit == nullptr ? 0 : visit->ownership_index,
+            visit == nullptr ? 0 : visit->serial,
+            failed
         });
     }
 
@@ -909,6 +1033,8 @@ class Kernel {
                 service_completion(event); break;
             case EventKind::BlockingCompletion:
                 blocking_completion(event); break;
+            case EventKind::CpuBandwidthBoundary:
+                cpu_bandwidth_boundary(event); break;
             case EventKind::ServiceResponse:
                 if (workload_.request_classes[event.visit->request->request_class].flow_kind
                     == FlowKind::Calls) {
@@ -925,10 +1051,28 @@ class Kernel {
                 concurrency_grant(event.index, event.queue, event.time);
                 break;
             case EventKind::CallReturn:
-                complete_child_return(event.visit, event.time); break;
+                complete_child_return(event.visit, event.time, event.failed, event.generation); break;
+            case EventKind::StageReady:
+                complete_service_visit(event.visit, event.time); break;
+            case EventKind::StageContinuationReturn:
+                if (!event.visit->continuation_pending) {
+                    throw std::runtime_error("unexpected staged continuation return");
+                }
+                event.visit->continuation_pending = false;
+                event.visit->failed = event.visit->failed || event.failed;
+                complete_stage_response(event.visit, event.time);
+                break;
             case EventKind::FinalExit: final_exit(event.request, event.time); break;
             case EventKind::RequestTimeout:
                 request_timeout(event.request, event.time); break;
+            case EventKind::AdmissionTimeout: admission_timeout(event); break;
+            case EventKind::RateWake:
+                token_wake_scheduled_[event.index][event.queue] = false;
+                concurrency_grant(event.index, event.queue, event.time); break;
+            case EventKind::InstanceReady: instance_ready(event); break;
+            case EventKind::InstanceIdle: instance_idle(event); break;
+            case EventKind::RetryReady: retry_ready(event); break;
+            case EventKind::AttemptDeadline: attempt_deadline(event); break;
         }
     }
 
@@ -950,11 +1094,24 @@ class Kernel {
                 throw std::runtime_error("request ownership slot was not empty");
             }
         }
-        requests_[ownership_index] = std::make_unique<Request>(Request{
-            next_request_id_++, stream.request_class, now, ownership_index,
-            eligible, tagged, 0, 0, 0, false, false, false
-        });
+        requests_[ownership_index] = std::make_unique<Request>();
         Request* request = requests_[ownership_index].get();
+        request->id = next_request_id_++;
+        request->request_class = stream.request_class;
+        request->external_entry_time = now;
+        request->ownership_index = ownership_index;
+        request->latency_eligible = eligible;
+        request->measurement_tagged = tagged;
+        request->cache_keys.assign(workload_.services.size(), -1);
+        for (std::size_t s = 0; s < workload_.services.size(); ++s) {
+            const auto& cache = workload_.services[s].cache;
+            if (!cache.has_value() || cache->fixed_ratio || cache->accesses[stream.request_class].empty()) continue;
+            const auto& keys = cache->accesses[stream.request_class];
+            const std::size_t position = cache->cyclic[stream.request_class]
+                ? cache_access_positions_[s][stream.request_class]++ % keys.size()
+                : std::uniform_int_distribution<std::size_t>(0, keys.size()-1)(random_);
+            request->cache_keys[s] = keys[position];
+        }
         const double timeout = workload_.request_classes[
             request->request_class
         ].end_to_end_timeout;
@@ -985,7 +1142,10 @@ class Kernel {
                 "workflow entry service does not match the external stream"
             );
         }
-        Visit* root = create_visit(request, entry_service, nullptr, now);
+        const RequestClass& request_class = workload_.request_classes[request->request_class];
+        Visit* root = request_class.flow_kind == FlowKind::Stages
+            ? create_stage_visit(request, request_class.stage_entries[stream.entry_service], nullptr, now)
+            : create_visit(request, entry_service, nullptr, now);
         schedule(
             now,
             kUrgentPriority,
@@ -1019,7 +1179,7 @@ class Kernel {
                 throw std::runtime_error("visit ownership slot was not empty");
             }
         }
-        const int replica = choose_replica(service);
+        const int replica = service < 0 ? -1 : choose_replica(service, request);
         visits_[ownership_index] = std::make_unique<Visit>(Visit{
             request,
             service,
@@ -1034,6 +1194,7 @@ class Kernel {
             0.0
         });
         ++request->live_visits;
+        visits_[ownership_index]->serial = ++next_visit_serial_;
         return visits_[ownership_index].get();
     }
 
@@ -1052,8 +1213,15 @@ class Kernel {
         return has_independent_queues(visit->service) ? visit->replica : 0;
     }
 
-    int choose_replica(int service) {
+    int choose_replica(int service, const Request* request) {
         const Service& specification = workload_.services[service];
+        if (specification.replica_queue_model == ReplicaQueueModel::IndependentKeyHash) {
+            const int key = request->cache_keys[service];
+            if (key < 0 || !specification.cache.has_value()) throw std::runtime_error("cache key profile is missing");
+            std::uint64_t hash = 14695981039346656037ULL;
+            for (unsigned char c : specification.cache->keys[key]) { hash ^= c; hash *= 1099511628211ULL; }
+            return static_cast<int>(hash % static_cast<std::uint64_t>(specification.replicas));
+        }
         if (specification.replica_queue_model == ReplicaQueueModel::Pooled) {
             return -1;
         }
@@ -1094,11 +1262,20 @@ class Kernel {
     }
 
     double sample_service_time(Visit* visit) {
+        if (visit->stage >= 0) {
+            const Stage& stage = visit_stage(visit);
+            return sample(stage.service_time.value()) * stage.work_units
+                * input_service_time_multipliers_[visit->service];
+        }
         return sample(service_time(visit->request, visit->service))
             * input_service_time_multipliers_[visit->service];
     }
 
     std::optional<double> sample_blocking_time(Visit* visit) {
+        if (visit->stage >= 0) {
+            const auto& distribution = visit_stage(visit).blocking_time;
+            return distribution.has_value() ? std::optional<double>(sample(distribution.value())) : std::nullopt;
+        }
         const auto& distributions = workload_.services[
             visit->service
         ].blocking_times;
@@ -1119,6 +1296,7 @@ class Kernel {
         std::size_t total = 0;
         for (const auto& queue : admission_waiting_[service]) total += queue.size();
         for (const auto& queue : waiting_[service]) total += queue.size();
+        for (const auto& queue : startup_waiting_[service]) total += queue.size();
         return static_cast<int>(total);
     }
 
@@ -1163,6 +1341,27 @@ class Kernel {
 
     void queue_for_processing(Visit* visit, double now) {
         const int service = visit->service;
+        const int instance = queue_index(visit);
+        const auto& spec = workload_.services[service];
+        if (spec.startup_delay.has_value()) {
+            if (instance_state_[service][instance] != 2) {
+                startup_waiting_[service][instance].push_back(visit);
+                if (instance_state_[service][instance] == 0) {
+                    instance_state_[service][instance] = 1;
+                    schedule(now + sample(spec.startup_delay.value()), kNormalPriority,
+                        EventKind::InstanceReady, nullptr, service, nullptr,
+                        ++instance_generation_[service][instance], instance);
+                }
+                record_service_state(service, now);
+                return;
+            }
+            ++instance_generation_[service][instance];
+        }
+        if (spec.execution_model == ExecutionModel::Delay) {
+            schedule(now + sample_service_time(visit), kNormalPriority,
+                EventKind::ServiceCompletion, nullptr, service, visit);
+            return;
+        }
         if (
             workload_.services[service].execution_model
                 == ExecutionModel::ProcessorSharing
@@ -1197,6 +1396,15 @@ class Kernel {
     double processor_sharing_rate(int service, int queue) const {
         const std::size_t active = processor_sharing_active_[service][queue].size();
         if (active == 0) return 0.0;
+        const Service& specification = workload_.services[service];
+        if (specification.cpu_period > 0.0) {
+            if (cpu_budget_[service][queue] <= 1e-12) return 0.0;
+            return std::min(
+                1.0,
+                static_cast<double>(specification.cpu_parallelism)
+                    / static_cast<double>(active)
+            ) * specification.cpu_period / specification.cpu_quota;
+        }
         const double processors = static_cast<double>(
             processing_capacity(service, queue)
         );
@@ -1209,6 +1417,38 @@ class Kernel {
             throw std::runtime_error("processor-sharing time moved backwards");
         }
         const double elapsed = now - previous;
+        const Service& specification = workload_.services[service];
+        if (specification.cpu_period > 0.0) {
+            const std::size_t active = processor_sharing_active_[service][queue].size();
+            const double per_job_rate = active == 0 ? 0.0 : std::min(
+                1.0, static_cast<double>(specification.cpu_parallelism) / active
+            ) * specification.cpu_period / specification.cpu_quota;
+            auto consume = [&](double duration) {
+                if (active == 0 || duration <= 0.0) return;
+                const double progress = std::min(
+                    per_job_rate * duration,
+                    cpu_budget_[service][queue] / static_cast<double>(active)
+                );
+                processor_sharing_virtual_work_[service][queue] += progress;
+                cpu_budget_[service][queue] = std::max(
+                    0.0, cpu_budget_[service][queue] - progress * active
+                );
+            };
+            double& boundary = cpu_next_period_[service][queue];
+            consume(std::min(now, boundary) - previous);
+            if (now >= boundary) {
+                // An idle queue may skip many periods; active queues schedule
+                // each boundary, so they cannot silently lose CPU progress.
+                const double periods = std::floor((now - boundary) / specification.cpu_period);
+                boundary += (periods + 1.0) * specification.cpu_period;
+                if (boundary <= now) boundary += specification.cpu_period;
+                const double start = boundary - specification.cpu_period;
+                cpu_budget_[service][queue] = specification.cpu_period;
+                consume(now - start);
+            }
+            processor_sharing_last_update_[service][queue] = now;
+            return;
+        }
         if (
             elapsed > 0.0
             && !processor_sharing_active_[service][queue].empty()
@@ -1230,6 +1470,39 @@ class Kernel {
         if (active.empty()) return;
         const ProcessorSharingEntry& next = active.top();
         const double rate = processor_sharing_rate(service, queue);
+        const Service& specification = workload_.services[service];
+        if (specification.cpu_period > 0.0) {
+            if (next.finish_tag - processor_sharing_virtual_work_[service][queue] <= 1e-12) {
+                // A completion at exact budget exhaustion must not wait for
+                // another period because subtraction left a rounding remainder.
+                schedule(now, kNormalPriority, EventKind::ServiceCompletion,
+                    nullptr, service, next.visit, generation, queue);
+                return;
+            }
+            double boundary_delay = cpu_next_period_[service][queue] - now;
+            if (!(boundary_delay > 0.0)) {
+                throw std::runtime_error("CPU quota period did not advance");
+            }
+            if (rate > 0.0) {
+                boundary_delay = std::min(
+                    boundary_delay,
+                    cpu_budget_[service][queue] / (rate * active.size())
+                );
+                const double completion_delay = std::max(
+                    0.0, next.finish_tag - processor_sharing_virtual_work_[service][queue]
+                ) / rate;
+                if (completion_delay <= boundary_delay) {
+                    schedule(now + completion_delay, kNormalPriority,
+                        EventKind::ServiceCompletion, nullptr, service,
+                        next.visit, generation, queue);
+                    return;
+                }
+            }
+            schedule(now + boundary_delay, kNormalPriority,
+                EventKind::CpuBandwidthBoundary, nullptr, service,
+                nullptr, generation, queue);
+            return;
+        }
         if (rate <= 0.0) {
             throw std::runtime_error("processor-sharing service has no capacity");
         }
@@ -1270,16 +1543,34 @@ class Kernel {
         schedule_processor_sharing_completion(service, queue, now);
     }
 
+    void cpu_bandwidth_boundary(const Event& event) {
+        if (event.generation != processor_sharing_generation_[event.index][event.queue]) return;
+        const bool refill = event.time >= cpu_next_period_[event.index][event.queue];
+        update_processor_sharing_work(event.index, event.queue, event.time);
+        // Exhaustion may occur less than one representable clock tick away.
+        // Clear the rounding remainder rather than rescheduling at the same time.
+        if (!refill) cpu_budget_[event.index][event.queue] = 0.0;
+        schedule_processor_sharing_completion(event.index, event.queue, event.time);
+    }
+
     void admit(Visit* visit, double now) {
+        if (visit->stage >= 0 && visit->service < 0) {
+            const auto& delay = visit_stage(visit).delay;
+            schedule(now + (delay.has_value() ? sample(delay.value()) : 0.0),
+                     kNormalPriority, EventKind::StageReady, nullptr, -1, visit);
+            return;
+        }
         const int service = visit->service;
         const int queue = queue_index(visit);
         const int limit = concurrency_capacity(service, queue);
         if (
             (limit == 0 || active_concurrency_by_queue_[service][queue] < limit)
             && admission_waiting_[service][queue].empty()
+            && acquire_token(service, queue, now)
         ) {
             ++active_concurrency_by_queue_[service][queue];
             ++active_concurrency_[service];
+            visit->admitted = true;
             if (
                 limit > 0
                 && active_concurrency_by_queue_[service][queue] > limit
@@ -1288,8 +1579,112 @@ class Kernel {
             }
             queue_for_processing(visit, now);
         } else {
+            const auto& spec = workload_.services[service];
+            if ((spec.token_reject && !token_available(service, queue, now))
+                || (spec.pending_capacity >= 0
+                    && admission_waiting_[service][queue].size() >= static_cast<std::size_t>(spec.pending_capacity)
+                        * (has_independent_queues(service) ? 1u : static_cast<std::size_t>(spec.replicas)))) {
+                fail_visit(visit, now);
+                return;
+            }
             admission_waiting_[service][queue].push_back(visit);
+            if (spec.pending_timeout > 0.0) {
+                schedule(now + spec.pending_timeout, kDeadlinePriority,
+                    EventKind::AdmissionTimeout, nullptr, service, visit,
+                    ++visit->wait_generation, queue);
+            }
             record_service_state(service, now);
+            schedule_token_wake(service, queue, now);
+        }
+    }
+
+    bool token_available(int service, int queue, double now) {
+        const auto& spec = workload_.services[service];
+        if (spec.token_rate == 0.0) return true;
+        tokens_[service][queue] = std::min(static_cast<double>(spec.token_burst),
+            tokens_[service][queue] + spec.token_rate * (now - token_updated_[service][queue]));
+        token_updated_[service][queue] = now;
+        return tokens_[service][queue] >= 1.0 - 1e-12;
+    }
+
+    bool acquire_token(int service, int queue, double now) {
+        if (!token_available(service, queue, now)) return false;
+        if (workload_.services[service].token_rate > 0.0)
+            tokens_[service][queue] = std::max(0.0, tokens_[service][queue] - 1.0);
+        return true;
+    }
+
+    void schedule_token_wake(int service, int queue, double now) {
+        const auto& spec = workload_.services[service];
+        if (spec.token_rate == 0.0 || spec.token_reject
+            || admission_waiting_[service][queue].empty()
+            || token_wake_scheduled_[service][queue]
+            || token_available(service, queue, now)) return;
+        const double when = std::max(std::nextafter(now, INFINITY),
+            now + (1.0 - tokens_[service][queue]) / spec.token_rate);
+        token_wake_scheduled_[service][queue] = true;
+        schedule(when, kNormalPriority, EventKind::RateWake,
+            nullptr, service, nullptr, 0, queue);
+    }
+
+    void admission_timeout(const Event& event) {
+        if (event.visit_slot >= visits_.size()) return;
+        Visit* visit = visits_[event.visit_slot].get();
+        if (visit == nullptr || visit->serial != event.visit_serial
+            || visit->wait_generation != event.generation || visit->admitted) return;
+        auto& queue = admission_waiting_[event.index][event.queue];
+        auto position = std::find(queue.begin(), queue.end(), visit);
+        if (position == queue.end()) return;
+        queue.erase(position);
+        ++visit->wait_generation;
+        record_service_state(event.index, event.time);
+        fail_visit(visit, event.time);
+    }
+
+    void instance_ready(const Event& event) {
+        if (event.generation != instance_generation_[event.index][event.queue]) return;
+        instance_state_[event.index][event.queue] = 2;
+        auto& queue = startup_waiting_[event.index][event.queue];
+        while (!queue.empty()) {
+            Visit* visit = queue.front(); queue.pop_front();
+            queue_for_processing(visit, event.time);
+        }
+        maybe_idle_instance(event.index, event.queue, event.time);
+    }
+
+    void maybe_idle_instance(int service, int queue, double now) {
+        const auto& spec = workload_.services[service];
+        if (!spec.startup_delay.has_value() || instance_state_[service][queue] != 2
+            || active_concurrency_by_queue_[service][queue] != 0
+            || !admission_waiting_[service][queue].empty()) return;
+        schedule(now + spec.idle_timeout, kNormalPriority, EventKind::InstanceIdle,
+            nullptr, service, nullptr, ++instance_generation_[service][queue], queue);
+    }
+
+    void instance_idle(const Event& event) {
+        if (event.generation == instance_generation_[event.index][event.queue]
+            && active_concurrency_by_queue_[event.index][event.queue] == 0
+            && admission_waiting_[event.index][event.queue].empty()) {
+            instance_state_[event.index][event.queue] = 0;
+            if (workload_.services[event.index].cache.has_value())
+                caches_[event.index][event.queue] = CacheState{};
+            ++cache_incarnations_[event.index][event.queue];
+        }
+    }
+
+    void fail_visit(Visit* visit, double now) {
+        visit->failed = true;
+        if (visit->stage >= 0) {
+            visit->stage_phase_done = true;
+            release_stage_resource(visit, now);
+            complete_stage_response(visit, now);
+        } else if (workload_.request_classes[visit->request->request_class].flow_kind == FlowKind::Calls) {
+            complete_call_visit(visit, now);
+        } else {
+            Request* request = visit->request;
+            request->failed = true;
+            release_concurrency_and_destroy(visit, now);
+            finish_or_delay(request, now);
         }
     }
 
@@ -1297,6 +1692,11 @@ class Kernel {
         const auto& request_class = workload_.request_classes[
             request->request_class
         ];
+        if (request_class.all_work_completion && request->live_visits > 0) {
+            request->deferred_response = true;
+            return;
+        }
+        if (request_class.all_work_completion) request->failed = request->failed || request->work_failed;
         double overhead = 0.0;
         for (const Distribution& component : request_class.latency_components) {
             overhead += sample(component);
@@ -1342,6 +1742,11 @@ class Kernel {
     }
 
     void release_concurrency(Visit* visit, double now) {
+        if (visit->resource_released) return;
+        visit->resource_released = true;
+        if (visit->service < 0) return;
+        if (!visit->admitted) return;
+        visit->admitted = false;
         const int service = visit->service;
         const int queue = queue_index(visit);
         --active_concurrency_by_queue_[service][queue];
@@ -1363,10 +1768,11 @@ class Kernel {
             0,
             queue
         );
+        maybe_idle_instance(service, queue, now);
     }
 
     void record_visit_response(Visit* visit, double now) {
-        if (collect_service_samples_ && !visit->response_sample_recorded) {
+        if (visit->service >= 0 && collect_service_samples_ && !visit->response_sample_recorded) {
             service_response_times_[visit->service].push_back(now - visit->arrival_time);
         }
         visit->response_sample_recorded = true;
@@ -1381,7 +1787,7 @@ class Kernel {
         if (--request->live_visits < 0) {
             throw std::runtime_error("request live visit count became negative");
         }
-        maybe_release_request(request);
+        maybe_release_request(request, now);
     }
 
     void release_concurrency_and_destroy(Visit* visit, double now) {
@@ -1400,6 +1806,250 @@ class Kernel {
         schedule(now + delay, kNormalPriority, EventKind::ServiceResponse,
                  nullptr, visit->service, visit);
         return true;
+    }
+
+    const Stage& visit_stage(const Visit* visit) const {
+        const auto& stages = workload_.request_classes[visit->request->request_class].stages;
+        if (visit->stage < 0 || static_cast<std::size_t>(visit->stage) >= stages.size()) {
+            throw std::runtime_error("visit references an invalid execution stage");
+        }
+        return stages[visit->stage];
+    }
+
+    Visit* create_stage_visit(Request* request, int stage, Visit* parent, double now) {
+        const auto& stages = workload_.request_classes[request->request_class].stages;
+        if (stage < 0 || static_cast<std::size_t>(stage) >= stages.size()) {
+            throw std::runtime_error("invalid execution stage index");
+        }
+        Visit* result = create_visit(request, stages[stage].resource, parent, now);
+        result->stage = stage;
+        return result;
+    }
+
+    void schedule_stage_child(Visit* parent, int stage, double now, bool continuation = false,
+                              std::uint64_t attempt = 0) {
+        const double transit = continuation ? 0.0 : network_delay();
+        Visit* child = create_stage_visit(parent->request, stage, parent, now + transit);
+        child->is_continuation = continuation;
+        child->child_attempt = attempt;
+        child->return_network_delay = transit;
+        if (continuation) parent->continuation_pending = true;
+        else ++parent->pending_children;
+        schedule(now + transit, kUrgentPriority, EventKind::Admit,
+                 nullptr, child->service, child);
+    }
+
+    void release_stage_resource(Visit* visit, double now) {
+        if (visit->resource_released) return;
+        // Resource response is queue residence/holding, not the entire workflow.
+        record_visit_response(visit, now);
+        release_concurrency(visit, now);
+    }
+
+    void complete_stage_response(Visit* visit, double now) {
+        if (visit->response_completed || visit->continuation_pending) {
+            throw std::runtime_error("invalid staged response boundary");
+        }
+        visit->completion_started = true;
+        visit->response_completed = true;
+        Visit* parent = visit->parent;
+        Request* request = visit->request;
+        const bool continuation = visit->is_continuation;
+        const bool failed = visit->failed;
+        const auto attempt = visit->child_attempt;
+        const double return_time = now + visit->return_network_delay;
+        if (visit->pending_children == 0) destroy_visit(visit, now);
+        if (parent == nullptr) {
+            request->failed = request->failed || failed;
+            finish_or_delay(request, now);
+        } else {
+            // A return event keeps the parent alive through its own pending
+            // child/continuation counter, including late quorum responses.
+            schedule(return_time, kUrgentPriority,
+                     continuation ? EventKind::StageContinuationReturn : EventKind::CallReturn,
+                     nullptr, parent->service, parent, attempt, -1, failed);
+        }
+    }
+
+    void complete_stage_phase(Visit* visit, double now) {
+        if (visit->stage_phase_done) return;
+        visit->stage_phase_done = true;
+        if (visit->cache_missed && !visit->failed && visit_stage(visit).cache_fill)
+            cache_insert(visit, now);
+        release_stage_resource(visit, now);
+        if (visit->failed) {
+            complete_stage_response(visit, now);
+            return;
+        }
+        const int next = visit_stage(visit).next;
+        if (next >= 0) schedule_stage_child(visit, next, now, true);
+        else complete_stage_response(visit, now);
+    }
+
+    void cache_remove(int service, int queue, int key) {
+        auto& state = caches_[service][queue];
+        const auto found = state.entries.find(key);
+        if (found == state.entries.end()) return;
+        state.bytes -= workload_.services[service].cache->sizes[key];
+        state.lru.erase(found->second.position);
+        state.entries.erase(found);
+    }
+
+    void expire_cache(int service, int queue, double now) {
+        auto& state = caches_[service][queue];
+        while (!state.expiry.empty() && state.expiry.top().first <= now) {
+            const int key = state.expiry.top().second;
+            state.expiry.pop();
+            const auto entry = state.entries.find(key);
+            if (entry != state.entries.end() && entry->second.expires <= now)
+                cache_remove(service, queue, key);
+        }
+    }
+
+    void cache_insert(Visit* visit, double now) {
+        const int service = visit->service, queue = queue_index(visit);
+        const auto& spec = workload_.services[service].cache.value();
+        if (spec.fixed_ratio) return;
+        if (visit->cache_incarnation != cache_incarnations_[service][queue]) return;
+        const int key = visit->request->cache_keys[service];
+        auto& state = caches_[service][queue];
+        expire_cache(service, queue, now);
+        cache_remove(service, queue, key);
+        if (spec.sizes[key] > spec.capacity) return;
+        while (state.bytes + spec.sizes[key] > spec.capacity)
+            cache_remove(service, queue, state.lru.back());
+        state.lru.push_front(key);
+        const double expiry = spec.ttl > 0.0 ? now + spec.ttl : INFINITY;
+        state.entries.emplace(key, CacheState::Entry{state.lru.begin(), expiry});
+        state.bytes += spec.sizes[key];
+        if (spec.ttl > 0.0) state.expiry.push({expiry, key});
+        if (state.expiry.size() > std::max<std::size_t>(1024, 4*state.entries.size())) {
+            decltype(state.expiry) fresh;
+            for (const auto& entry : state.entries) fresh.push({entry.second.expires,entry.first});
+            state.expiry = std::move(fresh);
+        }
+    }
+
+    void start_cache_operation(Visit* visit, double now) {
+        const Stage& stage = visit_stage(visit);
+        const int service = visit->service, queue = queue_index(visit);
+        const auto& spec = workload_.services[service].cache.value();
+        const int key = visit->request->cache_keys[service];
+        visit->cache_incarnation = cache_incarnations_[service][queue];
+        if (stage.cache_action == 1) {
+            cache_insert(visit, now); complete_stage_phase(visit, now); return;
+        }
+        if (stage.cache_action == 2) {
+            cache_remove(service, queue, key); complete_stage_phase(visit, now); return;
+        }
+        bool hit;
+        if (spec.fixed_ratio) {
+            const double ratio = spec.hit_ratios[visit->request->request_class];
+            if (ratio < 0.0) throw std::runtime_error("cache hit ratio is missing for request class");
+            hit = std::bernoulli_distribution(ratio)(random_);
+        } else {
+            expire_cache(service, queue, now);
+            auto& state = caches_[service][queue];
+            const auto entry = state.entries.find(key);
+            hit = entry != state.entries.end();
+            if (hit) state.lru.splice(state.lru.begin(), state.lru, entry->second.position);
+        }
+        visit->cache_missed = !hit;
+        const int child = hit ? stage.cache_hit : stage.cache_miss;
+        if (child >= 0) schedule_stage_child(visit, child, now);
+        else complete_stage_phase(visit, now);
+    }
+
+    Visit* live_visit(const Event& event) {
+        if (event.visit_slot >= visits_.size()) return nullptr;
+        Visit* visit = visits_[event.visit_slot].get();
+        return visit != nullptr && visit->serial == event.visit_serial ? visit : nullptr;
+    }
+
+    void start_retry_attempt(Visit* parent, double now) {
+        const Stage& stage = visit_stage(parent);
+        ++parent->attempts_started;
+        parent->attempt_active = true;
+        ++parent->retry_generation;
+        schedule_stage_child(parent, stage.calls.front().service, now, false, parent->retry_generation);
+        if (stage.attempt_timeout > 0.0)
+            schedule(now + stage.attempt_timeout, kDeadlinePriority, EventKind::AttemptDeadline,
+                nullptr, -1, parent, parent->retry_generation);
+    }
+
+    void retry_or_finish(Visit* parent, double now) {
+        const Stage& stage = visit_stage(parent);
+        if (parent->attempts_started >= stage.retry_max) {
+            parent->failed = true;
+            complete_stage_phase(parent, now);
+        } else {
+            const double delay = stage.retry_backoff.has_value() ? sample(stage.retry_backoff.value()) : 0.0;
+            schedule(now + delay, kNormalPriority, EventKind::RetryReady,
+                nullptr, -1, parent, parent->retry_generation);
+        }
+    }
+
+    void retry_result(Visit* parent, double now, bool failed, std::uint64_t attempt) {
+        if (parent->stage_phase_done) {
+            if (parent->response_completed && parent->pending_children == 0
+                && !parent->continuation_pending) destroy_visit(parent, now);
+            return;
+        }
+        if (attempt != parent->retry_generation || !parent->attempt_active) return;
+        parent->attempt_active = false;
+        if (failed) retry_or_finish(parent, now);
+        else complete_stage_phase(parent, now);
+    }
+
+    void retry_ready(const Event& event) {
+        Visit* parent = live_visit(event);
+        if (parent != nullptr && !parent->stage_phase_done && !parent->attempt_active
+            && parent->retry_generation == event.generation) start_retry_attempt(parent, event.time);
+    }
+
+    void attempt_deadline(const Event& event) {
+        Visit* parent = live_visit(event);
+        if (parent == nullptr || parent->stage_phase_done || !parent->attempt_active
+            || parent->retry_generation != event.generation) return;
+        // Keep the old child in pending_children: timeout does not cancel its work.
+        parent->attempt_active = false;
+        retry_or_finish(parent, event.time);
+    }
+
+    void start_stage_children(Visit* visit, double now) {
+        const Stage& stage = visit_stage(visit);
+        if (stage.cache_operation) {
+            if (!stage.hold_resource) release_stage_resource(visit, now);
+            start_cache_operation(visit, now);
+            return;
+        }
+        if (stage.retry_max > 0) {
+            start_retry_attempt(visit, now);
+            return;
+        }
+        if (!stage.hold_resource || stage.policy.completion == CallCompletion::Background) {
+            release_stage_resource(visit, now);
+        }
+        if (stage.policy.execution == CallExecution::Choice && !stage.calls.empty()) {
+            std::vector<double> weights;
+            for (const auto& child : stage.calls) weights.push_back(child.mean_visits);
+            std::discrete_distribution<std::size_t> choose(weights.begin(),weights.end());
+            schedule_stage_child(visit,stage.calls[choose(random_)].service,now);
+            return;
+        }
+        for (const auto& child : stage.calls) {
+            const auto count = sample_workflow_visits(child.mean_visits);
+            for (std::int64_t i = 0; i < count; ++i) {
+                if (stage.policy.execution == CallExecution::Sequential) {
+                    visit->sequential_children.push_back(child.service);
+                } else schedule_stage_child(visit,child.service,now);
+            }
+        }
+        if (stage.policy.execution == CallExecution::Sequential
+            && start_next_sequential_child(visit,now)) return;
+        if (visit->pending_children == 0 || stage.policy.completion == CallCompletion::Background) {
+            complete_stage_phase(visit,now);
+        }
     }
 
     void schedule_child(Visit* parent, int child_service, double now) {
@@ -1431,16 +2081,30 @@ class Kernel {
         const int child_service = parent->sequential_children[
             parent->next_sequential_child++
         ];
-        schedule_child(parent, child_service, now);
+        if (parent->stage >= 0) schedule_stage_child(parent, child_service, now);
+        else schedule_child(parent, child_service, now);
         return true;
     }
 
-    void complete_child_return(Visit* parent, double now) {
+    void complete_child_return(Visit* parent, double now, bool failed = false,
+                               std::uint64_t attempt = 0) {
         if (parent == nullptr || parent->pending_children <= 0) {
             throw std::runtime_error("call-graph child count became negative");
         }
         --parent->pending_children;
         ++parent->returned_children;
+        parent->failed_children += failed ? 1 : 0;
+        if (parent->stage >= 0 && visit_stage(parent).retry_max > 0) {
+            retry_result(parent, now, failed, attempt);
+            return;
+        }
+        if (failed && (parent->completion_started || parent->stage_phase_done))
+            parent->request->work_failed = true;
+        if (parent->stage >= 0 && parent->stage_phase_done) {
+            if (parent->response_completed && parent->pending_children == 0
+                && !parent->continuation_pending) destroy_visit(parent,now);
+            return;
+        }
         // A quorum/background response can precede the remaining work. Keep
         // the parent alive until every child return event has been consumed.
         if (parent->completion_started) {
@@ -1452,17 +2116,24 @@ class Kernel {
         const RequestClass& request_class = workload_.request_classes[
             parent->request->request_class
         ];
-        const CallPolicy& policy = request_class.call_policies[parent->service];
+        const CallPolicy& policy = parent->stage >= 0
+            ? visit_stage(parent).policy : request_class.call_policies[parent->service];
+        if (failed && policy.completion != CallCompletion::Quorum) parent->failed = true;
         if (
             policy.execution == CallExecution::Sequential
+            && !parent->failed
             && start_next_sequential_child(parent, now)
         ) {
             return;
         }
         if (parent->pending_children == 0
             || (policy.completion == CallCompletion::Quorum
-                && parent->returned_children >= policy.required)) {
-            complete_call_visit(parent, now);
+                && parent->returned_children - parent->failed_children >= policy.required)) {
+            if (policy.completion == CallCompletion::Quorum
+                && parent->returned_children - parent->failed_children < policy.required)
+                parent->failed = true;
+            if (parent->stage >= 0) complete_stage_phase(parent, now);
+            else complete_call_visit(parent, now);
         }
     }
 
@@ -1477,12 +2148,13 @@ class Kernel {
         Request* request = visit->request;
         Visit* parent = visit->parent;
         const double return_network_delay = visit->return_network_delay;
+        const bool failed = visit->failed;
         if (!released) release_concurrency(visit, now);
         if (visit->pending_children == 0) destroy_visit(visit, now);
         if (parent != nullptr) {
             const double return_time = now + return_network_delay;
             if (return_time == now) {
-                complete_child_return(parent, now);
+                complete_child_return(parent, now, failed);
             } else {
                 schedule(
                     return_time,
@@ -1490,10 +2162,11 @@ class Kernel {
                     EventKind::CallReturn,
                     nullptr,
                     parent->service,
-                    parent
+                    parent, 0, -1, failed
                 );
             }
         } else {
+            request->failed = request->failed || failed;
             finish_or_delay(request, now);
         }
     }
@@ -1536,6 +2209,10 @@ class Kernel {
         const int service = visit->service;
         ++processed_event_count_;
         ++completed_visit_count_;
+        if (visit->stage >= 0) {
+            start_stage_children(visit,now);
+            return;
+        }
         Request* request = visit->request;
         const RequestClass& request_class = workload_.request_classes[
             request->request_class
@@ -1636,8 +2313,13 @@ class Kernel {
                 event.generation,
                 event.queue
             )) return;
-        } else {
+        } else if (workload_.services[service].execution_model != ExecutionModel::Delay) {
             release_processing(visit, now);
+        }
+        const double probability = workload_.services[service].failure_probability;
+        if (probability > 0.0 && std::bernoulli_distribution(probability)(random_)) {
+            fail_visit(visit, now);
+            return;
         }
         const std::optional<double> blocking_time = sample_blocking_time(visit);
         if (blocking_time.has_value()) {
@@ -1688,15 +2370,28 @@ class Kernel {
 
     void concurrency_grant(int service, int queue, double now) {
         const int limit = concurrency_capacity(service, queue);
-        if (
+        while (
             !admission_waiting_[service][queue].empty()
             && (
                 limit == 0
                 || active_concurrency_by_queue_[service][queue] < limit
             )
         ) {
+            if (!acquire_token(service, queue, now)) {
+                if (workload_.services[service].token_reject) {
+                    Visit* rejected = admission_waiting_[service][queue].front();
+                    admission_waiting_[service][queue].pop_front();
+                    ++rejected->wait_generation;
+                    fail_visit(rejected, now);
+                    continue;
+                }
+                schedule_token_wake(service, queue, now);
+                return;
+            }
             Visit* visit = admission_waiting_[service][queue].front();
             admission_waiting_[service][queue].pop_front();
+            ++visit->wait_generation;
+            visit->admitted = true;
             ++active_concurrency_by_queue_[service][queue];
             ++active_concurrency_[service];
             if (
@@ -1758,7 +2453,12 @@ class Kernel {
         free_request_slots_.push_back(ownership_index);
     }
 
-    void maybe_release_request(Request* request) {
+    void maybe_release_request(Request* request, double now) {
+        if (request->deferred_response && request->live_visits == 0) {
+            request->deferred_response = false;
+            finish_or_delay(request, now);
+            return;
+        }
         const double timeout = workload_.request_classes[
             request->request_class
         ].end_to_end_timeout;
@@ -1775,15 +2475,15 @@ class Kernel {
             record_request_outcome(request, now, true);
             return;
         }
-        maybe_release_request(request);
+        maybe_release_request(request, now);
     }
 
     void final_exit(Request* request, double now) {
         ++completed_request_count_;
         request->server_completed = true;
-        record_request_outcome(request, now, false);
+        record_request_outcome(request, now, request->failed);
         recorder_.final_exit(now);
-        maybe_release_request(request);
+        maybe_release_request(request, now);
     }
 
     const Workload& workload_;
@@ -1820,6 +2520,17 @@ class Kernel {
     std::vector<std::vector<double>> processor_sharing_last_update_;
     std::vector<std::vector<double>> processor_sharing_virtual_work_;
     std::vector<std::vector<std::uint64_t>> processor_sharing_generation_;
+    std::vector<std::vector<double>> cpu_budget_;
+    std::vector<std::vector<double>> cpu_next_period_;
+    std::vector<std::vector<std::deque<Visit*>>> startup_waiting_;
+    std::vector<std::vector<int>> instance_state_;
+    std::vector<std::vector<std::uint64_t>> instance_generation_;
+    std::vector<std::vector<double>> tokens_;
+    std::vector<std::vector<double>> token_updated_;
+    std::vector<std::vector<bool>> token_wake_scheduled_;
+    std::vector<std::vector<CacheState>> caches_;
+    std::vector<std::vector<std::size_t>> cache_access_positions_;
+    std::vector<std::vector<std::uint64_t>> cache_incarnations_;
     std::vector<TraceSamplerState> trace_states_;
     StateRecorder recorder_;
     std::vector<std::unique_ptr<Request>> requests_;
@@ -1840,6 +2551,7 @@ class Kernel {
     std::int64_t completed_visit_count_{};
     std::int64_t tagged_requests_in_flight_{};
     std::int64_t next_request_id_{};
+    std::uint64_t next_visit_serial_{};
 };
 
 struct JsonOwner {
@@ -2125,6 +2837,301 @@ std::vector<std::int64_t> parse_seeds(json_t* request) {
     return seeds;
 }
 
+void parse_stage_workflow(json_t* raw, RequestClass& result, const std::vector<Service>& services, std::size_t class_id) {
+    const std::size_t resource_count = services.size();
+    json_t* nodes = required(raw,"stages");
+    json_t* entries = required(raw,"entries");
+    if (!json_is_array(nodes) || json_array_size(nodes) == 0 || json_array_size(nodes) > 256
+        || !json_is_array(entries) || json_array_size(entries) != resource_count) {
+        throw std::runtime_error("invalid staged workflow nodes or entry mapping");
+    }
+    const auto count = static_cast<std::int64_t>(json_array_size(nodes));
+    std::size_t index;
+    json_t* item;
+    std::unordered_map<std::string,bool> names;
+    json_array_foreach(nodes,index,item) {
+        Stage stage;
+        stage.name = json_text(item,"name");
+        if (stage.name.empty() || names[stage.name]) throw std::runtime_error("stage names must be unique and nonempty");
+        names[stage.name] = true;
+        const auto resource = required_integer(item,"resource");
+        const auto next = required_integer(item,"next");
+        if (resource < -1 || resource >= static_cast<std::int64_t>(resource_count)
+            || next < -1 || next >= count) throw std::runtime_error("invalid staged resource/continuation index");
+        stage.resource = static_cast<int>(resource);
+        stage.next = static_cast<int>(next);
+        stage.work_units = json_number(item,"work_units");
+        if (stage.work_units <= 0.0) throw std::runtime_error("stage work_units must be positive");
+        json_t* hold = required(item,"hold_resource");
+        if (!json_is_boolean(hold)) throw std::runtime_error("hold_resource must be boolean");
+        stage.hold_resource = json_is_true(hold);
+        json_t* work = required(item,"service_time");
+        json_t* blocking = required(item,"blocking_time");
+        json_t* delay = required(item,"delay");
+        if (!json_is_null(work)) stage.service_time = parse_distribution(work,false);
+        if (!json_is_null(blocking)) stage.blocking_time = parse_distribution(blocking,false);
+        if (!json_is_null(delay)) stage.delay = parse_distribution(delay,false);
+        if ((stage.resource >= 0 && (!stage.service_time.has_value() || stage.delay.has_value()))
+            || (stage.resource < 0 && (stage.service_time.has_value() || stage.blocking_time.has_value()
+                || stage.hold_resource || stage.work_units != 1.0))) {
+            throw std::runtime_error("control stages cannot own resource work; resource stages need service_time");
+        }
+        if (stage.service_time.has_value()
+            && (!std::isfinite(stage.service_time->mean*stage.work_units)
+                || stage.service_time->mean*stage.work_units <= 0.0)) {
+            throw std::runtime_error("scaled stage work is not finite");
+        }
+        json_t* calls = required(item,"calls");
+        if (!json_is_array(calls)) throw std::runtime_error("stage calls must be an array");
+        std::vector<bool> seen(static_cast<std::size_t>(count),false);
+        std::size_t child_index;
+        json_t* child;
+        json_array_foreach(calls,child_index,child) {
+            const auto target = required_integer(child,"service");
+            const double n = json_number(child,"mean_visits");
+            if (target < 0 || target >= count || n <= 0.0 || n > 10'000 || seen[target]) {
+                throw std::runtime_error("invalid or duplicate staged child call");
+            }
+            seen[target] = true;
+            stage.calls.push_back({static_cast<int>(target),n});
+        }
+        json_t* policy = required(item,"call_policy");
+        const auto execution = json_text(policy,"execution");
+        const auto completion = json_text(policy,"completion");
+        if (execution == "parallel") stage.policy.execution = CallExecution::Parallel;
+        else if (execution == "sequential") stage.policy.execution = CallExecution::Sequential;
+        else if (execution == "choice") stage.policy.execution = CallExecution::Choice;
+        else throw std::runtime_error("invalid staged call execution");
+        if (completion == "all") stage.policy.completion = CallCompletion::All;
+        else if (completion == "quorum") stage.policy.completion = CallCompletion::Quorum;
+        else if (completion == "background") stage.policy.completion = CallCompletion::Background;
+        else throw std::runtime_error("invalid staged completion");
+        stage.policy.required = required_integer(policy,"required");
+        if (stage.policy.completion == CallCompletion::Quorum) {
+            if (stage.policy.execution != CallExecution::Parallel || stage.policy.required <= 0
+                || stage.policy.required > static_cast<std::int64_t>(stage.calls.size())) {
+                throw std::runtime_error("invalid staged quorum");
+            }
+            for (const auto& c : stage.calls) if (c.mean_visits != 1.0) {
+                throw std::runtime_error("staged quorum requires distinct one-call members");
+            }
+        } else if (stage.policy.required != 0) throw std::runtime_error("required only applies to staged quorum");
+        if (stage.policy.completion == CallCompletion::Background
+            && stage.policy.execution != CallExecution::Parallel) throw std::runtime_error("staged background calls must be parallel");
+        if (stage.policy.execution == CallExecution::Choice) {
+            double total = 0.0;
+            for (const auto& c : stage.calls) total += c.mean_visits;
+            if (stage.policy.completion != CallCompletion::All || std::abs(total-1.0)>1e-10) {
+                throw std::runtime_error("stage choice probabilities must sum to one");
+            }
+        }
+        json_t* retry = json_object_get(item, "retry");
+        if (retry != nullptr && !json_is_null(retry)) {
+            if (stage.resource >= 0 || stage.calls.size() != 1 || stage.calls[0].mean_visits != 1.0
+                || stage.policy.execution != CallExecution::Parallel
+                || stage.policy.completion != CallCompletion::All || !json_is_object(retry))
+                throw std::runtime_error("retry requires a single-child resource-free all-response stage");
+            const auto maximum = required_integer(retry, "max_attempts");
+            if (maximum < 1 || maximum > 100) throw std::runtime_error("invalid retry attempt bound");
+            stage.retry_max = static_cast<int>(maximum);
+            stage.attempt_timeout = json_number(retry, "attempt_timeout_seconds");
+            if (stage.attempt_timeout < 0.0) throw std::runtime_error("invalid attempt timeout");
+            json_t* backoff = required(retry, "backoff");
+            if (!json_is_null(backoff)) stage.retry_backoff = parse_distribution(backoff, false);
+        }
+        json_t* cache = json_object_get(item, "cache");
+        if (cache != nullptr && !json_is_null(cache)) {
+            if (!json_is_object(cache) || stage.resource < 0 || !services[stage.resource].cache.has_value()
+                || stage.retry_max > 0 || stage.policy.execution != CallExecution::Parallel
+                || stage.policy.completion != CallCompletion::All)
+                throw std::runtime_error("invalid cache operation stage");
+            const auto& spec = services[stage.resource].cache.value();
+            const auto action = json_text(cache, "operation");
+            if (action == "lookup") stage.cache_action = 0;
+            else if (action == "put") stage.cache_action = 1;
+            else if (action == "invalidate") stage.cache_action = 2;
+            else throw std::runtime_error("unknown cache operation");
+            const auto hit = required_integer(cache, "hit"), miss = required_integer(cache, "miss");
+            if (hit < -1 || hit >= count || miss < -1 || miss >= count
+                || (stage.cache_action == 0 && (miss < 0 || hit == miss))
+                || (stage.cache_action != 0 && !stage.calls.empty()))
+                throw std::runtime_error("invalid cache operation branches");
+            json_t* fill = required(cache, "fill_on_miss");
+            if (!json_is_boolean(fill)) throw std::runtime_error("invalid cache fill rule");
+            stage.cache_fill = json_is_true(fill);
+            stage.cache_hit = static_cast<int>(hit); stage.cache_miss = static_cast<int>(miss);
+            std::vector<int> branches;
+            if (stage.cache_action == 0) {
+                if (hit >= 0) branches.push_back(static_cast<int>(hit));
+                branches.push_back(static_cast<int>(miss));
+            } else if (hit != -1 || miss != -1) throw std::runtime_error("non-lookup cache operation has branches");
+            if (stage.calls.size() != branches.size()) throw std::runtime_error("cache branches disagree with graph edges");
+            for (const auto& child : stage.calls) {
+                if (child.mean_visits != 1.0 || std::find(branches.begin(),branches.end(),child.service)==branches.end())
+                    throw std::runtime_error("cache branches disagree with graph edges");
+            }
+            if ((spec.fixed_ratio && (stage.cache_action != 0 || spec.hit_ratios[class_id] < 0.0))
+                || (!spec.fixed_ratio && spec.accesses[class_id].empty()))
+                throw std::runtime_error("cache stage lacks class-specific evidence");
+            stage.cache_operation = true;
+        }
+        result.stages.push_back(std::move(stage));
+    }
+    bool any_entry = false;
+    json_array_foreach(entries,index,item) {
+        if (!json_is_integer(item) || json_integer_value(item) < -1 || json_integer_value(item) >= count) {
+            throw std::runtime_error("invalid staged entry index");
+        }
+        const int entry = static_cast<int>(json_integer_value(item));
+        result.stage_entries.push_back(entry);
+        any_entry = any_entry || entry >= 0;
+    }
+    if (!any_entry) throw std::runtime_error("stage workflow needs an external entry");
+    std::vector<int> state(static_cast<std::size_t>(count),0);
+    std::vector<double> maximum(static_cast<std::size_t>(count),0.0);
+    std::function<double(int)> walk = [&](int node) {
+        if (state[node] == 1) throw std::runtime_error("stage graph must be acyclic");
+        if (state[node] == 2) return maximum[node];
+        state[node] = 1;
+        const Stage& stage = result.stages[node];
+        double branches = 0.0;
+        for (const auto& c : stage.calls) {
+            const double work = std::ceil(c.mean_visits)*walk(c.service);
+            branches = stage.policy.execution == CallExecution::Choice
+                ? std::max(branches,work) : branches+work;
+        }
+        maximum[node] = 1.0+branches*std::max(1,stage.retry_max)+(stage.next >= 0 ? walk(stage.next) : 0.0);
+        if (maximum[node] > 10'000) throw std::runtime_error("stage graph exceeds visit guard");
+        state[node] = 2;
+        return maximum[node];
+    };
+    for (int entry : result.stage_entries) if (entry >= 0) walk(entry);
+    for (int value : state) if (value != 2) throw std::runtime_error("unreachable execution stage");
+}
+
+CacheSpec parse_cache(json_t* raw, const std::vector<std::string>& classes) {
+    if (!json_is_object(raw) || json_object_size(raw) != 5)
+        throw std::runtime_error("invalid cache policy fields");
+    CacheSpec cache;
+    cache.hit_ratios.assign(classes.size(), -1.0);
+    cache.accesses.resize(classes.size()); cache.cyclic.assign(classes.size(), false);
+    auto bytes = [](json_t* object, const char* key) {
+        const auto n = required_integer(object,key);
+        if (n < 1 || n > (1LL<<60)) throw std::runtime_error("invalid cache byte capacity");
+        return static_cast<std::uint64_t>(n);
+    };
+    cache.capacity = bytes(raw,"capacity_bytes_per_replica");
+    const auto mode = json_text(raw,"mode");
+    if (mode == "fixed_hit_ratio") {
+        cache.fixed_ratio = true;
+        if (bytes(raw,"observed_capacity_bytes_per_replica") != cache.capacity)
+            throw std::runtime_error("fixed hit ratio cannot extrapolate cache memory");
+        const auto replicas = required_integer(raw,"observed_replicas");
+        if (replicas < 1 || replicas > 1'000'000) throw std::runtime_error("invalid observed cache replicas");
+        cache.observed_replicas = static_cast<int>(replicas);
+        json_t* ratios = required(raw,"hit_ratio_by_class");
+        if (!json_is_object(ratios) || json_object_size(ratios) == 0) throw std::runtime_error("missing cache ratios");
+        const char* key; json_t* value;
+        json_object_foreach(ratios,key,value) {
+            const auto found = std::find(classes.begin(),classes.end(),key);
+            const double p = json_number(ratios,key);
+            if (found == classes.end() || p < 0.0 || p > 1.0) throw std::runtime_error("invalid class cache ratio");
+            cache.hit_ratios[std::distance(classes.begin(),found)] = p;
+        }
+        return cache;
+    }
+    if (mode != "lru") throw std::runtime_error("unsupported cache model");
+    cache.ttl = json_number(raw,"ttl_seconds");
+    if (cache.ttl < 0.0) throw std::runtime_error("invalid cache TTL");
+    json_t* sizes = required(raw,"key_sizes_bytes");
+    json_t* profiles = required(raw,"accesses_by_class");
+    if (!json_is_object(sizes) || json_object_size(sizes) == 0 || json_object_size(sizes)>1'000'000
+        || !json_is_object(profiles) || json_object_size(profiles) == 0) throw std::runtime_error("invalid cache key evidence");
+    const char* key; json_t* value;
+    json_object_foreach(sizes,key,value) cache.keys.push_back(key);
+    std::sort(cache.keys.begin(),cache.keys.end());
+    std::unordered_map<std::string,int> ids;
+    for (std::size_t i=0;i<cache.keys.size();++i) {
+        if (cache.keys[i].empty()) throw std::runtime_error("empty cache key");
+        ids[cache.keys[i]] = static_cast<int>(i);
+        cache.sizes.push_back(bytes(sizes,cache.keys[i].c_str()));
+    }
+    json_object_foreach(profiles,key,value) {
+        const auto found = std::find(classes.begin(),classes.end(),key);
+        if (found == classes.end()) throw std::runtime_error("unknown cache request class");
+        const std::size_t c = std::distance(classes.begin(),found);
+        const auto sampling = json_text(value,"sampling");
+        if (sampling != "iid" && sampling != "cyclic_trace") throw std::runtime_error("invalid cache key sampling");
+        cache.cyclic[c] = sampling == "cyclic_trace";
+        json_t* keys = required(value,"keys");
+        if (!json_is_array(keys) || json_array_size(keys)==0 || json_array_size(keys)>1'000'000)
+            throw std::runtime_error("invalid cache access sequence");
+        std::size_t index; json_t* raw_key;
+        json_array_foreach(keys,index,raw_key) {
+            const char* name = json_string_value(raw_key);
+            if (name == nullptr || !ids.count(name)) throw std::runtime_error("unknown accessed cache key");
+            cache.accesses[c].push_back(ids[name]);
+        }
+    }
+    return cache;
+}
+
+void parse_component_policies(Service& service, json_t* raw, const std::vector<std::string>& classes) {
+    if (raw == nullptr) return;
+    if (!json_is_object(raw)) throw std::runtime_error("component_policies must be an object");
+    const char* key; json_t* value;
+    json_object_foreach(raw, key, value) {
+        const std::string name(key);
+        if (name == "admission_queue") {
+            if (!json_is_object(value) || json_object_size(value) != 2)
+                throw std::runtime_error("invalid admission queue policy");
+            json_t* capacity = required(value, "capacity_per_replica");
+            if (!json_is_null(capacity)) {
+                const auto count = required_integer(value, "capacity_per_replica");
+                if (count < 0 || count > 1'000'000) throw std::runtime_error("invalid pending capacity");
+                service.pending_capacity = static_cast<int>(count);
+            }
+            service.pending_timeout = json_number(value, "timeout_seconds");
+            if (service.pending_timeout < 0.0) throw std::runtime_error("invalid pending timeout");
+        } else if (name == "rate_limit") {
+            if (!json_is_object(value) || json_object_size(value) != 3
+                || service.replica_queue_model == ReplicaQueueModel::Pooled)
+                throw std::runtime_error("rate limit requires independent replica queues");
+            service.token_rate = json_number(value, "rate_per_second");
+            const auto burst = required_integer(value, "burst");
+            const auto action = json_text(value, "action");
+            if (service.token_rate <= 0.0 || burst < 1 || burst > 1'000'000
+                || (action != "wait" && action != "reject")) throw std::runtime_error("invalid token bucket");
+            service.token_burst = static_cast<int>(burst);
+            service.token_reject = action == "reject";
+        } else if (name == "failure_probability") {
+            service.failure_probability = json_number(raw, key);
+            if (service.failure_probability < 0.0 || service.failure_probability > 1.0)
+                throw std::runtime_error("invalid failure probability");
+        } else if (name == "lifecycle") {
+            if (!json_is_object(value) || json_object_size(value) != 3
+                || service.replica_queue_model == ReplicaQueueModel::Pooled)
+                throw std::runtime_error("instance lifecycle requires independent queues");
+            service.startup_delay = parse_distribution(required(value, "startup_delay"), false);
+            service.idle_timeout = json_number(value, "idle_timeout_seconds");
+            json_t* warm = required(value, "initially_warm");
+            if (service.idle_timeout <= 0.0 || !json_is_boolean(warm))
+                throw std::runtime_error("invalid instance lifecycle");
+            service.initially_warm = json_is_true(warm);
+        } else if (name == "cache") {
+            service.cache = parse_cache(value,classes);
+            if ((service.cache->fixed_ratio && service.replicas != service.cache->observed_replicas)
+                || (!service.cache->fixed_ratio && service.replica_queue_model != ReplicaQueueModel::IndependentKeyHash))
+                throw std::runtime_error("cache replica/dispatch policy does not match its evidence");
+        } else throw std::runtime_error("unknown component policy: " + name);
+    }
+    if ((service.pending_capacity >= 0 || service.pending_timeout > 0.0)
+        && service.concurrency_capacity == 0 && service.token_rate == 0.0)
+        throw std::runtime_error("admission policy requires concurrency or rate limit");
+    if (service.cache.has_value() && service.cache->fixed_ratio && service.startup_delay.has_value())
+        throw std::runtime_error("cold cache lifecycle requires explicit key state");
+}
+
 Workload parse_workload(json_t* raw) {
     Workload workload;
     workload.name = json_text(raw, "name");
@@ -2133,6 +3140,8 @@ Workload parse_workload(json_t* raw) {
         throw std::runtime_error("workload must contain request classes");
     }
     const std::size_t request_class_count = json_array_size(classes);
+    std::vector<std::string> class_names;
+    for (std::size_t c=0;c<request_class_count;++c) class_names.push_back(json_text(json_array_get(classes,c),"name"));
     json_t* services = required(raw, "services");
     if (!json_is_array(services) || json_array_size(services) == 0) {
         throw std::runtime_error("workload must contain services");
@@ -2157,6 +3166,8 @@ Workload parse_workload(json_t* raw) {
                 service.execution_model = ExecutionModel::FixedSlots;
             } else if (model == "processor_sharing") {
                 service.execution_model = ExecutionModel::ProcessorSharing;
+            } else if (model == "delay") {
+                service.execution_model = ExecutionModel::Delay;
             } else {
                 throw std::runtime_error(
                     "unsupported execution_model: " + model
@@ -2180,6 +3191,8 @@ Workload parse_workload(json_t* raw) {
             } else if (model == "independent_round_robin") {
                 service.replica_queue_model =
                     ReplicaQueueModel::IndependentRoundRobin;
+            } else if (model == "independent_key_hash") {
+                service.replica_queue_model = ReplicaQueueModel::IndependentKeyHash;
             } else {
                 throw std::runtime_error(
                     "unsupported replica_queue_model: " + model
@@ -2187,6 +3200,24 @@ Workload parse_workload(json_t* raw) {
             }
         }
         service.capacity = static_cast<int>(capacity);
+        json_t* bandwidth = json_object_get(item, "cpu_bandwidth");
+        if (bandwidth != nullptr && !json_is_null(bandwidth)) {
+            if (!json_is_object(bandwidth)
+                || service.execution_model != ExecutionModel::ProcessorSharing
+                || service.replica_queue_model == ReplicaQueueModel::Pooled) {
+                throw std::runtime_error("CPU bandwidth requires independent processor-sharing queues");
+            }
+            service.cpu_quota = json_number(bandwidth, "quota_seconds");
+            service.cpu_period = json_number(bandwidth, "period_seconds");
+            const std::int64_t parallelism = required_integer(bandwidth, "parallelism");
+            if (!std::isfinite(service.cpu_quota) || service.cpu_quota < 0.001
+                || !std::isfinite(service.cpu_period) || service.cpu_period < 0.001
+                || service.cpu_period > 1.0 || parallelism < 1 || parallelism > 4096
+                || service.cpu_quota / service.cpu_period > parallelism) {
+                throw std::runtime_error("invalid CPU bandwidth declaration");
+            }
+            service.cpu_parallelism = static_cast<int>(parallelism);
+        }
         json_t* raw_concurrency_capacity = json_object_get(
             item,
             "concurrency_capacity"
@@ -2246,6 +3277,9 @@ Workload parse_workload(json_t* raw) {
             item,
             "service_time_distributions"
         );
+        parse_component_policies(service, json_object_get(item, "component_policies"), class_names);
+        if (service.replica_queue_model == ReplicaQueueModel::IndependentKeyHash && !service.cache.has_value())
+            throw std::runtime_error("key-hash queues require cache key evidence");
         if (distributions != nullptr) {
             if (!json_is_array(distributions)
                 || json_array_size(distributions) != request_class_count) {
@@ -2308,6 +3342,13 @@ Workload parse_workload(json_t* raw) {
     json_array_foreach(classes, index, item) {
         RequestClass request_class;
         request_class.name = json_text(item, "name");
+        json_t* boundary = json_object_get(item, "completion_boundary");
+        if (boundary != nullptr) {
+            const auto value = json_text(item, "completion_boundary");
+            if (value != "client_response" && value != "all_work")
+                throw std::runtime_error("invalid request completion boundary");
+            request_class.all_work_completion = value == "all_work";
+        }
         request_class.concurrency_weight = json_number(item, "concurrency_weight");
         if (request_class.concurrency_weight < 0.0
             || request_class.concurrency_weight > 1.0) {
@@ -2326,6 +3367,8 @@ Workload parse_workload(json_t* raw) {
                 request_class.flow_kind = FlowKind::Workflow;
             } else if (name == "calls") {
                 request_class.flow_kind = FlowKind::Calls;
+            } else if (name == "stages") {
+                request_class.flow_kind = FlowKind::Stages;
             } else {
                 throw std::runtime_error("unsupported flow_kind: " + name);
             }
@@ -2506,6 +3549,15 @@ Workload parse_workload(json_t* raw) {
                 }
             }
         }
+        json_t* staged = json_object_get(item,"stage_workflow");
+        if (request_class.flow_kind == FlowKind::Stages) {
+            if (staged == nullptr || !json_is_object(staged) || !request_class.workflow.empty()) {
+                throw std::runtime_error("stages flow_kind needs an exclusive stage_workflow");
+            }
+            parse_stage_workflow(staged,request_class,workload.services,index);
+        } else if (staged != nullptr && !json_is_null(staged)) {
+            throw std::runtime_error("stage_workflow requires stages flow_kind");
+        }
         if (request_class.flow_kind == FlowKind::Workflow
             && request_class.workflow.empty()) {
             throw std::runtime_error("workflow flow_kind needs workflow visits");
@@ -2597,6 +3649,10 @@ Workload parse_workload(json_t* raw) {
             parse_distribution(required(item, "interarrival_distribution"), true)
         });
         const auto& workflow = workload.request_classes[request_class].workflow;
+        const auto& staged_class = workload.request_classes[request_class];
+        if (staged_class.flow_kind == FlowKind::Stages && staged_class.stage_entries[entry_service] < 0) {
+            throw std::runtime_error("external stream lacks a stage entry");
+        }
         if (!workflow.empty()
             && workflow.front().service != static_cast<int>(entry_service)) {
             throw std::runtime_error(

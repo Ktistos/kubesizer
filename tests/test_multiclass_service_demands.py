@@ -2,6 +2,7 @@ import copy
 
 import pytest
 
+from calibration import select_warmup_pilot_parameters
 from calibration.profile import experiment_fingerprints
 from performance_models import QueueingNetworkType, System, parse_workload_spec
 from statistical_workflow import optimize_with_analytical_model
@@ -55,6 +56,23 @@ def test_multiclass_mixture_uses_workload_for_stability_and_variability():
     assert system.get_service_time_scvs() == pytest.approx([0.25])
     assert system.get_minimum_stable_replicas() == [1]
     assert system.get_analytical_model_details()["api"]["model"].startswith("G/G/c")
+
+
+def test_warmup_capacity_uses_visit_weighted_processing_demands():
+    workload = _workload()
+    workload["request_classes"] = {
+        name: workload["request_classes"][name] for name in ("slow", "fast")
+    }
+    for streams in workload["traffic_model"]["entry_services"].values():
+        streams["api"]["rate"] = 1.5
+    workload["traffic_model"]["service_times"]["api"]["slow"]["mean"] = 0.5
+    system = System("mixed service demands", workload, QueueingNetworkType.OPEN)
+
+    parameters = select_warmup_pilot_parameters(system)
+
+    assert parameters.minimum_replica_configuration == (1,)
+    assert parameters.minimum_configuration_utilizations == pytest.approx((0.9,))
+    assert parameters.capacity_slacks == pytest.approx((1 / 3,))
 
 
 def test_each_class_gets_its_own_service_mean_and_the_shared_fcfs_wait():

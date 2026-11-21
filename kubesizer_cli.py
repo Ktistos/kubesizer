@@ -40,7 +40,7 @@ from statistical_workflow import (
     validate_final_configuration,
 )
 
-CLI_VERSION = "0.5.0"
+CLI_VERSION = "0.6.0"
 DEFAULT_MAXIMUM_REPLICAS = 10
 DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
 

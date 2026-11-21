@@ -2,3 +2,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 native_backend/cpp/build-*/
+/event_calendar_test
+.vibe-wise/

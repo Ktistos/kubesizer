@@ -1,0 +1,56 @@
+# Synthetic shared 8 MB/s link, two one-way transfers, connection and gateway slots.
+replica_constraints:
+  gateway: {minimum: 1, maximum: 2}
+  connection_pool: {fixed: 1}
+  shared_link: {fixed: 1}
+  backend: {minimum: 1, maximum: 2}
+request_classes:
+  api:
+    concurrency_weight: 1
+    maximum_terminal_failure_rate: 0.02
+    end_to_end_latency_slos: {mean_seconds: 0.1}
+    stage_workflow:
+      entries: {gateway: accept}
+      stages:
+        accept:
+          resource: gateway
+          service_time: {distribution: deterministic, mean: 0.001}
+          hold_resource: true
+          calls: {acquire_connection: 1}
+        acquire_connection:
+          resource: connection_pool
+          service_time: {distribution: deterministic, mean: 0.000001}
+          hold_resource: true
+          calls: {request_bytes: 1}
+        request_bytes:
+          resource: shared_link
+          service_time: {distribution: deterministic, mean: 0.000000125}
+          work_units: 1024
+          unit: bytes
+          next: request_transit
+        request_transit:
+          delay: {distribution: deterministic, mean: 0.0005}
+          next: compute
+        compute:
+          resource: backend
+          service_time: {distribution: exponential, rate: 250}
+          next: response_bytes
+        response_bytes:
+          resource: shared_link
+          service_time: {distribution: deterministic, mean: 0.000000125}
+          work_units: 8192
+          unit: bytes
+          next: response_transit
+        response_transit:
+          delay: {distribution: deterministic, mean: 0.0005}
+traffic_model:
+  entry_services:
+    api:
+      gateway: {distribution: exponential, rate: 10}
+  service_times:
+    gateway:
+      concurrency_limit_per_replica: 16
+      admission_queue: {capacity_per_replica: 32, timeout_seconds: 0.1}
+    connection_pool: {execution_model: delay, concurrency_limit_per_replica: 2}
+    shared_link: {execution_model: processor_sharing}
+    backend: {}

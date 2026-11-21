@@ -31,6 +31,13 @@ layout nor implements object placement, full commit phases, healing or pool
 expansion. `analytical-quorum.yaml` demonstrates opt-in conditional mean
 bounds with analytically supported local queues.
 
+`staged-storage.yaml` declares metadata, encoding, fragment and finalization
+phases that revisit the same physical disks. `staged-overlap.yaml` overlaps a
+local CPU/flush chain with a remote acknowledgement chain before finalization.
+Both are synthetic examples of generic stage/resource separation, not fitted
+MinIO/PostgreSQL protocol adapters. See
+[the staged-workflow guide](../../docs/STAGED_RESOURCE_WORKFLOWS.md).
+
 Use the existing CLI with `--workload FILE --replica-evaluation simulation`,
 or `--stateful-candidates candidates.yaml --replica-evaluation simulation`.
 For analytical bounds use `analytical-quorum.yaml` and

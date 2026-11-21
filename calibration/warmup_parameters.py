@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from performance_models import QueueingNetworkType
+from metrics.time_weighted_buckets import complete_bucket_count
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class WarmupPilotParameters:
     bucket_counts: tuple[int, int, int]
     replication_count: int
     calibration_seeds: tuple[int, ...]
+    capacity_projections_only: bool = False
 
 
 def _round_up_to_multiple(value, multiple):
@@ -68,17 +70,6 @@ def select_warmup_pilot_parameters(
     )
     service_names = tuple(service.get_name() for service in services)
     request_class_names = tuple(system.get_request_classes())
-    per_slot_service_rates = tuple(float(service.get_mu()) for service in services)
-    if any(
-        not math.isfinite(rate) or rate <= 0 for rate in per_slot_service_rates
-    ):
-        raise ValueError("All service rates must be finite and greater than zero.")
-    processing_slots = system.get_service_processing_slots_per_replica()
-    service_rates = tuple(
-        rate * processing_slots[service.get_name()]
-        for service, rate in zip(services, per_slot_service_rates)
-    )
-
     external_arrival_rates_by_class = tuple(
         tuple(float(service.get_gamma(request_class)) for service in services)
         for request_class in request_class_names
@@ -122,8 +113,11 @@ def select_warmup_pilot_parameters(
         raise ValueError("Warm-up calibration requires positive external traffic.")
 
     try:
-        request_class_effective_rates = system.get_request_class_effective_arrival_rates()
+        request_class_effective_rates = (
+            system.get_request_class_effective_arrival_rates()
+        )
         raw_effective_arrival_rates = system.get_effective_arrival_rates()
+        service_time_means = system.get_service_time_means()
     except np.linalg.LinAlgError as error:
         raise ValueError(
             "Open-network traffic equations must have a finite unique solution."
@@ -133,14 +127,21 @@ def select_warmup_pilot_parameters(
     for arrival_rate in raw_effective_arrival_rates:
         arrival_rate = float(arrival_rate)
         if not math.isfinite(arrival_rate) or arrival_rate < -1e-12:
-            raise ValueError(
-                "Effective arrival rates must be finite and non-negative."
-            )
+            raise ValueError("Effective arrival rates must be finite and non-negative.")
         effective_arrival_rates.append(max(0.0, arrival_rate))
     effective_arrival_rates = tuple(effective_arrival_rates)
     effective_arrival_rates_by_class = tuple(
         tuple(float(value) for value in request_class_effective_rates[request_class])
         for request_class in request_class_names
+    )
+
+    if any(not math.isfinite(mean) or mean <= 0 for mean in service_time_means):
+        raise ValueError("All service rates must be finite and greater than zero.")
+    per_slot_service_rates = tuple(1.0 / mean for mean in service_time_means)
+    processing_slots = system.get_service_processing_slots_per_replica()
+    service_rates = tuple(
+        rate * processing_slots[service.get_name()]
+        for service, rate in zip(services, per_slot_service_rates)
     )
 
     analytical_minimum = tuple(system.get_minimum_stable_replicas())
@@ -172,7 +173,14 @@ def select_warmup_pilot_parameters(
             effective_arrival_rates,
         )
     )
-    if any(not math.isfinite(slack) or slack <= 0 for slack in capacity_slacks):
+    projected = (
+        not getattr(system, "has_static_stability_model", lambda: True)()
+        or "delay"
+        in getattr(system, "get_service_execution_models", lambda: {})().values()
+    )
+    if not projected and any(
+        not math.isfinite(slack) or slack <= 0 for slack in capacity_slacks
+    ):
         raise ValueError(
             "The minimum replica configuration must have positive capacity slack."
         )
@@ -185,7 +193,7 @@ def select_warmup_pilot_parameters(
             service_rates,
         )
     )
-    if any(utilization >= 1.0 for utilization in utilizations):
+    if not projected and any(utilization >= 1.0 for utilization in utilizations):
         raise ValueError("The minimum replica configuration must be strictly stable.")
 
     # Bucket widths describe the duration of an individual service visit, not
@@ -198,7 +206,11 @@ def select_warmup_pilot_parameters(
         initial_bucket_width * 2.0,
     )
 
-    slowest_congestion_scale = max(1.0 / slack for slack in capacity_slacks)
+    slowest_congestion_scale = (
+        slowest_mean_service_time
+        if projected
+        else max(1.0 / slack for slack in capacity_slacks)
+    )
     raw_pilot_horizon = max(
         100.0 * slowest_congestion_scale,
         1000.0 / total_external_arrival_rate,
@@ -209,7 +221,7 @@ def select_warmup_pilot_parameters(
         max(bucket_width_candidates),
     )
     bucket_counts = tuple(
-        int(round(pilot_horizon / bucket_width))
+        complete_bucket_count(pilot_horizon, bucket_width)
         for bucket_width in bucket_width_candidates
     )
 
@@ -236,7 +248,6 @@ def select_warmup_pilot_parameters(
         pilot_horizon=pilot_horizon,
         bucket_counts=bucket_counts,
         replication_count=replication_count,
-        calibration_seeds=tuple(
-            range(seed_start, seed_start + replication_count)
-        ),
+        calibration_seeds=tuple(range(seed_start, seed_start + replication_count)),
+        capacity_projections_only=projected,
     )

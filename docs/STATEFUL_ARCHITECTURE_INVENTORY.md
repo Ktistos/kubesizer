@@ -44,7 +44,7 @@ is supplied before evaluation.
 | Multi-leader/active-active | [CouchDB conflicts][couch] | Separate origin request classes can declare finite propagation paths. Conflict detection, retries and reconciliation are not inferred or executed. |
 | Leaderless/tunable-consistency replication | [Cassandra Dynamo architecture][cassandra] | Declared target fan-out and response count; background work continues. Read repair, speculative retry, and reconciliation require additional models. |
 | Sharded/partitioned storage with replication inside each shard | [MongoDB cluster components][mongo], [Redis Cluster][redis] | Explicit shard routing, fixed shard members and separate class demands. No automatic shard-key distribution, repartitioning or transaction semantics. |
-| Search scatter/gather over shard copies | [Elasticsearch read/write paths][elastic] | Parallel fan-out across shards, exclusive choice within a shard's eligible copies. Multi-round query/fetch using the same resources is not a built-in protocol. |
+| Search scatter/gather over shard copies | [Elasticsearch read/write paths][elastic] | Parallel fan-out across shards and exclusive choice within eligible copies. Finite query/fetch phases can share resources through staged workflows; an actual product phase mapping is still required. |
 | Erasure-coded object/block storage | [MinIO design][minio-design], [MinIO erasure coding][minio-ec], [Ceph introduction][ceph] | Explicit coordinator/encoding/member/disk queues plus declared completion threshold. Not a MinIO/Ceph protocol implementation; fragment size, placement, data protection and expansion legality remain external facts. |
 | Separate compute and shared/distributed storage | [Aurora architecture][aurora], [FoundationDB paper][fdb] | Several compute services can call the same storage resource and contend there. No automatic storage-tier cost/capacity model or transaction coordinator. |
 | Metadata and data services / distributed filesystem | [Ceph architecture paper][ceph-paper] | Separate service paths for metadata and data. Cache coherence, leases, locks and metadata rebalancing remain unsupported. |
@@ -79,8 +79,11 @@ must not be described as support for arbitrary StatefulSets.
    unresolved alternatives instead of claiming universal scaling laws.
 
 See [the input and usage guide](STATEFUL_MODELING.md) and the
-[experiment protocol](STATEFUL_EXPERIMENT_PROTOCOL.md). No live experiment was
-run and no product-specific accuracy claim follows from the semantic tests.
+[staged workflow guide](STAGED_RESOURCE_WORKFLOWS.md). The initial inventory
+and semantic tests produced no product-specific accuracy evidence. Subsequent
+live pilots have separate protocols/status; implementation capability alone
+does not validate a product model. See the
+[experiment protocol](STATEFUL_EXPERIMENT_PROTOCOL.md).
 
 ## Primary sources
 

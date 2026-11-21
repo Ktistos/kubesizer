@@ -1,0 +1,24 @@
+# Synthetic fixed instance pool. Does not simulate an autoscaling controller.
+replica_constraints:
+  function: {minimum: 1, maximum: 3}
+request_classes:
+  invoke:
+    concurrency_weight: 1
+    routing: {}
+    maximum_terminal_failure_rate: 0.02
+    end_to_end_latency_slos: {mean_seconds: 0.3}
+traffic_model:
+  entry_services:
+    invoke:
+      function: {distribution: exponential, rate: 2}
+  service_times:
+    function:
+      distribution: exponential
+      rate: 100
+      execution_model: processor_sharing
+      concurrency_limit_per_replica: 4
+      admission_queue: {capacity_per_replica: 8, timeout_seconds: 1}
+      lifecycle:
+        startup_delay: {distribution: deterministic, mean: 0.12}
+        idle_timeout_seconds: 0.2
+        initially_warm: false

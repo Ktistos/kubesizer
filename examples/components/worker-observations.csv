@@ -1,0 +1,5 @@
+metric,component,request_class,window_start,window_end,value,unit,boundary,kind
+cpu,worker,job,2026-01-01T00:00:00Z,2026-01-01T00:01:00Z,0.5,cpu_seconds,local_cpu,total
+completed,worker,job,2026-01-01T00:00:00Z,2026-01-01T00:01:00Z,100,requests,service_completion,total
+cpu,worker,job,2026-01-01T00:01:00Z,2026-01-01T00:02:00Z,4.5,cpu_seconds,local_cpu,total
+completed,worker,job,2026-01-01T00:01:00Z,2026-01-01T00:02:00Z,900,requests,service_completion,total

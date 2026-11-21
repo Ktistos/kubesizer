@@ -75,6 +75,9 @@ characterization topology before claiming stateful sizing generalization.
 
 ## Current status
 
-Only local semantic verification is authorized and performed during this
-implementation. Live stateful experiments have not been launched. Existing
-comparison campaign services and artifacts are left untouched.
+The implementation initially performed only local semantic verification.
+The user subsequently authorized an isolated Okeanos pilot and a temporary
+comparison-campaign pause. The bounded first-stage design and lifecycle are in
+[STATEFUL_PRELIMINARY_PILOT.md](STATEFUL_PRELIMINARY_PILOT.md). Its run status
+must be consulted before describing collection or results as completed.
+The existing comparison's frozen implementation and evidence are not amended.

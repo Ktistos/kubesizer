@@ -6,6 +6,8 @@ from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 
+import numpy as np
+
 from .profile import save_calibration_profile
 from .reporting import save_warmup_calibration
 
@@ -22,6 +24,8 @@ class StatisticalCalibrationArtifacts:
 
 
 def _json_value(value):
+    if isinstance(value, np.generic):
+        return _json_value(value.item())
     if isinstance(value, float) and not math.isfinite(value):
         return str(value)
     if isinstance(value, Enum):
@@ -69,12 +73,8 @@ def calibration_diagnostics_summary(warmup, measurement, options):
         "warmup": {
             "global_warmup": warmup.global_warmup,
             "bucket_width": warmup.bucket_width,
-            "maximum_buckets_per_series": (
-                options.warmup_max_buckets_per_series
-            ),
-            "maximum_total_bucket_values": (
-                options.warmup_max_total_bucket_values
-            ),
+            "maximum_buckets_per_series": (options.warmup_max_buckets_per_series),
+            "maximum_total_bucket_values": (options.warmup_max_total_bucket_values),
             "analysis_window_length": cutoff.window_length,
             "minimum_stable_configuration": list(
                 warmup.final_parameters.minimum_replica_configuration
@@ -90,24 +90,19 @@ def calibration_diagnostics_summary(warmup, measurement, options):
                     "reference_level": item.reference_level,
                     "tolerance": item.tolerance,
                     "accepted_slope": item.accepted_slope,
-                    "accepted_total_fitted_change": (
-                        item.accepted_total_fitted_change
-                    ),
+                    "accepted_total_fitted_change": (item.accepted_total_fitted_change),
                 }
                 for item in cutoff.metric_diagnostics
             },
             "determining_metrics": list(cutoff.determining_metrics),
             "candidate_warmup": cutoff.candidate_warmup,
             "safety_window": cutoff.safety_window,
-            "horizon_comparison": _json_value(
-                final_minimum.horizon_comparison
-            ),
+            "horizon_comparison": _json_value(final_minimum.horizon_comparison),
             "bucket_width_sensitivity": _json_value(
                 final_minimum.final_analysis.bucket_width_sensitivity
             ),
             "representative_configurations": [
-                list(item)
-                for item in warmup.validation.representative_configurations
+                list(item) for item in warmup.validation.representative_configurations
             ],
             "validation_rounds": [
                 {
@@ -128,9 +123,7 @@ def calibration_diagnostics_summary(warmup, measurement, options):
             ],
         },
         "measurement": {
-            "global_measurement_duration": (
-                measurement.global_measurement_duration
-            ),
+            "global_measurement_duration": (measurement.global_measurement_duration),
             "initial_duration": measurement.initial_duration,
             "candidate_durations": list(measurement.candidate_durations),
             "external_arrival_rates": dict(
@@ -153,9 +146,7 @@ def calibration_diagnostics_summary(warmup, measurement, options):
                                 {
                                     "request_class": diagnostic.request_class,
                                     "accepted": diagnostic.accepted,
-                                    "interval": interval_summary(
-                                        diagnostic.interval
-                                    ),
+                                    "interval": interval_summary(diagnostic.interval),
                                     "doubled_interval": interval_summary(
                                         diagnostic.doubled_interval
                                     ),
@@ -274,9 +265,7 @@ def _save_series_svg(series, path, *, title, y_label):
     legend_y = 48
     for index, (label, points) in enumerate(series):
         color = colors[index % len(colors)]
-        coordinates = " ".join(
-            f"{x_coord(x):.2f},{y_coord(y):.2f}" for x, y in points
-        )
+        coordinates = " ".join(f"{x_coord(x):.2f},{y_coord(y):.2f}" for x, y in points)
         output.append(
             f'<polyline points="{coordinates}" fill="none" stroke="{color}" stroke-width="2"/>'
         )
@@ -330,10 +319,12 @@ def save_statistical_calibration(
     json_path = output_directory / "calibration_report.json"
     json_path.write_text(
         json.dumps(
-            {
-                "calibration_profile": profile.to_dict(),
-                "diagnostics": diagnostics,
-            },
+            _json_value(
+                {
+                    "calibration_profile": profile.to_dict(),
+                    "diagnostics": diagnostics,
+                }
+            ),
             indent=2,
             sort_keys=True,
             allow_nan=False,
@@ -359,8 +350,7 @@ def save_statistical_calibration(
             str(
                 _save_series_svg(
                     estimate_series,
-                    output_directory
-                    / f"{filename_prefix}_vs_measurement_duration.svg",
+                    output_directory / f"{filename_prefix}_vs_measurement_duration.svg",
                     title=f"{statistic_label} stability versus measurement duration",
                     y_label=f"pooled {statistic_label.lower()}",
                 )
@@ -434,8 +424,7 @@ def save_configuration_evaluation(evaluation, output_directory):
         statistic = first_interval.latency_statistic
         _save_series_svg(
             tuple(series),
-            output_directory
-            / f"replications_vs_{statistic}_ci_half_width.svg",
+            output_directory / f"replications_vs_{statistic}_ci_half_width.svg",
             title=f"Sequential {statistic} confidence interval precision",
             y_label="CI half-width",
         )

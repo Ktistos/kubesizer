@@ -1,0 +1,30 @@
+# Synthetic observations demonstrate the contract, not deployment accuracy.
+component_measurements:
+  version: 1
+  sources:
+    counters: {format: csv, path: worker-observations.csv}
+  estimates:
+    cpu_demand:
+      operation: ratio
+      unit: seconds
+      numerator: {source: counters, metric: cpu, component: worker, request_class: job, unit: cpu_seconds, boundary: local_cpu}
+      denominator: {source: counters, metric: completed, component: worker, request_class: job, unit: requests, boundary: service_completion}
+replica_constraints:
+  worker: {minimum: 1, maximum: 2}
+request_classes:
+  job:
+    concurrency_weight: 1
+    routing: {}
+    maximum_terminal_failure_rate: 0.02
+    end_to_end_latency_slos: {mean_seconds: 0.1}
+traffic_model:
+  entry_services:
+    job:
+      worker: {distribution: exponential, rate: 2}
+  service_times:
+    worker:
+      distribution: gamma
+      shape: 1
+      mean: {measurement: cpu_demand, unit: seconds}
+      concurrency_limit_per_replica: 2
+      admission_queue: {capacity_per_replica: 64, timeout_seconds: 1}

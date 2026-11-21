@@ -1,0 +1,56 @@
+# Synthetic phase example. No claim that this is MinIO's actual protocol/demand.
+# The same physical disks execute metadata, fragment and commit stages.
+analytical_call_model: response_bounds
+replica_constraints:
+  coordinator: {fixed: 1}
+  disk_1: {fixed: 1}
+  disk_2: {fixed: 1}
+  disk_3: {fixed: 1}
+  disk_4: {fixed: 1}
+request_classes:
+  put_64k:
+    concurrency_weight: 1
+    end_to_end_latency_slos: {mean_seconds: 0.1}
+    stage_workflow:
+      entries: {coordinator: metadata}
+      stages:
+        metadata:
+          calls: {meta_1: 1, meta_2: 1, meta_3: 1, meta_4: 1}
+          next: encode
+        meta_1: {resource: disk_1, service_time: {distribution: deterministic, mean: 0.001}}
+        meta_2: {resource: disk_2, service_time: {distribution: deterministic, mean: 0.001}}
+        meta_3: {resource: disk_3, service_time: {distribution: deterministic, mean: 0.001}}
+        meta_4: {resource: disk_4, service_time: {distribution: deterministic, mean: 0.001}}
+        encode:
+          resource: coordinator
+          service_time: {distribution: deterministic, mean: 0.00000001}
+          work_units: 65536
+          unit: byte
+          next: fragments
+        fragments:
+          calls: {fragment_1: 1, fragment_2: 1, fragment_3: 1, fragment_4: 1}
+          call_policy: {completion: quorum, required: 3}
+          next: commit
+        fragment_1: {resource: disk_1, service_time: {distribution: deterministic, mean: 0.0000001}, work_units: 32768, unit: byte}
+        fragment_2: {resource: disk_2, service_time: {distribution: deterministic, mean: 0.0000001}, work_units: 32768, unit: byte}
+        fragment_3: {resource: disk_3, service_time: {distribution: deterministic, mean: 0.0000001}, work_units: 32768, unit: byte}
+        fragment_4: {resource: disk_4, service_time: {distribution: deterministic, mean: 0.0000002}, work_units: 32768, unit: byte}
+        commit:
+          calls: {commit_1: 1, commit_2: 1, commit_3: 1, commit_4: 1}
+          next: respond
+        commit_1: {resource: disk_1, service_time: {distribution: deterministic, mean: 0.0005}}
+        commit_2: {resource: disk_2, service_time: {distribution: deterministic, mean: 0.0005}}
+        commit_3: {resource: disk_3, service_time: {distribution: deterministic, mean: 0.0005}}
+        commit_4: {resource: disk_4, service_time: {distribution: deterministic, mean: 0.0005}}
+        respond: {resource: coordinator, service_time: {distribution: deterministic, mean: 0.0001}}
+traffic_model:
+  entry_services:
+    put_64k:
+      coordinator: {distribution: exponential, rate: 5}
+  # Only physical resources own queues/replicas. Stage distributions define work.
+  service_times:
+    coordinator: {replica_queue_model: pooled}
+    disk_1: {replica_queue_model: pooled}
+    disk_2: {replica_queue_model: pooled}
+    disk_3: {replica_queue_model: pooled}
+    disk_4: {replica_queue_model: pooled}

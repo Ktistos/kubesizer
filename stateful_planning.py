@@ -75,6 +75,7 @@ def _context(system):
         "routing",
         "visits",
         "workflow",
+        "stage_workflow",
     }
     return {
         "classes": {

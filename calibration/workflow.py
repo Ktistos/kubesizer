@@ -1,6 +1,8 @@
 import math
 from dataclasses import dataclass, replace
 
+from metrics.time_weighted_buckets import complete_bucket_count
+
 from .cutoff import (
     WarmupCutoffNotFoundError,
     WarmupCutoffResult,
@@ -130,7 +132,7 @@ def parameters_with_pilot_horizon(parameters, pilot_horizon):
     largest_width = max(parameters.bucket_width_candidates)
     aligned_horizon = math.ceil(pilot_horizon / largest_width) * largest_width
     bucket_counts = tuple(
-        math.floor(aligned_horizon / width + 1e-12)
+        complete_bucket_count(aligned_horizon, width)
         for width in parameters.bucket_width_candidates
     )
     return replace(
@@ -153,10 +155,9 @@ def _parameters_with_bounded_bucket_count(parameters, maximum_bucket_count):
         or maximum_bucket_count < 500
     ):
         raise ValueError("maximum_bucket_count must be an integer of at least 500.")
-    finest_count = math.floor(
-        parameters.pilot_horizon
-        / min(parameters.bucket_width_candidates)
-        + 1e-12
+    finest_count = complete_bucket_count(
+        parameters.pilot_horizon,
+        min(parameters.bucket_width_candidates),
     )
     scale = 1
     while math.ceil(finest_count / scale) > maximum_bucket_count:
@@ -179,7 +180,7 @@ def _parameters_with_bounded_bucket_count(parameters, maximum_bucket_count):
         initial_bucket_width=float(parameters.initial_bucket_width * scale),
         bucket_width_candidates=candidates,
         bucket_counts=tuple(
-            math.floor(aligned_horizon / width + 1e-12)
+            complete_bucket_count(aligned_horizon, width)
             for width in candidates
         ),
     )
@@ -410,7 +411,7 @@ def calibrate_minimum_configuration(
                     simulation_parameters.bucket_width_candidates
                 ),
                 bucket_counts=tuple(
-                    math.floor(aligned_horizon / width + 1e-12)
+                    complete_bucket_count(aligned_horizon, width)
                     for width in simulation_parameters.bucket_width_candidates
                 ),
             )

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from performance_models.components import simulation_configuration_supported
 from enum import Enum
 
 from calibration import validate_profile_for_experiment
@@ -132,7 +133,7 @@ def validate_final_configuration(
     original = tuple(system.get_system_replicas())
     try:
         system.configure_system_replicas(configuration)
-        if not system.solve().get_stability():
+        if not simulation_configuration_supported(system):
             return result(
                 FinalValidationClassification.ANALYTICALLY_UNSTABLE,
                 "Selected configuration is analytically unstable.",
@@ -214,9 +215,7 @@ def validate_final_configuration(
         try:
             growth_diagnostics = latency_growth_diagnostics(
                 replications,
-                tuple(
-                    request_class for request_class, _ in profile.request_class_slos
-                ),
+                tuple(request_class for request_class, _ in profile.request_class_slos),
                 warmup_duration=profile.warmup_duration,
                 measurement_duration=profile.measurement_duration,
             )

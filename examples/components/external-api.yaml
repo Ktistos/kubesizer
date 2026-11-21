@@ -1,0 +1,31 @@
+# Synthetic fixed third-party quota. Replication must not multiply its quota.
+replica_constraints:
+  external_api: {fixed: 1}
+request_classes:
+  lookup:
+    concurrency_weight: 1
+    maximum_terminal_failure_rate: 0.01
+    end_to_end_latency_slos: {mean_seconds: 0.3}
+    stage_workflow:
+      entries: {external_api: invoke}
+      stages:
+        invoke:
+          calls: {attempt: 1}
+          retry:
+            max_attempts: 3
+            attempt_timeout_seconds: 0.1
+            backoff: {distribution: deterministic, mean: 0.01}
+        attempt:
+          resource: external_api
+          service_time: {distribution: exponential, rate: 50}
+traffic_model:
+  entry_services:
+    lookup:
+      external_api: {distribution: exponential, rate: 1}
+  service_times:
+    external_api:
+      execution_model: delay
+      concurrency_limit_per_replica: 4
+      rate_limit: {rate_per_second: 5, burst: 2, action: wait}
+      admission_queue: {capacity_per_replica: 16, timeout_seconds: 0.2}
+      failure_probability: 0.02

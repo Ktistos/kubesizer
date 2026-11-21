@@ -1,7 +1,14 @@
 # Kubesizer native simulation backend
 
-The stateful-performance branch uses protocol 15 and semantics v18. Per-source
+The stateful-performance branch uses protocol 18 and semantics v21. Per-source
 call policies add exclusive choice, quorum response, and background completion.
+Stage workflows add named phases and continuations over shared resource queues,
+including repeated resource visits and overlapping branches. See
+[staged resource workflows](../docs/STAGED_RESOURCE_WORKFLOWS.md).
+An explicit [CPU bandwidth model](../docs/CPU_BANDWIDTH_MODEL.md) adds
+per-replica quota replenishment and bounded parallel execution for simulation.
+Optional [component policies](../docs/PORTABLE_COMPONENTS.md) add bounded
+admission, token buckets, retries, cache state and fixed-pool instance lifecycles.
 Late branches retain valid ownership and resource load after an early client
 response. See [the stateful modeling guide](../docs/STATEFUL_MODELING.md) for
 the supported abstractions and analytical limits. Rebuild the backend when
@@ -100,7 +107,7 @@ all failure flags are false.
 The production workflow is exposed by `statistical_workflow.py` and described
 in `STATISTICAL_WORKFLOW.md`. Python calibrates and freezes global warm-up `W`,
 measurement duration `M`, sequential replication limits and seed namespaces.
-For every analytically stable configuration the native backend returns the raw,
+For eligible configurations the native backend returns the raw,
 separate request-class latency clusters and arrival timestamps required for:
 
 - pooled request-class p95 point estimates;
@@ -110,6 +117,10 @@ separate request-class latency clusters and arrival timestamps required for:
 - distinct feasible, infeasible, inconclusive, analytical-failure and
   simulation-failure results;
 - fixed fresh-seed final validation without adaptive early stopping.
+
+Conditional/rejection models do not have a certified static stability bound.
+They start from declared replica minima and require empirical warm-up and
+stationarity checks. A completed finite latency cohort is not proof of stability.
 
 Common random numbers use the same simulation seed for replication index `r`
 across configurations. Calibration, optimization, bootstrap and final
