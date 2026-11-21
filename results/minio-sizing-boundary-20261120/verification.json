@@ -1,0 +1,430 @@
+{
+  "status": "COMPLETED",
+  "exploratory_windows_verified": 2,
+  "physical_windows_verified": 24,
+  "schedule_matched_pairs": 12,
+  "frozen_at": "2026-11-20T00:12:42.387115+00:00",
+  "first_holdout_at": "2026-11-20T00:15:07.398863+00:00",
+  "measured_operations": {
+    "PUT": 26936,
+    "GET": 27208
+  },
+  "measured_failures": {
+    "('PUT', 'client_capacity_rejected', None)": 87,
+    "('GET', 'client_capacity_rejected', None)": 75,
+    "('PUT', 'ProtocolError', None)": 1
+  },
+  "valid_client_windows": 17,
+  "max_client_p95_schedule_delay_ms": 2.191820298321545,
+  "max_cohort_drain_seconds": 0.4649361080000034,
+  "posthoc_window_thirds": [
+    {
+      "id": "r15-layout4-pair0",
+      "thirds": [
+        {
+          "in_flight_mean": 6.833452242240005,
+          "put_mean_ms": 366.3080661606648
+        },
+        {
+          "in_flight_mean": 7.006741523719992,
+          "put_mean_ms": 362.99013182597406
+        },
+        {
+          "in_flight_mean": 7.1136981100000005,
+          "put_mean_ms": 368.66166751451186
+        }
+      ]
+    },
+    {
+      "id": "r15-layout8-pair0",
+      "thirds": [
+        {
+          "in_flight_mean": 12.067232814560002,
+          "put_mean_ms": 655.2133978515407
+        },
+        {
+          "in_flight_mean": 16.93071471460001,
+          "put_mean_ms": 928.1369212473404
+        },
+        {
+          "in_flight_mean": 9.189252337079992,
+          "put_mean_ms": 471.3695593562005
+        }
+      ]
+    },
+    {
+      "id": "r16-layout8-pair0",
+      "thirds": [
+        {
+          "in_flight_mean": 16.62727863687996,
+          "put_mean_ms": 743.3377946388206
+        },
+        {
+          "in_flight_mean": 14.71383852024001,
+          "put_mean_ms": 784.5702975767196
+        },
+        {
+          "in_flight_mean": 15.939653992840014,
+          "put_mean_ms": 823.8663673819095
+        }
+      ]
+    },
+    {
+      "id": "r16-layout4-pair0",
+      "thirds": [
+        {
+          "in_flight_mean": 8.939451750799995,
+          "put_mean_ms": 426.3383407661098
+        },
+        {
+          "in_flight_mean": 8.494435649399993,
+          "put_mean_ms": 434.58368176606683
+        },
+        {
+          "in_flight_mean": 8.559429083159998,
+          "put_mean_ms": 410.5424752401961
+        }
+      ]
+    },
+    {
+      "id": "r14-layout4-pair0",
+      "thirds": [
+        {
+          "in_flight_mean": 5.826637802719997,
+          "put_mean_ms": 323.9223501403509
+        },
+        {
+          "in_flight_mean": 5.657270475519986,
+          "put_mean_ms": 310.31546398011363
+        },
+        {
+          "in_flight_mean": 5.92085549756,
+          "put_mean_ms": 353.1029064507463
+        }
+      ]
+    },
+    {
+      "id": "r14-layout8-pair0",
+      "thirds": [
+        {
+          "in_flight_mean": 8.124183020079993,
+          "put_mean_ms": 451.31206365497076
+        },
+        {
+          "in_flight_mean": 7.442043717239992,
+          "put_mean_ms": 402.69320845170455
+        },
+        {
+          "in_flight_mean": 7.890641813760003,
+          "put_mean_ms": 465.4504596985075
+        }
+      ]
+    },
+    {
+      "id": "r16-layout8-pair1",
+      "thirds": [
+        {
+          "in_flight_mean": 13.331541998919993,
+          "put_mean_ms": 687.3391882241814
+        },
+        {
+          "in_flight_mean": 15.509997009640015,
+          "put_mean_ms": 757.0279160317074
+        },
+        {
+          "in_flight_mean": 9.487766170719992,
+          "put_mean_ms": 491.32403520325204
+        }
+      ]
+    },
+    {
+      "id": "r16-layout4-pair1",
+      "thirds": [
+        {
+          "in_flight_mean": 7.800766311000005,
+          "put_mean_ms": 380.0532494634761
+        },
+        {
+          "in_flight_mean": 10.002935146040006,
+          "put_mean_ms": 489.8454303609756
+        },
+        {
+          "in_flight_mean": 6.605174331280001,
+          "put_mean_ms": 345.7507807100271
+        }
+      ]
+    },
+    {
+      "id": "r14-layout4-pair1",
+      "thirds": [
+        {
+          "in_flight_mean": 6.2393397296400055,
+          "put_mean_ms": 339.6526787727273
+        },
+        {
+          "in_flight_mean": 5.219346072159999,
+          "put_mean_ms": 302.50205733033033
+        },
+        {
+          "in_flight_mean": 5.957909628440007,
+          "put_mean_ms": 335.01594456231885
+        }
+      ]
+    },
+    {
+      "id": "r14-layout8-pair1",
+      "thirds": [
+        {
+          "in_flight_mean": 9.428351840439998,
+          "put_mean_ms": 515.0334314289772
+        },
+        {
+          "in_flight_mean": 7.933776853359989,
+          "put_mean_ms": 464.37088033933935
+        },
+        {
+          "in_flight_mean": 7.375564246680005,
+          "put_mean_ms": 411.7191271594202
+        }
+      ]
+    },
+    {
+      "id": "r15-layout8-pair1",
+      "thirds": [
+        {
+          "in_flight_mean": 10.52877563180001,
+          "put_mean_ms": 540.3622001602067
+        },
+        {
+          "in_flight_mean": 8.888535409080005,
+          "put_mean_ms": 466.77355783943665
+        },
+        {
+          "in_flight_mean": 13.1167675724,
+          "put_mean_ms": 701.1706098507854
+        }
+      ]
+    },
+    {
+      "id": "r15-layout4-pair1",
+      "thirds": [
+        {
+          "in_flight_mean": 6.844711761959992,
+          "put_mean_ms": 341.92699225322997
+        },
+        {
+          "in_flight_mean": 6.1840288398399945,
+          "put_mean_ms": 325.67806725915494
+        },
+        {
+          "in_flight_mean": 8.076603640120005,
+          "put_mean_ms": 426.9721122435233
+        }
+      ]
+    },
+    {
+      "id": "r15-layout4-pair2",
+      "thirds": [
+        {
+          "in_flight_mean": 7.617142766079994,
+          "put_mean_ms": 374.4690462128713
+        },
+        {
+          "in_flight_mean": 8.022252960520008,
+          "put_mean_ms": 414.94204331794873
+        },
+        {
+          "in_flight_mean": 5.812668983360003,
+          "put_mean_ms": 310.5905339943978
+        }
+      ]
+    },
+    {
+      "id": "r15-layout8-pair2",
+      "thirds": [
+        {
+          "in_flight_mean": 14.426032329560016,
+          "put_mean_ms": 723.2556016129032
+        },
+        {
+          "in_flight_mean": 11.568301275480007,
+          "put_mean_ms": 612.8532791227154
+        },
+        {
+          "in_flight_mean": 8.085379294,
+          "put_mean_ms": 431.57764468627454
+        }
+      ]
+    },
+    {
+      "id": "r16-layout8-pair2",
+      "thirds": [
+        {
+          "in_flight_mean": 14.29325035643999,
+          "put_mean_ms": 727.7726676430317
+        },
+        {
+          "in_flight_mean": 16.288101347600016,
+          "put_mean_ms": 774.2054407745803
+        },
+        {
+          "in_flight_mean": 11.346409803520002,
+          "put_mean_ms": 577.418135922043
+        }
+      ]
+    },
+    {
+      "id": "r16-layout4-pair2",
+      "thirds": [
+        {
+          "in_flight_mean": 7.98934359780001,
+          "put_mean_ms": 394.87149183213427
+        },
+        {
+          "in_flight_mean": 9.054015927040005,
+          "put_mean_ms": 408.8262567476191
+        },
+        {
+          "in_flight_mean": 8.110717759639995,
+          "put_mean_ms": 424.445552577957
+        }
+      ]
+    },
+    {
+      "id": "r14-layout4-pair2",
+      "thirds": [
+        {
+          "in_flight_mean": 5.223312569919999,
+          "put_mean_ms": 311.198674115625
+        },
+        {
+          "in_flight_mean": 6.328841472599993,
+          "put_mean_ms": 341.82526131967217
+        },
+        {
+          "in_flight_mean": 5.037432696400002,
+          "put_mean_ms": 288.7448432612613
+        }
+      ]
+    },
+    {
+      "id": "r14-layout8-pair2",
+      "thirds": [
+        {
+          "in_flight_mean": 6.3448077224,
+          "put_mean_ms": 366.97974461875003
+        },
+        {
+          "in_flight_mean": 8.942144208759993,
+          "put_mean_ms": 485.5805138224044
+        },
+        {
+          "in_flight_mean": 6.229043674119989,
+          "put_mean_ms": 355.76917214414414
+        }
+      ]
+    },
+    {
+      "id": "r14-layout8-pair3",
+      "thirds": [
+        {
+          "in_flight_mean": 6.24953965176001,
+          "put_mean_ms": 370.3610746846847
+        },
+        {
+          "in_flight_mean": 7.451611062679998,
+          "put_mean_ms": 434.95897266369053
+        },
+        {
+          "in_flight_mean": 7.681983853280019,
+          "put_mean_ms": 454.9878742037037
+        }
+      ]
+    },
+    {
+      "id": "r14-layout4-pair3",
+      "thirds": [
+        {
+          "in_flight_mean": 5.53470008543999,
+          "put_mean_ms": 326.1062910660661
+        },
+        {
+          "in_flight_mean": 5.197538698280007,
+          "put_mean_ms": 300.68622695833335
+        },
+        {
+          "in_flight_mean": 5.581005558640012,
+          "put_mean_ms": 326.0591495277778
+        }
+      ]
+    },
+    {
+      "id": "r15-layout4-pair3",
+      "thirds": [
+        {
+          "in_flight_mean": 8.515195971320004,
+          "put_mean_ms": 410.9383388067633
+        },
+        {
+          "in_flight_mean": 7.247908815719998,
+          "put_mean_ms": 380.8821889730458
+        },
+        {
+          "in_flight_mean": 7.730888029680013,
+          "put_mean_ms": 397.8880341128205
+        }
+      ]
+    },
+    {
+      "id": "r15-layout8-pair3",
+      "thirds": [
+        {
+          "in_flight_mean": 17.447631039320015,
+          "put_mean_ms": 863.025388690244
+        },
+        {
+          "in_flight_mean": 11.164393134560004,
+          "put_mean_ms": 587.888283851752
+        },
+        {
+          "in_flight_mean": 16.316533195199998,
+          "put_mean_ms": 885.3708543577023
+        }
+      ]
+    },
+    {
+      "id": "r16-layout8-pair3",
+      "thirds": [
+        {
+          "in_flight_mean": 15.324626990960008,
+          "put_mean_ms": 763.3744543317191
+        },
+        {
+          "in_flight_mean": 17.335891655440005,
+          "put_mean_ms": 932.1490721995134
+        },
+        {
+          "in_flight_mean": 15.403231441440003,
+          "put_mean_ms": 758.7068486805194
+        }
+      ]
+    },
+    {
+      "id": "r16-layout4-pair3",
+      "thirds": [
+        {
+          "in_flight_mean": 8.205176565640006,
+          "put_mean_ms": 391.9614883205742
+        },
+        {
+          "in_flight_mean": 8.161287422240001,
+          "put_mean_ms": 391.9072051868932
+        },
+        {
+          "in_flight_mean": 7.723041268240011,
+          "put_mean_ms": 394.4955758966408
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,703 @@
+[
+  {
+    "id": "r15-layout4-pair0",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112181,
+    "classes": {
+      "PUT": {
+        "offered": 1125,
+        "successes": 1125,
+        "errors": {},
+        "mean_ms": 365.96549744444445
+      },
+      "GET": {
+        "offered": 1128,
+        "successes": 1128,
+        "errors": {},
+        "mean_ms": 99.46169032446808
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.4251521788537502,
+    "pending_at_stop": 4,
+    "target_started_ns": 1795133707398863259,
+    "drain_seconds": 0.15258602100000473,
+    "client_valid": true
+  },
+  {
+    "id": "r15-layout8-pair0",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112181,
+    "classes": {
+      "PUT": {
+        "offered": 1125,
+        "successes": 1112,
+        "errors": {
+          "client_capacity_rejected": 13
+        },
+        "mean_ms": 684.8378852679856
+      },
+      "GET": {
+        "offered": 1128,
+        "successes": 1118,
+        "errors": {
+          "client_capacity_rejected": 10
+        },
+        "mean_ms": 172.535249549195
+      }
+    },
+    "total_failures": 23,
+    "scheduling_delay_p95_ms": 1.8628991674631834,
+    "pending_at_stop": 8,
+    "target_started_ns": 1795133801902959080,
+    "drain_seconds": 0.19056062200000667,
+    "client_valid": false
+  },
+  {
+    "id": "r16-layout8-pair0",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112182,
+    "classes": {
+      "PUT": {
+        "offered": 1216,
+        "successes": 1183,
+        "errors": {
+          "client_capacity_rejected": 33
+        },
+        "mean_ms": 783.6051302789518
+      },
+      "GET": {
+        "offered": 1207,
+        "successes": 1175,
+        "errors": {
+          "client_capacity_rejected": 32
+        },
+        "mean_ms": 188.51379077276596
+      }
+    },
+    "total_failures": 65,
+    "scheduling_delay_p95_ms": 2.191820298321545,
+    "pending_at_stop": 27,
+    "target_started_ns": 1795133898578124766,
+    "drain_seconds": 0.4649361080000034,
+    "client_valid": false
+  },
+  {
+    "id": "r16-layout4-pair0",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112182,
+    "classes": {
+      "PUT": {
+        "offered": 1216,
+        "successes": 1216,
+        "errors": {},
+        "mean_ms": 423.67610763651317
+      },
+      "GET": {
+        "offered": 1207,
+        "successes": 1207,
+        "errors": {},
+        "mean_ms": 109.21422048135874
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.5732154250144958,
+    "pending_at_stop": 7,
+    "target_started_ns": 1795133992740782257,
+    "drain_seconds": 0.15485082499999692,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout4-pair0",
+    "layout": 4,
+    "rate": 14.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112183,
+    "classes": {
+      "PUT": {
+        "offered": 1029,
+        "successes": 1029,
+        "errors": {},
+        "mean_ms": 328.76769750242954
+      },
+      "GET": {
+        "offered": 1060,
+        "successes": 1060,
+        "errors": {},
+        "mean_ms": 91.12006878018867
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3334891758859158,
+    "pending_at_stop": 9,
+    "target_started_ns": 1795134085614654306,
+    "drain_seconds": 0.1780362580000059,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout8-pair0",
+    "layout": 8,
+    "rate": 14.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112183,
+    "classes": {
+      "PUT": {
+        "offered": 1029,
+        "successes": 1029,
+        "errors": {},
+        "mean_ms": 439.28341996501456
+      },
+      "GET": {
+        "offered": 1060,
+        "successes": 1060,
+        "errors": {},
+        "mean_ms": 122.26748384339622
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.4369702897965908,
+    "pending_at_stop": 9,
+    "target_started_ns": 1795134180566824638,
+    "drain_seconds": 0.13087728499999685,
+    "client_valid": true
+  },
+  {
+    "id": "r16-layout8-pair1",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112191,
+    "classes": {
+      "PUT": {
+        "offered": 1176,
+        "successes": 1176,
+        "errors": {},
+        "mean_ms": 650.1306737142858
+      },
+      "GET": {
+        "offered": 1257,
+        "successes": 1257,
+        "errors": {},
+        "mean_ms": 156.57143515592682
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.7048715613782406,
+    "pending_at_stop": 14,
+    "target_started_ns": 1795134275302627957,
+    "drain_seconds": 0.3324555190000069,
+    "client_valid": true
+  },
+  {
+    "id": "r16-layout4-pair1",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112191,
+    "classes": {
+      "PUT": {
+        "offered": 1176,
+        "successes": 1176,
+        "errors": {},
+        "mean_ms": 407.56786102636056
+      },
+      "GET": {
+        "offered": 1257,
+        "successes": 1257,
+        "errors": {},
+        "mean_ms": 107.54189043595863
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.5725747682154179,
+    "pending_at_stop": 14,
+    "target_started_ns": 1795134369497286464,
+    "drain_seconds": 0.42481797599999993,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout4-pair1",
+    "layout": 4,
+    "rate": 14.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112192,
+    "classes": {
+      "PUT": {
+        "offered": 1030,
+        "successes": 1030,
+        "errors": {},
+        "mean_ms": 326.08876591553394
+      },
+      "GET": {
+        "offered": 1058,
+        "successes": 1058,
+        "errors": {},
+        "mean_ms": 92.18978945274102
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3621586374938488,
+    "pending_at_stop": 2,
+    "target_started_ns": 1795134462399232650,
+    "drain_seconds": 0.07758354700000325,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout8-pair1",
+    "layout": 8,
+    "rate": 14.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112192,
+    "classes": {
+      "PUT": {
+        "offered": 1030,
+        "successes": 1030,
+        "errors": {},
+        "mean_ms": 464.0489028019418
+      },
+      "GET": {
+        "offered": 1058,
+        "successes": 1058,
+        "errors": {},
+        "mean_ms": 131.05919880340267
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.5669605927541852,
+    "pending_at_stop": 6,
+    "target_started_ns": 1795134556430166798,
+    "drain_seconds": 0.12487551200000269,
+    "client_valid": true
+  },
+  {
+    "id": "r15-layout8-pair1",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112193,
+    "classes": {
+      "PUT": {
+        "offered": 1128,
+        "successes": 1124,
+        "errors": {
+          "client_capacity_rejected": 4
+        },
+        "mean_ms": 571.7722041441281
+      },
+      "GET": {
+        "offered": 1150,
+        "successes": 1144,
+        "errors": {
+          "client_capacity_rejected": 6
+        },
+        "mean_ms": 148.0940199318182
+      }
+    },
+    "total_failures": 10,
+    "scheduling_delay_p95_ms": 1.4877649489790201,
+    "pending_at_stop": 12,
+    "target_started_ns": 1795134652065716142,
+    "drain_seconds": 0.18465135300000668,
+    "client_valid": false
+  },
+  {
+    "id": "r15-layout4-pair1",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112193,
+    "classes": {
+      "PUT": {
+        "offered": 1128,
+        "successes": 1128,
+        "errors": {},
+        "mean_ms": 365.91550993351063
+      },
+      "GET": {
+        "offered": 1150,
+        "successes": 1150,
+        "errors": {},
+        "mean_ms": 98.12762327478261
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3592720497399569,
+    "pending_at_stop": 5,
+    "target_started_ns": 1795134750210855848,
+    "drain_seconds": 0.14163754400000528,
+    "client_valid": true
+  },
+  {
+    "id": "r15-layout4-pair2",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112201,
+    "classes": {
+      "PUT": {
+        "offered": 1151,
+        "successes": 1151,
+        "errors": {},
+        "mean_ms": 368.3698629018245
+      },
+      "GET": {
+        "offered": 1120,
+        "successes": 1120,
+        "errors": {},
+        "mean_ms": 99.76597440625
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.5503836330026388,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795134842824726647,
+    "drain_seconds": 0.10545552199999975,
+    "client_valid": true
+  },
+  {
+    "id": "r15-layout8-pair2",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112201,
+    "classes": {
+      "PUT": {
+        "offered": 1151,
+        "successes": 1143,
+        "errors": {
+          "client_capacity_rejected": 8
+        },
+        "mean_ms": 595.1601334269466
+      },
+      "GET": {
+        "offered": 1120,
+        "successes": 1114,
+        "errors": {
+          "client_capacity_rejected": 6
+        },
+        "mean_ms": 153.40359966517056
+      }
+    },
+    "total_failures": 14,
+    "scheduling_delay_p95_ms": 1.4901659451425076,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795134936084916039,
+    "drain_seconds": 0.09495012700000416,
+    "client_valid": false
+  },
+  {
+    "id": "r16-layout8-pair2",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112202,
+    "classes": {
+      "PUT": {
+        "offered": 1209,
+        "successes": 1198,
+        "errors": {
+          "ProtocolError": 1,
+          "client_capacity_rejected": 10
+        },
+        "mean_ms": 697.2472758196994
+      },
+      "GET": {
+        "offered": 1256,
+        "successes": 1254,
+        "errors": {
+          "client_capacity_rejected": 2
+        },
+        "mean_ms": 166.5355139832536
+      }
+    },
+    "total_failures": 34,
+    "scheduling_delay_p95_ms": 1.727143581956625,
+    "pending_at_stop": 11,
+    "target_started_ns": 1795135030804130419,
+    "drain_seconds": 0.182778361000004,
+    "client_valid": false
+  },
+  {
+    "id": "r16-layout4-pair2",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112202,
+    "classes": {
+      "PUT": {
+        "offered": 1209,
+        "successes": 1209,
+        "errors": {},
+        "mean_ms": 408.8190119826303
+      },
+      "GET": {
+        "offered": 1256,
+        "successes": 1256,
+        "errors": {},
+        "mean_ms": 107.48108948487261
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3858716934919357,
+    "pending_at_stop": 11,
+    "target_started_ns": 1795135124339897446,
+    "drain_seconds": 0.2819873779999966,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout4-pair2",
+    "layout": 4,
+    "rate": 14.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112203,
+    "classes": {
+      "PUT": {
+        "offered": 1019,
+        "successes": 1019,
+        "errors": {},
+        "mean_ms": 314.86128966241415
+      },
+      "GET": {
+        "offered": 1028,
+        "successes": 1028,
+        "errors": {},
+        "mean_ms": 91.36166179280156
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3958254363387823,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795135219101189143,
+    "drain_seconds": 0.05173338599999511,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout8-pair2",
+    "layout": 8,
+    "rate": 14.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112203,
+    "classes": {
+      "PUT": {
+        "offered": 1019,
+        "successes": 1019,
+        "errors": {},
+        "mean_ms": 405.91474058979395
+      },
+      "GET": {
+        "offered": 1028,
+        "successes": 1028,
+        "errors": {},
+        "mean_ms": 120.82297029085603
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.109614036977291,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795135312283086547,
+    "drain_seconds": 0.03546973900000694,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout8-pair3",
+    "layout": 8,
+    "rate": 14.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26112211,
+    "classes": {
+      "PUT": {
+        "offered": 993,
+        "successes": 993,
+        "errors": {},
+        "mean_ms": 419.83134333031217
+      },
+      "GET": {
+        "offered": 1016,
+        "successes": 1016,
+        "errors": {},
+        "mean_ms": 115.03766694488189
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.5058576129376888,
+    "pending_at_stop": 4,
+    "target_started_ns": 1795135407482554642,
+    "drain_seconds": 0.10161604300000704,
+    "client_valid": true
+  },
+  {
+    "id": "r14-layout4-pair3",
+    "layout": 4,
+    "rate": 14.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26112211,
+    "classes": {
+      "PUT": {
+        "offered": 993,
+        "successes": 993,
+        "errors": {},
+        "mean_ms": 317.48955853977844
+      },
+      "GET": {
+        "offered": 1016,
+        "successes": 1016,
+        "errors": {},
+        "mean_ms": 90.42790275
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3582641258835793,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795135501002641957,
+    "drain_seconds": 0.06071404700000471,
+    "client_valid": true
+  },
+  {
+    "id": "r15-layout4-pair3",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26112212,
+    "classes": {
+      "PUT": {
+        "offered": 1175,
+        "successes": 1175,
+        "errors": {},
+        "mean_ms": 397.11667887574464
+      },
+      "GET": {
+        "offered": 1128,
+        "successes": 1128,
+        "errors": {},
+        "mean_ms": 106.68915440248227
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.4067956246435642,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795135593327174325,
+    "drain_seconds": 0.13103574800000217,
+    "client_valid": true
+  },
+  {
+    "id": "r15-layout8-pair3",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26112212,
+    "classes": {
+      "PUT": {
+        "offered": 1175,
+        "successes": 1164,
+        "errors": {
+          "client_capacity_rejected": 11
+        },
+        "mean_ms": 782.6838487036083
+      },
+      "GET": {
+        "offered": 1128,
+        "successes": 1118,
+        "errors": {
+          "client_capacity_rejected": 10
+        },
+        "mean_ms": 186.4403843372093
+      }
+    },
+    "total_failures": 21,
+    "scheduling_delay_p95_ms": 1.5086076688021421,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795135687913103448,
+    "drain_seconds": 0.12360154300000659,
+    "client_valid": false
+  },
+  {
+    "id": "r16-layout8-pair3",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26112213,
+    "classes": {
+      "PUT": {
+        "offered": 1217,
+        "successes": 1209,
+        "errors": {
+          "client_capacity_rejected": 8
+        },
+        "mean_ms": 819.2630728329198
+      },
+      "GET": {
+        "offered": 1196,
+        "successes": 1187,
+        "errors": {
+          "client_capacity_rejected": 9
+        },
+        "mean_ms": 178.0743247203033
+      }
+    },
+    "total_failures": 27,
+    "scheduling_delay_p95_ms": 1.580334734171629,
+    "pending_at_stop": 8,
+    "target_started_ns": 1795135784901506666,
+    "drain_seconds": 0.19671214500000644,
+    "client_valid": false
+  },
+  {
+    "id": "r16-layout4-pair3",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26112213,
+    "classes": {
+      "PUT": {
+        "offered": 1217,
+        "successes": 1217,
+        "errors": {},
+        "mean_ms": 392.7489388060805
+      },
+      "GET": {
+        "offered": 1196,
+        "successes": 1196,
+        "errors": {},
+        "mean_ms": 104.451403270903
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.407573465257883,
+    "pending_at_stop": 8,
+    "target_started_ns": 1795135878818670182,
+    "drain_seconds": 0.22739270399999612,
+    "client_valid": true
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "scripts/run_postgres_portable_sizing.py": "fc3f90e109f5ae39d1521d6e656180181307ca53594986aada3789093f0b8709",
+  "scripts/audit_postgres_sizing.py": "cc1dc48f0cee29e07ceec19ba435a967af6260443f73a52fab2e667f71dab1ef",
+  "scripts/run_postgres_sizing.py": "af98333ea29406cfd543b7742175688a70f0b3ac0d38c222885307a71072d150",
+  "scripts/run_postgres_pilot.py": "a0daf15aae03638d0f9facd2c0ff2101465be36d7fae2789486339d99c448953",
+  "scripts/postgres_pilot_agent.py": "00d583b4b342b9334b024d8bbbcc6c76a47dae4470cf6cda83c710905676bae0",
+  "calibration/warmup_parameters.py": "91c58faf5b8a4e6058f450fca9418b7802ba18e1835b9199b7ae7da8920dbe36",
+  "performance_models/system.py": "4fbec32972972b0795c2a9714ebbcecb1aca6e6b1d31049d43c4b6eee1384aee",
+  "kubesizer_cli.py": "65ea0656d378d18278c510f78c5c3fb1d389d58fad1d4adcbf73f58efa3d7011",
+  "native_backend/cpp/build-release/kubesizer-simulator": "e3e10744eb759c41addc8eb912698c1168f7ec090df52a7a7ed3b17f14d0f8a6"
+}

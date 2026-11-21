@@ -1,0 +1,6 @@
+{
+  "status": "FAILED",
+  "started_at": "2026-11-19T10:06:32.849144+00:00",
+  "error": "RuntimeError: ('kubectl', '--request-timeout=120s', '-n', 'kubesizer-postgres-pilot-pgp1', 'create', '-f', '/home/experiment/experiments/pgs1/gateway-declaration.json'): error: error validating \"/home/experiment/experiments/pgs1/gateway-declaration.json\": error validating data: failed to check CRD: failed to list CRDs: customresourcedefinitions.apiextensions.k8s.io is forbidden: User \"system:serviceaccount:kubesizer-mi-control-m1003v1:collector\" cannot list resource \"customresourcedefinitions\" in API group \"apiextensions.k8s.io\" at the cluster scope; if you choose to ignore these errors, turn validation off with --validate=false\n ",
+  "failed_at": "2026-11-19T10:06:36.130348+00:00"
+}

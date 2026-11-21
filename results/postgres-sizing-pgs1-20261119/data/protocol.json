@@ -1,0 +1,43 @@
+{
+  "trial": "pgs1",
+  "namespace": "kubesizer-postgres-pilot-pgp1",
+  "costs_in_database_members": {
+    "one": 2,
+    "two": 3
+  },
+  "read_routing": {
+    "one": {
+      "standby1": 1.0
+    },
+    "two": {
+      "standby1": 0.5,
+      "standby2": 0.5
+    }
+  },
+  "writes": "same primary, synchronous_commit=local in both arms",
+  "consistency": "eventual reads, no read-your-writes guarantee",
+  "measurement_boundary": "VM client to isolated gateway through loopback kubectl port-forward",
+  "mean_slo_seconds": {
+    "read": 0.25,
+    "write": 0.25
+  },
+  "read_share": 0.75,
+  "characterization_layout": "one",
+  "characterization_rps": 12,
+  "characterization_runs": 2,
+  "characterization_measurement_seconds": 120,
+  "target_rate_formula": "min(42, 0.90/(0.75*standby_read_cpu + 0.25*standby_replay_cpu))",
+  "maximum_target_rps": 42,
+  "warmup_seconds": 30,
+  "measurement_seconds": 90,
+  "target_pairs": 3,
+  "pair_order": "random first layout, alternating order across pairs",
+  "seed": 26111933,
+  "witness_samples": 80,
+  "maximum_schedule_p95_seconds": 0.05,
+  "maximum_failure_rate": 0.01,
+  "maximum_sampled_replay_backlog_bytes": 1048576,
+  "interval": "two-sided Student t over independent physical run means, 95% per class",
+  "transfer_assumption": "second standby has the observed first standby's per-request CPU, local delay and replay proxy",
+  "portable_telemetry_only": false
+}

@@ -1,0 +1,57 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "pgs2-telemetry-probe",
+    "namespace": "kubesizer-postgres-pilot-pgp1",
+    "labels": {
+      "app": "pgs2-telemetry-probe",
+      "kubesizer.sizing": "pgs2"
+    }
+  },
+  "spec": {
+    "replicas": 1,
+    "selector": {
+      "matchLabels": {
+        "app": "pgs2-telemetry-probe",
+        "kubesizer.sizing": "pgs2"
+      }
+    },
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "pgs2-telemetry-probe",
+          "kubesizer.sizing": "pgs2"
+        }
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "nodeSelector": {
+          "kubernetes.io/hostname": "skube07"
+        },
+        "containers": [
+          {
+            "name": "probe",
+            "image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+            "command": [
+              "python",
+              "-u",
+              "-c",
+              "\nimport json\nimport time\nfrom urllib.parse import urlencode\nfrom urllib.request import urlopen\nbase = \"http://prometheus-k8s.monitoring.svc:9090/api/v1/\"\nq = 'absent(container_cpu_usage_seconds_total{namespace=\"kubesizer-postgres-pilot-pgp1\",container=\"database\"})'\ntry:\n    with urlopen(base+\"query?\"+urlencode({\"query\":q}), timeout=10) as r:\n        d=json.load(r)\n    print(json.dumps({\"status\":d[\"status\"], \"result_type\":d[\"data\"][\"resultType\"]}),flush=True)\nexcept Exception as e:\n    print(json.dumps({\"error\":f\"{type(e).__name__}: {e}\"}),flush=True)\ntime.sleep(150)\n"
+            ],
+            "resources": {
+              "requests": {
+                "cpu": "10m",
+                "memory": "16Mi"
+              },
+              "limits": {
+                "cpu": "100m",
+                "memory": "48Mi"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

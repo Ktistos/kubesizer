@@ -1,0 +1,284 @@
+[
+  {
+    "per_class_rps": 14.0,
+    "layouts": {
+      "4": {
+        "observed": "FEASIBLE_IN_PILOT",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 91.2748556939328,
+            "upper_ms": 92.43179908149024,
+            "lower_ms": 90.11791230637537,
+            "run_means_ms": [
+              91.12006878018867,
+              92.18978945274102,
+              91.36166179280156,
+              90.42790275
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 321.80182790503903,
+            "upper_ms": 332.42328378193764,
+            "lower_ms": 311.1803720281404,
+            "run_means_ms": [
+              328.76769750242954,
+              326.08876591553394,
+              314.86128966241415,
+              317.48955853977844
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 122.2968299706342,
+            "upper_ms": 132.83771474133798,
+            "lower_ms": 111.75594519993044,
+            "run_means_ms": [
+              122.26748384339622,
+              131.05919880340267,
+              120.82297029085603,
+              115.03766694488189
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": 432.2696016717656,
+            "upper_ms": 472.4029983352231,
+            "lower_ms": 392.1362050083081,
+            "run_means_ms": [
+              439.28341996501456,
+              464.0489028019418,
+              405.91474058979395,
+              419.83134333031217
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": "4",
+    "decisions": {
+      "aggregate": {
+        "selected": "8",
+        "observed": "INCONCLUSIVE"
+      }
+    }
+  },
+  {
+    "per_class_rps": 15.0,
+    "layouts": {
+      "4": {
+        "observed": "FEASIBLE_IN_PILOT",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 101.01111060199574,
+            "upper_ms": 107.1399538559599,
+            "lower_ms": 94.88226734803158,
+            "run_means_ms": [
+              99.46169032446808,
+              98.12762327478261,
+              99.76597440625,
+              106.68915440248227
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 374.341887288881,
+            "upper_ms": 398.5703861387451,
+            "lower_ms": 350.11338843901694,
+            "run_means_ms": [
+              365.96549744444445,
+              365.91550993351063,
+              368.3698629018245,
+              397.11667887574464
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              172.535249549195,
+              148.0940199318182,
+              153.40359966517056,
+              186.4403843372093
+            ],
+            "failure_rates": [
+              0.00886524822695034,
+              0.00521739130434784,
+              0.005357142857142838,
+              0.00886524822695034
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              684.8378852679856,
+              571.7722041441281,
+              595.1601334269466,
+              782.6838487036083
+            ],
+            "failure_rates": [
+              0.011555555555555541,
+              0.0035460992907800915,
+              0.0069504778453518545,
+              0.009361702127659521
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": "4",
+    "decisions": {
+      "aggregate": {
+        "selected": "8",
+        "observed": "INCONCLUSIVE"
+      }
+    }
+  },
+  {
+    "per_class_rps": 16.0,
+    "layouts": {
+      "4": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 107.17215091827325,
+            "upper_ms": 110.32858931857386,
+            "lower_ms": 104.01571251797263,
+            "run_means_ms": [
+              109.21422048135874,
+              107.54189043595863,
+              107.48108948487261,
+              104.451403270903
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": 408.20297986289614,
+            "upper_ms": 428.3101468570947,
+            "lower_ms": 388.0958128686976,
+            "run_means_ms": [
+              423.67610763651317,
+              407.56786102636056,
+              408.8190119826303,
+              392.7489388060805
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              188.51379077276596,
+              156.57143515592682,
+              166.5355139832536,
+              178.0743247203033
+            ],
+            "failure_rates": [
+              0.026512013256006606,
+              0.0,
+              0.0015923566878981443,
+              0.007525083612040184
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              783.6051302789518,
+              650.1306737142858,
+              697.2472758196994,
+              819.2630728329198
+            ],
+            "failure_rates": [
+              0.027138157894736836,
+              0.0,
+              0.009098428453267138,
+              0.006573541495480728
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": null,
+    "decisions": {
+      "aggregate": {
+        "selected": "8",
+        "observed": "INCONCLUSIVE"
+      }
+    }
+  }
+]

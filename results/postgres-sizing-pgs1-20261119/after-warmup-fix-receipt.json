@@ -1,0 +1,9 @@
+{
+  "bindings": {
+    "calibration/warmup_parameters.py": "91c58faf5b8a4e6058f450fca9418b7802ba18e1835b9199b7ae7da8920dbe36",
+    "performance_models/system.py": "4fbec32972972b0795c2a9714ebbcecb1aca6e6b1d31049d43c4b6eee1384aee"
+  },
+  "native_sha256": "e3e10744eb759c41addc8eb912698c1168f7ec090df52a7a7ed3b17f14d0f8a6",
+  "frozen_input_receipt_sha256": "73c581bc7c91d46d3eb9ae3418764d958a196068c26dbb5e1ebbdf8daa65f849",
+  "result_sha256": "c9693142d4e61fc606479f8622c632a4b4dfad1983034d02bc3e417ca0849d15"
+}

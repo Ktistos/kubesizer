@@ -1,0 +1,130 @@
+[
+  {
+    "id": "r16-layout4-pair0",
+    "scheduled": 2842,
+    "started": 2842,
+    "measured_scheduled": 2297,
+    "measured_started": 2297,
+    "peak_in_flight": 36
+  },
+  {
+    "id": "r16-layout8-pair0",
+    "scheduled": 2842,
+    "started": 2842,
+    "measured_scheduled": 2297,
+    "measured_started": 2297,
+    "peak_in_flight": 77
+  },
+  {
+    "id": "r15-layout8-pair0",
+    "scheduled": 2774,
+    "started": 2774,
+    "measured_scheduled": 2292,
+    "measured_started": 2292,
+    "peak_in_flight": 79
+  },
+  {
+    "id": "r15-layout4-pair0",
+    "scheduled": 2774,
+    "started": 2774,
+    "measured_scheduled": 2292,
+    "measured_started": 2292,
+    "peak_in_flight": 41
+  },
+  {
+    "id": "r15-layout8-pair1",
+    "scheduled": 2748,
+    "started": 2748,
+    "measured_scheduled": 2290,
+    "measured_started": 2290,
+    "peak_in_flight": 48
+  },
+  {
+    "id": "r15-layout4-pair1",
+    "scheduled": 2748,
+    "started": 2748,
+    "measured_scheduled": 2290,
+    "measured_started": 2290,
+    "peak_in_flight": 27
+  },
+  {
+    "id": "r16-layout4-pair1",
+    "scheduled": 2913,
+    "started": 2913,
+    "measured_scheduled": 2424,
+    "measured_started": 2424,
+    "peak_in_flight": 43
+  },
+  {
+    "id": "r16-layout8-pair1",
+    "scheduled": 2913,
+    "started": 2913,
+    "measured_scheduled": 2424,
+    "measured_started": 2424,
+    "peak_in_flight": 74
+  },
+  {
+    "id": "r16-layout4-pair2",
+    "scheduled": 2789,
+    "started": 2789,
+    "measured_scheduled": 2292,
+    "measured_started": 2292,
+    "peak_in_flight": 27
+  },
+  {
+    "id": "r16-layout8-pair2",
+    "scheduled": 2789,
+    "started": 2789,
+    "measured_scheduled": 2292,
+    "measured_started": 2292,
+    "peak_in_flight": 60
+  },
+  {
+    "id": "r15-layout8-pair2",
+    "scheduled": 2700,
+    "started": 2691,
+    "measured_scheduled": 2242,
+    "measured_started": 2233,
+    "peak_in_flight": 128
+  },
+  {
+    "id": "r15-layout4-pair2",
+    "scheduled": 2700,
+    "started": 2353,
+    "measured_scheduled": 2242,
+    "measured_started": 1895,
+    "peak_in_flight": 128
+  },
+  {
+    "id": "r16-layout8-pair3",
+    "scheduled": 2900,
+    "started": 2369,
+    "measured_scheduled": 2423,
+    "measured_started": 1892,
+    "peak_in_flight": 128
+  },
+  {
+    "id": "r16-layout4-pair3",
+    "scheduled": 2900,
+    "started": 1643,
+    "measured_scheduled": 2423,
+    "measured_started": 1166,
+    "peak_in_flight": 128
+  },
+  {
+    "id": "r15-layout4-pair3",
+    "scheduled": 2786,
+    "started": 2786,
+    "measured_scheduled": 2327,
+    "measured_started": 2327,
+    "peak_in_flight": 91
+  },
+  {
+    "id": "r15-layout8-pair3",
+    "scheduled": 2786,
+    "started": 2786,
+    "measured_scheduled": 2327,
+    "measured_started": 2327,
+    "peak_in_flight": 50
+  }
+]

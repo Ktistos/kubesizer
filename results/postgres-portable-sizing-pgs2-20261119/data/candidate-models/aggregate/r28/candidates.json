@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "candidates": [
+    {
+      "name": "one",
+      "mechanism": "1 read-serving standbys with local commits",
+      "workload": "workload-one.yaml",
+      "base_cost": 2,
+      "elastic_replica_costs": {},
+      "evidence_sources": [
+        "../../../profile-aggregate.json",
+        "../../../protocol.json"
+      ]
+    },
+    {
+      "name": "two",
+      "mechanism": "2 read-serving standbys with local commits",
+      "workload": "workload-two.yaml",
+      "base_cost": 3,
+      "elastic_replica_costs": {},
+      "evidence_sources": [
+        "../../../profile-aggregate.json",
+        "../../../protocol.json"
+      ]
+    }
+  ]
+}

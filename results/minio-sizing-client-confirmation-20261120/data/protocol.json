@@ -1,0 +1,28 @@
+{
+  "candidate_members": [
+    4,
+    8
+  ],
+  "hardware": "same four workers and Longhorn volumes as mis1-r4",
+  "total_rates": [
+    30,
+    32
+  ],
+  "target_seed": 26113081,
+  "precheck_seed": 26113010,
+  "precheck_measurement_seconds": 45,
+  "target_pairs": 4,
+  "warmup_seconds": 15,
+  "target_measurement_seconds": 75,
+  "max_in_flight": 128,
+  "observer_limits": {
+    "cpu": "1",
+    "memory": "384Mi"
+  },
+  "mean_slo_seconds": {
+    "GET": 0.25,
+    "PUT": 0.4
+  },
+  "estimation": "Use the original frozen recommendations without recomputing any model.",
+  "storage": "Check per-volume free space before each window for all scheduled writes on a single set."
+}

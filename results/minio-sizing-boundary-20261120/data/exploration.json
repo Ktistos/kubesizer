@@ -1,0 +1,58 @@
+[
+  {
+    "id": "explore-28",
+    "layout": 4,
+    "rate": 14.0,
+    "mode": "mixed",
+    "seed": 26112021,
+    "classes": {
+      "PUT": {
+        "offered": 634,
+        "successes": 634,
+        "errors": {},
+        "mean_ms": 369.9942995157729
+      },
+      "GET": {
+        "offered": 647,
+        "successes": 647,
+        "errors": {},
+        "mean_ms": 98.44125288717157
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.4716689474880695,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795133219875970011,
+    "drain_seconds": 0.09606306300000256,
+    "client_valid": true,
+    "condition": "APPARENT_PASS"
+  },
+  {
+    "id": "explore-32",
+    "layout": 4,
+    "rate": 16.0,
+    "mode": "mixed",
+    "seed": 26112022,
+    "classes": {
+      "PUT": {
+        "offered": 744,
+        "successes": 744,
+        "errors": {},
+        "mean_ms": 455.75446547849464
+      },
+      "GET": {
+        "offered": 674,
+        "successes": 674,
+        "errors": {},
+        "mean_ms": 108.5299377967359
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.7862996319308877,
+    "pending_at_stop": 5,
+    "target_started_ns": 1795133282273816405,
+    "drain_seconds": 0.19722491899999994,
+    "client_valid": true,
+    "condition": "APPARENT_MISS"
+  }
+]

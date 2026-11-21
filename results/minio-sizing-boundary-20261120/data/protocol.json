@@ -1,0 +1,31 @@
+{
+  "candidate_members": [
+    4,
+    8
+  ],
+  "hardware": "same four workers and Longhorn volumes as mis1-r4",
+  "baseline_total_rate": 24,
+  "sweep_total_rates": [
+    28,
+    32,
+    36,
+    40
+  ],
+  "sweep_seed": 26112021,
+  "target_seed": 26112081,
+  "target_pairs": 4,
+  "warmup_seconds": 15,
+  "sweep_measurement_seconds": 45,
+  "target_measurement_seconds": 75,
+  "storage_headroom_wait_seconds": 360,
+  "mean_slo_seconds": {
+    "GET": 0.25,
+    "PUT": 0.4
+  },
+  "failure_rate_limit": 0.01,
+  "schedule_p95_limit_ms": 20,
+  "max_cohort_drain_seconds": 30,
+  "selection": "Test the last apparent pass, the first apparent miss, and their midpoint. With no apparent miss, test the two highest valid rates and their midpoint. An invalid client run stops the sweep without establishing an SLO miss.",
+  "estimation": "Keep the completed mis1-r4 aggregate characterization. The new sweep selects rates only.",
+  "storage": "Check per-volume free space before each window for all scheduled writes on a single set."
+}

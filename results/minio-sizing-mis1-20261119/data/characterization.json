@@ -1,0 +1,86 @@
+[
+  {
+    "id": "characterize-read-0",
+    "layout": 4,
+    "mode": "read",
+    "rate": 3.0,
+    "seed": 26111991,
+    "classes": {
+      "GET": {
+        "offered": 125,
+        "successes": 125,
+        "errors": {},
+        "mean_ms": 41.008930088
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.5484689958393574,
+    "pending_at_stop": 0,
+    "target_started_ns": 1795099918996910830,
+    "drain_seconds": 0.0014413959999970416,
+    "client_valid": true
+  },
+  {
+    "id": "characterize-write-0",
+    "layout": 4,
+    "mode": "write",
+    "rate": 3.0,
+    "seed": 26111991,
+    "classes": {
+      "PUT": {
+        "offered": 160,
+        "successes": 160,
+        "errors": {},
+        "mean_ms": 336.744230475
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.9096224792301655,
+    "pending_at_stop": 0,
+    "target_started_ns": 1795099978029289387,
+    "drain_seconds": 0.0027496220000031713,
+    "client_valid": true
+  },
+  {
+    "id": "characterize-write-1",
+    "layout": 4,
+    "mode": "write",
+    "rate": 3.0,
+    "seed": 26112001,
+    "classes": {
+      "PUT": {
+        "offered": 131,
+        "successes": 131,
+        "errors": {},
+        "mean_ms": 177.10664974809163
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.5792472511529922,
+    "pending_at_stop": 1,
+    "target_started_ns": 1795100036960527810,
+    "drain_seconds": 0.11252780200000245,
+    "client_valid": true
+  },
+  {
+    "id": "characterize-read-1",
+    "layout": 4,
+    "mode": "read",
+    "rate": 3.0,
+    "seed": 26112001,
+    "classes": {
+      "GET": {
+        "offered": 137,
+        "successes": 137,
+        "errors": {},
+        "mean_ms": 42.180690598540146
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.5533711053431034,
+    "pending_at_stop": 0,
+    "target_started_ns": 1795100097253440312,
+    "drain_seconds": 0.0013928979999988655,
+    "client_valid": true
+  }
+]

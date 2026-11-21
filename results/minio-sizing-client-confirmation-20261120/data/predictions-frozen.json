@@ -1,0 +1,214 @@
+{
+  "frozen_at": "2026-11-20T00:12:42.387115+00:00",
+  "arms": {
+    "aggregate": {
+      "14": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 8
+              },
+              "stripe_io": {
+                "recommended_replicas": 2
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "c50b4f5d3d3312412a152537c88aa85a2cc0621d9719b849604c3de32cae20ec"
+                  ],
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "reason": "No reliably feasible configuration exists in the reachable replica space.",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-boundary-v1/models/aggregate/r14/layout-4.yaml": "ba4d210a7c265d5f52b6c9727876fdd9588d574219a487fb29a87e1597dd6a16",
+                    "/home/experiment/experiments/mis1-boundary-v1/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-boundary-v1/protocol.json": "bcb7cbdda403bd1cf2644edabf931d06510b68792d3f5a436cf9780c3bbec775"
+                  },
+                  "status": "UNRESOLVED"
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "c50b4f5d3d3312412a152537c88aa85a2cc0621d9719b849604c3de32cae20ec"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-boundary-v1/models/aggregate/r14/layout-8.yaml": "2243e04fac6552f200d242c2a2109d682f1a729edbcac47078aa1ad223837970",
+                    "/home/experiment/experiments/mis1-boundary-v1/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-boundary-v1/protocol.json": "bcb7cbdda403bd1cf2644edabf931d06510b68792d3f5a436cf9780c3bbec775"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 8,
+                "stripe_io": 2
+              },
+              "minimum_cost_proven": false,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "8",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 8.0
+            }
+          }
+        },
+        "exit_code": 0
+      },
+      "15": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 8
+              },
+              "stripe_io": {
+                "recommended_replicas": 2
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "9bc56a1c624faf793f15b0f1ce6b7df16987a541d21c939df390f430801d4957"
+                  ],
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "reason": "Fixed or bounded component 'stripe_io' cannot satisfy the necessary stability floor; change the declared topology.",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-boundary-v1/models/aggregate/r15/layout-4.yaml": "d01dd43194b1d9b0670bc0ee58ab2d0fb9263d8c6587d2e28a0e12b162349126",
+                    "/home/experiment/experiments/mis1-boundary-v1/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-boundary-v1/protocol.json": "bcb7cbdda403bd1cf2644edabf931d06510b68792d3f5a436cf9780c3bbec775"
+                  },
+                  "status": "UNRESOLVED"
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "9bc56a1c624faf793f15b0f1ce6b7df16987a541d21c939df390f430801d4957"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-boundary-v1/models/aggregate/r15/layout-8.yaml": "62849c96819b75e64b08c6aa7170a64a136fe08d4153bdd2b14e4bc0c96115b7",
+                    "/home/experiment/experiments/mis1-boundary-v1/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-boundary-v1/protocol.json": "bcb7cbdda403bd1cf2644edabf931d06510b68792d3f5a436cf9780c3bbec775"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 8,
+                "stripe_io": 2
+              },
+              "minimum_cost_proven": false,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "8",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 8.0
+            }
+          }
+        },
+        "exit_code": 0
+      },
+      "16": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 8
+              },
+              "stripe_io": {
+                "recommended_replicas": 2
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "8d4ea3f9d69653b87ecc52f30842b677557cc5e102b81af411e5ec0b65539bcf"
+                  ],
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "reason": "Fixed or bounded component 'stripe_io' cannot satisfy the necessary stability floor; change the declared topology.",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-boundary-v1/models/aggregate/r16/layout-4.yaml": "c6478c6cf1587142d659c4011b92aa204d89dc0ebebacfc7dae289c1b13f5f34",
+                    "/home/experiment/experiments/mis1-boundary-v1/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-boundary-v1/protocol.json": "bcb7cbdda403bd1cf2644edabf931d06510b68792d3f5a436cf9780c3bbec775"
+                  },
+                  "status": "UNRESOLVED"
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "8d4ea3f9d69653b87ecc52f30842b677557cc5e102b81af411e5ec0b65539bcf"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-boundary-v1/models/aggregate/r16/layout-8.yaml": "4de45047d117137f5e22e9bcd592156eeb16ad7028b833cb6f7e60b7062e09ee",
+                    "/home/experiment/experiments/mis1-boundary-v1/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-boundary-v1/protocol.json": "bcb7cbdda403bd1cf2644edabf931d06510b68792d3f5a436cf9780c3bbec775"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 8,
+                "stripe_io": 2
+              },
+              "minimum_cost_proven": false,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "8",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 8.0
+            }
+          }
+        },
+        "exit_code": 0
+      }
+    }
+  }
+}

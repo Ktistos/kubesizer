@@ -1,0 +1,16 @@
+{
+  "GET": {
+    "per_request_cpu_seconds": 0.03653173277344722,
+    "per_drive_busy_seconds": 0.0003025519732607778,
+    "network_bytes_per_request": 3195650.9719941136,
+    "observed_mean_seconds": 0.041594810343270075,
+    "total_requests_in_counter_windows": 327
+  },
+  "PUT": {
+    "per_request_cpu_seconds": 0.10317364964005286,
+    "per_drive_busy_seconds": 0.06856129740737932,
+    "network_bytes_per_request": 4816399.445753957,
+    "observed_mean_seconds": 0.25692544011154583,
+    "total_requests_in_counter_windows": 376
+  }
+}

@@ -1,0 +1,524 @@
+[
+  {
+    "run_id": "r34-one-pair0",
+    "mode": "async",
+    "rate_rps": 34.0,
+    "seed": 26112061,
+    "started_epoch": 1795093564.6077206,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1570,
+        "completed": 1570,
+        "failures": 0,
+        "mean_seconds": 0.4018038654616874,
+        "maximum_scheduling_delay_seconds": 0.002024694811552763
+      },
+      "write": {
+        "count": 640,
+        "completed": 640,
+        "failures": 0,
+        "mean_seconds": 0.23352464713680093,
+        "maximum_scheduling_delay_seconds": 0.0014809281565248966
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 0,
+    "layout": "one"
+  },
+  {
+    "run_id": "r20-one-pair0",
+    "mode": "async",
+    "rate_rps": 20.0,
+    "seed": 26112062,
+    "started_epoch": 1795093658.3073235,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1000,
+        "completed": 1000,
+        "failures": 0,
+        "mean_seconds": 0.20027206145366655,
+        "maximum_scheduling_delay_seconds": 0.006614846643060446
+      },
+      "write": {
+        "count": 322,
+        "completed": 322,
+        "failures": 0,
+        "mean_seconds": 0.1927490389055532,
+        "maximum_scheduling_delay_seconds": 0.0017885160632431507
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 0,
+    "layout": "one"
+  },
+  {
+    "run_id": "r28-one-pair0",
+    "mode": "async",
+    "rate_rps": 28.0,
+    "seed": 26112063,
+    "started_epoch": 1795093751.8562698,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1369,
+        "completed": 1369,
+        "failures": 0,
+        "mean_seconds": 0.21788832389493115,
+        "maximum_scheduling_delay_seconds": 0.0027694450691342354
+      },
+      "write": {
+        "count": 470,
+        "completed": 470,
+        "failures": 0,
+        "mean_seconds": 0.2710785748001109,
+        "maximum_scheduling_delay_seconds": 0.0031496481969952583
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 0,
+    "layout": "one"
+  },
+  {
+    "run_id": "r34-two-pair0",
+    "mode": "async",
+    "rate_rps": 34.0,
+    "seed": 26112061,
+    "started_epoch": 1795093934.0626373,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1570,
+        "completed": 1570,
+        "failures": 0,
+        "mean_seconds": 0.27618521339360885,
+        "maximum_scheduling_delay_seconds": 0.0015601539053022861
+      },
+      "write": {
+        "count": 640,
+        "completed": 640,
+        "failures": 0,
+        "mean_seconds": 0.16886179650682606,
+        "maximum_scheduling_delay_seconds": 0.0016529201529920101
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 0,
+    "layout": "two"
+  },
+  {
+    "run_id": "r20-two-pair0",
+    "mode": "async",
+    "rate_rps": 20.0,
+    "seed": 26112062,
+    "started_epoch": 1795094027.8443613,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1000,
+        "completed": 1000,
+        "failures": 0,
+        "mean_seconds": 0.19773680526390672,
+        "maximum_scheduling_delay_seconds": 0.006235597189515829
+      },
+      "write": {
+        "count": 322,
+        "completed": 322,
+        "failures": 0,
+        "mean_seconds": 0.1688299604188304,
+        "maximum_scheduling_delay_seconds": 0.003989324904978275
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 0,
+    "layout": "two"
+  },
+  {
+    "run_id": "r28-two-pair0",
+    "mode": "async",
+    "rate_rps": 28.0,
+    "seed": 26112063,
+    "started_epoch": 1795094121.5300927,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1369,
+        "completed": 1369,
+        "failures": 0,
+        "mean_seconds": 0.19849311690974825,
+        "maximum_scheduling_delay_seconds": 0.00360684422776103
+      },
+      "write": {
+        "count": 470,
+        "completed": 470,
+        "failures": 0,
+        "mean_seconds": 0.16897982436113376,
+        "maximum_scheduling_delay_seconds": 0.0011405078694224358
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 0,
+    "layout": "two"
+  },
+  {
+    "run_id": "r34-two-pair1",
+    "mode": "async",
+    "rate_rps": 34.0,
+    "seed": 26112064,
+    "started_epoch": 1795094274.540544,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1611,
+        "completed": 1611,
+        "failures": 0,
+        "mean_seconds": 0.20035818611138137,
+        "maximum_scheduling_delay_seconds": 0.003892324399203062
+      },
+      "write": {
+        "count": 552,
+        "completed": 552,
+        "failures": 0,
+        "mean_seconds": 0.16894195288203764,
+        "maximum_scheduling_delay_seconds": 0.0011025643907487392
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 1,
+    "layout": "two"
+  },
+  {
+    "run_id": "r28-two-pair1",
+    "mode": "async",
+    "rate_rps": 28.0,
+    "seed": 26112065,
+    "started_epoch": 1795094368.426082,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1311,
+        "completed": 1311,
+        "failures": 0,
+        "mean_seconds": 0.1981660998500969,
+        "maximum_scheduling_delay_seconds": 0.0029984530992805958
+      },
+      "write": {
+        "count": 485,
+        "completed": 485,
+        "failures": 0,
+        "mean_seconds": 0.1684517565087329,
+        "maximum_scheduling_delay_seconds": 0.0015250793658196926
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 1,
+    "layout": "two"
+  },
+  {
+    "run_id": "r20-two-pair1",
+    "mode": "async",
+    "rate_rps": 20.0,
+    "seed": 26112066,
+    "started_epoch": 1795094463.5832863,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 951,
+        "completed": 951,
+        "failures": 0,
+        "mean_seconds": 0.19758152534752363,
+        "maximum_scheduling_delay_seconds": 0.002002185210585594
+      },
+      "write": {
+        "count": 332,
+        "completed": 332,
+        "failures": 0,
+        "mean_seconds": 0.16915136858321592,
+        "maximum_scheduling_delay_seconds": 0.0012784479185938835
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 1,
+    "layout": "two"
+  },
+  {
+    "run_id": "r34-one-pair1",
+    "mode": "async",
+    "rate_rps": 34.0,
+    "seed": 26112064,
+    "started_epoch": 1795094619.803582,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1611,
+        "completed": 1611,
+        "failures": 0,
+        "mean_seconds": 0.24141415156837967,
+        "maximum_scheduling_delay_seconds": 0.002163564320653677
+      },
+      "write": {
+        "count": 552,
+        "completed": 552,
+        "failures": 0,
+        "mean_seconds": 0.1688717925782734,
+        "maximum_scheduling_delay_seconds": 0.002704962622374296
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 1,
+    "layout": "one"
+  },
+  {
+    "run_id": "r28-one-pair1",
+    "mode": "async",
+    "rate_rps": 28.0,
+    "seed": 26112065,
+    "started_epoch": 1795094713.6065545,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1311,
+        "completed": 1311,
+        "failures": 0,
+        "mean_seconds": 0.21887702275277843,
+        "maximum_scheduling_delay_seconds": 0.0026076254434883595
+      },
+      "write": {
+        "count": 485,
+        "completed": 485,
+        "failures": 0,
+        "mean_seconds": 0.1688384619531865,
+        "maximum_scheduling_delay_seconds": 0.001228800043463707
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 1,
+    "layout": "one"
+  },
+  {
+    "run_id": "r20-one-pair1",
+    "mode": "async",
+    "rate_rps": 20.0,
+    "seed": 26112066,
+    "started_epoch": 1795094807.510297,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 951,
+        "completed": 951,
+        "failures": 0,
+        "mean_seconds": 0.19868141475802464,
+        "maximum_scheduling_delay_seconds": 0.008928496390581131
+      },
+      "write": {
+        "count": 332,
+        "completed": 332,
+        "failures": 0,
+        "mean_seconds": 0.16905302953126514,
+        "maximum_scheduling_delay_seconds": 0.004286958836019039
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 1,
+    "layout": "one"
+  },
+  {
+    "run_id": "r28-one-pair2",
+    "mode": "async",
+    "rate_rps": 28.0,
+    "seed": 26112067,
+    "started_epoch": 1795094954.5067182,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1373,
+        "completed": 1373,
+        "failures": 0,
+        "mean_seconds": 0.21980741908414275,
+        "maximum_scheduling_delay_seconds": 0.0016974909231066704
+      },
+      "write": {
+        "count": 442,
+        "completed": 442,
+        "failures": 0,
+        "mean_seconds": 0.1698579380764917,
+        "maximum_scheduling_delay_seconds": 0.001351663377135992
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 2,
+    "layout": "one"
+  },
+  {
+    "run_id": "r34-one-pair2",
+    "mode": "async",
+    "rate_rps": 34.0,
+    "seed": 26112068,
+    "started_epoch": 1795095048.4148324,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1711,
+        "completed": 1711,
+        "failures": 0,
+        "mean_seconds": 0.6452572640017424,
+        "maximum_scheduling_delay_seconds": 0.00353796174749732
+      },
+      "write": {
+        "count": 582,
+        "completed": 582,
+        "failures": 0,
+        "mean_seconds": 0.16968541967768952,
+        "maximum_scheduling_delay_seconds": 0.0032016425393521786
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 2,
+    "layout": "one"
+  },
+  {
+    "run_id": "r20-one-pair2",
+    "mode": "async",
+    "rate_rps": 20.0,
+    "seed": 26112069,
+    "started_epoch": 1795095142.9104884,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 972,
+        "completed": 972,
+        "failures": 0,
+        "mean_seconds": 0.20333651490911933,
+        "maximum_scheduling_delay_seconds": 0.0021772957406938076
+      },
+      "write": {
+        "count": 343,
+        "completed": 343,
+        "failures": 0,
+        "mean_seconds": 0.1698235324936927,
+        "maximum_scheduling_delay_seconds": 0.0031921272166073322
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 2,
+    "layout": "one"
+  },
+  {
+    "run_id": "r28-two-pair2",
+    "mode": "async",
+    "rate_rps": 28.0,
+    "seed": 26112067,
+    "started_epoch": 1795095327.126283,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1373,
+        "completed": 1373,
+        "failures": 0,
+        "mean_seconds": 0.199400899300619,
+        "maximum_scheduling_delay_seconds": 0.004730172920972109
+      },
+      "write": {
+        "count": 442,
+        "completed": 442,
+        "failures": 0,
+        "mean_seconds": 0.1695816750834144,
+        "maximum_scheduling_delay_seconds": 0.0012258081696927547
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 2,
+    "layout": "two"
+  },
+  {
+    "run_id": "r34-two-pair2",
+    "mode": "async",
+    "rate_rps": 34.0,
+    "seed": 26112068,
+    "started_epoch": 1795095421.1142612,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1711,
+        "completed": 1711,
+        "failures": 0,
+        "mean_seconds": 0.20088158770121986,
+        "maximum_scheduling_delay_seconds": 0.006456522271037102
+      },
+      "write": {
+        "count": 582,
+        "completed": 582,
+        "failures": 0,
+        "mean_seconds": 0.16916443909201578,
+        "maximum_scheduling_delay_seconds": 0.003983453847467899
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 2,
+    "layout": "two"
+  },
+  {
+    "run_id": "r20-two-pair2",
+    "mode": "async",
+    "rate_rps": 20.0,
+    "seed": 26112069,
+    "started_epoch": 1795095515.325135,
+    "warmup_seconds": 25,
+    "measurement_seconds": 65,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 972,
+        "completed": 972,
+        "failures": 0,
+        "mean_seconds": 0.1983192554112608,
+        "maximum_scheduling_delay_seconds": 0.0031562517397105694
+      },
+      "write": {
+        "count": 343,
+        "completed": 343,
+        "failures": 0,
+        "mean_seconds": 0.1692128637371145,
+        "maximum_scheduling_delay_seconds": 0.0006718062795698643
+      }
+    },
+    "snapshot_errors": 0,
+    "pair": 2,
+    "layout": "two"
+  }
+]

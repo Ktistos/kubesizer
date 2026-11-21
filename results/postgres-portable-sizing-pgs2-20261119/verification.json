@@ -1,0 +1,186 @@
+{
+  "protocol_verified": true,
+  "execution_source_verified": true,
+  "scores_reproduced": true,
+  "target_runs": 18,
+  "target_requests": 32072,
+  "target_failures": 0,
+  "cpu_cores_by_run": [
+    {
+      "run": "r34-one-pair0",
+      "rate_rps": 34.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.028657633333333325,
+        "standby1": 0.8258089677419354
+      }
+    },
+    {
+      "run": "r20-one-pair0",
+      "rate_rps": 20.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.020074841269841253,
+        "standby1": 0.49989874603174633
+      }
+    },
+    {
+      "run": "r28-one-pair0",
+      "rate_rps": 28.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.02957298412698414,
+        "standby1": 0.6779352499999997
+      }
+    },
+    {
+      "run": "r34-two-pair0",
+      "rate_rps": 34.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.030839516666666653,
+        "standby1": 0.4213695999999999,
+        "standby2": 0.4480610483870968
+      }
+    },
+    {
+      "run": "r20-two-pair0",
+      "rate_rps": 20.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.020453095238095225,
+        "standby1": 0.2593172333333333,
+        "standby2": 0.27301081666666677
+      }
+    },
+    {
+      "run": "r28-two-pair0",
+      "rate_rps": 28.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.025350866666666683,
+        "standby1": 0.33458653968253993,
+        "standby2": 0.3770952857142857
+      }
+    },
+    {
+      "run": "r34-two-pair1",
+      "rate_rps": 34.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.03001484126984131,
+        "standby1": 0.4070647333333331,
+        "standby2": 0.44249569841269865
+      }
+    },
+    {
+      "run": "r28-two-pair1",
+      "rate_rps": 28.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.026003301587301568,
+        "standby1": 0.3362056031746039,
+        "standby2": 0.35079943333333335
+      }
+    },
+    {
+      "run": "r20-two-pair1",
+      "rate_rps": 20.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.022382936507936407,
+        "standby1": 0.25683481666666713,
+        "standby2": 0.2430547868852461
+      }
+    },
+    {
+      "run": "r34-one-pair1",
+      "rate_rps": 34.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.027103174603174653,
+        "standby1": 0.8088727142857142
+      }
+    },
+    {
+      "run": "r28-one-pair1",
+      "rate_rps": 28.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.024317921875000037,
+        "standby1": 0.6603551833333332
+      }
+    },
+    {
+      "run": "r20-one-pair1",
+      "rate_rps": 20.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.020511698412698415,
+        "standby1": 0.47418474603174643
+      }
+    },
+    {
+      "run": "r28-one-pair2",
+      "rate_rps": 28.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.02479038333333333,
+        "standby1": 0.6817733499999993
+      }
+    },
+    {
+      "run": "r34-one-pair2",
+      "rate_rps": 34.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.027243983333333333,
+        "standby1": 0.8986741451612887
+      }
+    },
+    {
+      "run": "r20-one-pair2",
+      "rate_rps": 20.0,
+      "layout": "one",
+      "measured_core_use": {
+        "primary": 0.021836253968253963,
+        "standby1": 0.4849460666666649
+      }
+    },
+    {
+      "run": "r28-two-pair2",
+      "rate_rps": 28.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.02454065079365082,
+        "standby1": 0.3383569843750003,
+        "standby2": 0.3769652333333333
+      }
+    },
+    {
+      "run": "r34-two-pair2",
+      "rate_rps": 34.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.028486766666666576,
+        "standby1": 0.4017955714285718,
+        "standby2": 0.49196417460317465
+      }
+    },
+    {
+      "run": "r20-two-pair2",
+      "rate_rps": 20.0,
+      "layout": "two",
+      "measured_core_use": {
+        "primary": 0.021165253968253937,
+        "standby1": 0.25112263333333357,
+        "standby2": 0.2666452666666667
+      }
+    }
+  ],
+  "templates_restored": [
+    "primary",
+    "standby1",
+    "standby2"
+  ]
+}

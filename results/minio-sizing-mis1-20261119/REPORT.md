@@ -1,0 +1,31 @@
+# MinIO replica sizing holdout
+
+The four-member MinIO layout met both mean latency SLOs at every tested rate from 8 to 24 total requests/s. The aggregate telemetry model selected it at 8 and 16 requests/s. The model with extra PUT fragment measurements selected it only at 8 requests/s. Adding fragment measurements did not improve sizing decisions in this pilot. [Physical scores](data/scores.json) · [Frozen recommendations](data/predictions-frozen.json)
+
+## What was compared
+
+The smaller layout had one four-drive erasure set. The larger layout had two four-drive erasure sets in the same pool. Both used EC:2 and the same four workers, with one drive per worker per set. Each member had a one-core CPU limit and a dedicated 2 GiB Longhorn volume. The cost measure was the number of active members. Both layouts ran the same instrumented MinIO binary. The client used direct in-cluster S3 endpoints with the same 1 MiB object workload in both layouts. [Protocol](../../docs/MINIO_REPLICA_SIZING_PROTOCOL.md) · [Four-member topology](data/layout-4-verified.json) · [Eight-member topology](data/layout-8-verified.json) · [Member resources](data/layout-4.yaml)
+
+Both models used idle-corrected container CPU and block busy time plus in-cluster client latency measured on the four-member layout. They represented CPU as a processor-sharing replica per member and storage as one serialized queue per erasure set, with a fixed residual fitted to the low-load client mean for each class. In the aggregate model, incremental Longhorn volume busy time provided the effective I/O demand. The fragment model replaced the PUT demand at that queue with the distribution of the slowest receiver write-and-flush duration in each complete PUT fragment group. There were 291 such groups across the two characterization windows. The fitted mean for the PUT I/O proxy increased from 68.56 ms to 79.56 ms. Both models transferred their fitted demands and residual to the larger layout under an even split across its two sets. [Aggregate inputs](data/profile-aggregate.json) · [Fragment inputs](data/profile-fragment.json) · [Frozen models](data/models)
+
+## Holdout and decisions
+
+Each load used independent arrival streams with equal GET and PUT rates. Three paired repetitions used identical scheduled times, request types and object keys on both layouts. Each repetition used a 12-second warm-up and a 45-second measured window. A layout passed when the upper end of each class's 95% Student t interval across the three run means stayed below its SLO, and the client scheduling, failure and drain checks passed. All 18 physical windows completed without request failures. [Target order](data/target-order.json) · [Run summaries](data/target-results.json)
+
+| Total requests/s | Four-member GET / PUT mean (ms) | Eight-member GET / PUT mean (ms) | Lowest observed feasible layout | Aggregate selection | Fragment selection |
+| ---: | ---: | ---: | ---: | --- | --- |
+| 8 | 54.9 / 196.5 | 56.3 / 210.2 | 4 | 4, passed | 4, passed |
+| 16 | 69.5 / 240.9 | 76.4 / 262.9 | 4 | 4, passed | 8, passed with a cheaper measured alternative |
+| 24 | 86.0 / 304.2 | 108.1 / 393.7 | 4 | 8, physically inconclusive | Abstained |
+
+At 24 requests/s, the upper GET and PUT bounds for the four-member layout were 92.8 and 346.0 ms, against SLOs of 250 and 400 ms. For the eight-member layout, the PUT interval was 262.2–525.2 ms and crossed its SLO. The result is inconclusive for that layout. No recommendation selected a measured-infeasible layout. The aggregate arm had two confirmed passes and one inconclusive recommendation. The fragment arm had two confirmed passes, including one unnecessary scale-up, and one abstention. [Physical scores and intervals](data/scores.json)
+
+## Interpretation
+
+The fragment measurement describes elapsed time on a receiver path. Modeling it as serialized storage demand assumes that this time occupies the same capacity that gates other requests. At 24 requests/s, the one-set model's nominal storage load under that assumption rose from 0.83 with block busy time to 0.96 with the fragment proxy. The two models also assigned different variability to PUT service. The frozen decisions alone cannot isolate the effect of the higher mean from that of variability. At 16 requests/s the fragment model did not get a sufficiently stable warm-up estimate for the smaller layout, which allowed the larger layout to be selected. At 24 requests/s the aggregate model left the cheaper layout unresolved, while the fragment model accepted neither layout. These are simulation outcomes under the specified queue models and validation gates. [Frozen recommendations and gate diagnostics](data/predictions-frozen.json)
+
+The eight-member layout shared worker nodes and the Longhorn backend with the four-member layout. Each target placed S3 traffic on only one layout at a time. The experiment therefore leaves open how additional sets scale when they also get independent hardware. Three short repetitions per condition, one cluster, one object size, one request mix and two layouts also leave the saturation point and sustained reliability unresolved. The result supports using aggregate telemetry as the simpler baseline for this tested setup. It does not establish when its demand estimates transfer to other object stores or even to different MinIO installations.
+
+## Evidence and recovery
+
+Earlier attempts encountered counter-collection errors and a MinIO startup-readiness failure. The final run reused the retained four-member characterization and corrected a Python/native bucket-alignment mismatch before freezing the recommendations at 15:12:34 UTC on 19 November 2026. The first holdout started at 15:14:38 UTC. The earlier run produced no holdout outcomes. The archived receipts verify the executed source, native simulator, frozen inputs and raw windows. Re-running the scoring step reproduced the archived scores byte for byte. The experiment pods were scaled to zero and their stock entrypoints restored. The separate simulator comparison remained paused. [Retained characterization](data/retained-characterization.json) · [Prediction receipt](data/prediction-receipt.json) · [Raw windows](data/windows) · [Executed source](execution-source.tar.gz) · [Cleanup and restoration](data/template-restoration.json)

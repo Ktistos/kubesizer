@@ -1,0 +1,31 @@
+{
+  "frozen_at": "2026-11-19T10:14:28.561484+00:00",
+  "target_rate_rps": 36.87397775624534,
+  "target_outcomes_used": false,
+  "forecasts": {
+    "analytical": {
+      "exit_code": 1,
+      "response": {
+        "cli_version": "0.6.0",
+        "command": "kubesizer",
+        "error": {
+          "message": "No stateful topology candidate was accepted: one: The workload contains semantics that require --replica-evaluation simulation: standby1: unsupported analytical execution/admission/dispatch semantics (processor sharing requires Poisson input and unlimited concurrency without round-robin dispatch; admission limits below processing slots require simulation); primary: unsupported analytical execution/admission/dispatch semantics (processor sharing requires Poisson input and unlimited concurrency without round-robin dispatch; admission limits below processing slots require simulation); per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes; synchronous downstream calls hold finite parent concurrency at services standby1.; two: The workload contains semantics that require --replica-evaluation simulation: standby1: unsupported analytical execution/admission/dispatch semantics (processor sharing requires Poisson input and unlimited concurrency without round-robin dispatch; admission limits below processing slots require simulation); standby2: unsupported analytical execution/admission/dispatch semantics (processor sharing requires Poisson input and unlimited concurrency without round-robin dispatch; admission limits below processing slots require simulation); primary: unsupported analytical execution/admission/dispatch semantics (processor sharing requires Poisson input and unlimited concurrency without round-robin dispatch; admission limits below processing slots require simulation); per-visit non-CPU blocking time occupies finite service concurrency after CPU work completes; synchronous downstream calls hold finite parent concurrency at services standby1, standby2.",
+          "type": "RuntimeError"
+        },
+        "ok": false
+      }
+    },
+    "simulation": {
+      "exit_code": 1,
+      "response": {
+        "cli_version": "0.6.0",
+        "command": "kubesizer",
+        "error": {
+          "message": "No stateful topology candidate was accepted: one: The minimum replica configuration must have positive capacity slack.; two: No reliably feasible configuration exists in the reachable replica space.",
+          "type": "RuntimeError"
+        },
+        "ok": false
+      }
+    }
+  }
+}

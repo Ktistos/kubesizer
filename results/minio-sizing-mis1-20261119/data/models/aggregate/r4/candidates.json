@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "candidates": [
+    {
+      "name": "4",
+      "mechanism": "one pool with 1 four-drive EC:2 sets",
+      "base_cost": 4,
+      "elastic_replica_costs": {},
+      "workload": "layout-4.yaml",
+      "evidence_sources": [
+        "../../../protocol.json",
+        "../../../profile-aggregate.json"
+      ]
+    },
+    {
+      "name": "8",
+      "mechanism": "one pool with 2 four-drive EC:2 sets",
+      "base_cost": 8,
+      "elastic_replica_costs": {},
+      "workload": "layout-8.yaml",
+      "evidence_sources": [
+        "../../../protocol.json",
+        "../../../profile-aggregate.json"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+[
+  {
+    "id": "r16-layout4-pair0",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26113181
+  },
+  {
+    "id": "r16-layout8-pair0",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26113181
+  },
+  {
+    "id": "r15-layout8-pair0",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26113182
+  },
+  {
+    "id": "r15-layout4-pair0",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26113182
+  },
+  {
+    "id": "r15-layout8-pair1",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26113191
+  },
+  {
+    "id": "r15-layout4-pair1",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26113191
+  },
+  {
+    "id": "r16-layout4-pair1",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26113192
+  },
+  {
+    "id": "r16-layout8-pair1",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26113192
+  },
+  {
+    "id": "r16-layout4-pair2",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26113201
+  },
+  {
+    "id": "r16-layout8-pair2",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26113201
+  },
+  {
+    "id": "r15-layout8-pair2",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26113202
+  },
+  {
+    "id": "r15-layout4-pair2",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26113202
+  },
+  {
+    "id": "r16-layout8-pair3",
+    "layout": 8,
+    "rate": 16.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26113211
+  },
+  {
+    "id": "r16-layout4-pair3",
+    "layout": 4,
+    "rate": 16.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26113211
+  },
+  {
+    "id": "r15-layout4-pair3",
+    "layout": 4,
+    "rate": 15.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26113212
+  },
+  {
+    "id": "r15-layout8-pair3",
+    "layout": 8,
+    "rate": 15.0,
+    "pair": 3,
+    "mode": "mixed",
+    "seed": 26113212
+  }
+]

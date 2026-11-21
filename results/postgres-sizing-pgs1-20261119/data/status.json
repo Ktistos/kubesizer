@@ -1,0 +1,11 @@
+{
+  "status": "COMPLETED",
+  "started_at": "2026-11-19T10:07:28.289313+00:00",
+  "stage_started_at": "2026-11-19T10:30:26.136813+00:00",
+  "completed": 6,
+  "total": 6,
+  "target_rps": 36.87397775624534,
+  "current_layout": "two",
+  "pair": 2,
+  "completed_at": "2026-11-19T10:33:52.331300+00:00"
+}

@@ -1,0 +1,404 @@
+{
+  "target_rate_rps": 36.87397775624534,
+  "frozen_at": "2026-11-19T10:14:28.561484+00:00",
+  "lowest_measured_feasible_layout": null,
+  "decisions": {
+    "analytical": {
+      "selected": null,
+      "observed": "ABSTAINED",
+      "excess_cost_vs_measured_feasible": null
+    },
+    "simulation": {
+      "selected": null,
+      "observed": "ABSTAINED",
+      "excess_cost_vs_measured_feasible": null
+    }
+  },
+  "paired_schedules": {
+    "0": {
+      "same_request_ordinals": true,
+      "same_request_classes": true,
+      "maximum_scheduled_offset_difference_seconds": 0.0
+    },
+    "1": {
+      "same_request_ordinals": true,
+      "same_request_classes": true,
+      "maximum_scheduled_offset_difference_seconds": 0.0
+    },
+    "2": {
+      "same_request_ordinals": true,
+      "same_request_classes": true,
+      "maximum_scheduled_offset_difference_seconds": 0.0
+    }
+  },
+  "runs": [
+    {
+      "run_id": "one-pair0",
+      "layout": "one",
+      "pair": 0,
+      "classes": {
+        "read": {
+          "client_mean_seconds": 2.5914529611201957,
+          "gateway_to_sql_mean_seconds": 2.4269855482133105,
+          "attempts": 2500,
+          "failures": 0,
+          "failure_reasons": {}
+        },
+        "write": {
+          "client_mean_seconds": 0.37191999638544654,
+          "gateway_to_sql_mean_seconds": 0.20710177821249082,
+          "attempts": 814,
+          "failures": 0,
+          "failure_reasons": {}
+        }
+      },
+      "postgres_process_cpu_cores": {
+        "primary": {
+          "query": 0.012152681232785265,
+          "replay": 0.0,
+          "other": 0.006597169812083427
+        },
+        "standby1": {
+          "query": 0.9866819762808986,
+          "replay": 0.0009259185701169718,
+          "other": 0.0060184707057603214
+        }
+      }
+    },
+    {
+      "run_id": "two-pair0",
+      "layout": "two",
+      "pair": 0,
+      "classes": {
+        "read": {
+          "client_mean_seconds": 0.30669293716661633,
+          "gateway_to_sql_mean_seconds": 0.14240750699620694,
+          "attempts": 2500,
+          "failures": 0,
+          "failure_reasons": {}
+        },
+        "write": {
+          "client_mean_seconds": 0.16979792628080312,
+          "gateway_to_sql_mean_seconds": 0.005686943872925581,
+          "attempts": 814,
+          "failures": 0,
+          "failure_reasons": {}
+        }
+      },
+      "postgres_process_cpu_cores": {
+        "primary": {
+          "query": 0.010444777562933515,
+          "replay": 0.0,
+          "other": 0.010679491665471346
+        },
+        "standby1": {
+          "query": 0.4693108480243945,
+          "replay": 0.0011735705126891586,
+          "other": 0.008801778845168688
+        },
+        "standby2": {
+          "query": 0.4708364896908904,
+          "replay": 0.0010562134614202426,
+          "other": 0.008919135896437606
+        }
+      }
+    },
+    {
+      "run_id": "two-pair1",
+      "layout": "two",
+      "pair": 1,
+      "classes": {
+        "read": {
+          "client_mean_seconds": 0.20320050611415028,
+          "gateway_to_sql_mean_seconds": 0.03897956550860312,
+          "attempts": 2523,
+          "failures": 0,
+          "failure_reasons": {}
+        },
+        "write": {
+          "client_mean_seconds": 0.1700682201559315,
+          "gateway_to_sql_mean_seconds": 0.0058460387226659805,
+          "attempts": 832,
+          "failures": 0,
+          "failure_reasons": {}
+        }
+      },
+      "postgres_process_cpu_cores": {
+        "primary": {
+          "query": 0.011035719128320706,
+          "replay": 0.0,
+          "other": 0.012679336870836553
+        },
+        "standby1": {
+          "query": 0.47841016433943484,
+          "replay": 0.0015262164751932887,
+          "other": 0.008100687445256691
+        },
+        "standby2": {
+          "query": 0.4408417587962153,
+          "replay": 0.0012914139405481673,
+          "other": 0.009626903920449974
+        }
+      }
+    },
+    {
+      "run_id": "one-pair1",
+      "layout": "one",
+      "pair": 1,
+      "classes": {
+        "read": {
+          "client_mean_seconds": 1.1836710299907478,
+          "gateway_to_sql_mean_seconds": 1.0190663460870593,
+          "attempts": 2523,
+          "failures": 0,
+          "failure_reasons": {}
+        },
+        "write": {
+          "client_mean_seconds": 0.1699195058989482,
+          "gateway_to_sql_mean_seconds": 0.005398796388852553,
+          "attempts": 832,
+          "failures": 0,
+          "failure_reasons": {}
+        }
+      },
+      "postgres_process_cpu_cores": {
+        "primary": {
+          "query": 0.010117720080142122,
+          "replay": 0.0,
+          "other": 0.006512555453884583
+        },
+        "standby1": {
+          "query": 0.9666493023694406,
+          "replay": 0.001046660697945735,
+          "other": 0.006279964187674424
+        }
+      }
+    },
+    {
+      "run_id": "one-pair2",
+      "layout": "one",
+      "pair": 2,
+      "classes": {
+        "read": {
+          "client_mean_seconds": 2.3188247125152532,
+          "gateway_to_sql_mean_seconds": 2.1540824999229113,
+          "attempts": 2517,
+          "failures": 0,
+          "failure_reasons": {}
+        },
+        "write": {
+          "client_mean_seconds": 0.17024157367154094,
+          "gateway_to_sql_mean_seconds": 0.005760968800792482,
+          "attempts": 847,
+          "failures": 0,
+          "failure_reasons": {}
+        }
+      },
+      "postgres_process_cpu_cores": {
+        "primary": {
+          "query": 0.011009406375848768,
+          "replay": 0.0,
+          "other": 0.007495766043131078
+        },
+        "standby1": {
+          "query": 0.9737468575404964,
+          "replay": 0.0011712134442392317,
+          "other": 0.006675916632163623
+        }
+      }
+    },
+    {
+      "run_id": "two-pair2",
+      "layout": "two",
+      "pair": 2,
+      "classes": {
+        "read": {
+          "client_mean_seconds": 0.21112217381689846,
+          "gateway_to_sql_mean_seconds": 0.0482336829120938,
+          "attempts": 2517,
+          "failures": 21,
+          "failure_reasons": {
+            "SerializationFailure: canceling statement due to conflict with recovery\nDETAIL:  User query might have needed to see row versions that must be removed.\n": 21
+          }
+        },
+        "write": {
+          "client_mean_seconds": 0.16788790075420681,
+          "gateway_to_sql_mean_seconds": 0.00508780779268641,
+          "attempts": 847,
+          "failures": 0,
+          "failure_reasons": {}
+        }
+      },
+      "postgres_process_cpu_cores": {
+        "primary": {
+          "query": 0.010390815219251117,
+          "replay": 0.0,
+          "other": 0.009800427990884576
+        },
+        "standby1": {
+          "query": 0.45022930035232384,
+          "replay": 0.0012988519024063879,
+          "other": 0.007556956523091722
+        },
+        "standby2": {
+          "query": 0.45967549600618846,
+          "replay": 0.001180774456733081,
+          "other": 0.007320801631745105
+        }
+      }
+    }
+  ],
+  "observed_layouts": {
+    "one": {
+      "observed": "INCONCLUSIVE",
+      "classes": {
+        "read": {
+          "observed": "INCONCLUSIVE",
+          "mean_seconds": 2.0313162345420657,
+          "lower_seconds": 0.17658120387253318,
+          "upper_seconds": 3.886051265211598,
+          "run_means_seconds": [
+            2.5914529611201957,
+            1.1836710299907478,
+            2.3188247125152532
+          ],
+          "run_failure_rates": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "write": {
+          "observed": "INCONCLUSIVE",
+          "mean_seconds": 0.23736035865197858,
+          "lower_seconds": 0.0,
+          "upper_seconds": 0.5268423313706309,
+          "run_means_seconds": [
+            0.37191999638544654,
+            0.1699195058989482,
+            0.17024157367154094
+          ],
+          "run_failure_rates": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "audits": [
+        {
+          "run_id": "one-pair0",
+          "client_valid": true,
+          "evidence_valid": true,
+          "scheduling_p95_seconds": 0.00018289731815457344,
+          "drained": true,
+          "maximum_sampled_replay_backlog_bytes": 152416.0,
+          "read_completions": {
+            "standby1": 2500
+          }
+        },
+        {
+          "run_id": "one-pair1",
+          "client_valid": true,
+          "evidence_valid": true,
+          "scheduling_p95_seconds": 0.00017220713198184967,
+          "drained": true,
+          "maximum_sampled_replay_backlog_bytes": 9904.0,
+          "read_completions": {
+            "standby1": 2523
+          }
+        },
+        {
+          "run_id": "one-pair2",
+          "client_valid": true,
+          "evidence_valid": true,
+          "scheduling_p95_seconds": 0.00020644022151827812,
+          "drained": true,
+          "maximum_sampled_replay_backlog_bytes": 49496.0,
+          "read_completions": {
+            "standby1": 2517
+          }
+        }
+      ]
+    },
+    "two": {
+      "observed": "INCONCLUSIVE",
+      "classes": {
+        "read": {
+          "observed": "INCONCLUSIVE",
+          "mean_seconds": 0.240338539032555,
+          "lower_seconds": 0.09724988187887823,
+          "upper_seconds": 0.3834271961862318,
+          "run_means_seconds": [
+            0.30669293716661633,
+            0.20320050611415028,
+            0.21112217381689846
+          ],
+          "run_failure_rates": [
+            0.0,
+            0.0,
+            0.00834326579261025
+          ]
+        },
+        "write": {
+          "observed": "FEASIBLE_IN_PILOT",
+          "mean_seconds": 0.16925134906364714,
+          "lower_seconds": 0.1662989765646622,
+          "upper_seconds": 0.17220372156263208,
+          "run_means_seconds": [
+            0.16979792628080312,
+            0.1700682201559315,
+            0.16788790075420681
+          ],
+          "run_failure_rates": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "audits": [
+        {
+          "run_id": "two-pair0",
+          "client_valid": true,
+          "evidence_valid": true,
+          "scheduling_p95_seconds": 0.00016992539167404175,
+          "drained": true,
+          "maximum_sampled_replay_backlog_bytes": 130560.0,
+          "read_completions": {
+            "standby1": 1316,
+            "standby2": 1184
+          }
+        },
+        {
+          "run_id": "two-pair1",
+          "client_valid": true,
+          "evidence_valid": true,
+          "scheduling_p95_seconds": 0.0001836707815527916,
+          "drained": true,
+          "maximum_sampled_replay_backlog_bytes": 13464.0,
+          "read_completions": {
+            "standby1": 1346,
+            "standby2": 1177
+          }
+        },
+        {
+          "run_id": "two-pair2",
+          "client_valid": true,
+          "evidence_valid": true,
+          "scheduling_p95_seconds": 0.00016299262642860413,
+          "drained": true,
+          "maximum_sampled_replay_backlog_bytes": 52096.0,
+          "read_completions": {
+            "standby1": 1252,
+            "standby2": 1244
+          }
+        }
+      ]
+    }
+  },
+  "cleanup": {
+    "completed_at": "2026-11-19T10:34:31.065319+00:00",
+    "pilot_pods_running": 0
+  }
+}

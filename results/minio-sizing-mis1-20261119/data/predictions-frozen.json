@@ -1,0 +1,394 @@
+{
+  "frozen_at": "2026-11-19T15:12:34.841006+00:00",
+  "arms": {
+    "aggregate": {
+      "4": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 4
+              },
+              "stripe_io": {
+                "recommended_replicas": 1
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "configuration": {
+                    "cpu": 4,
+                    "stripe_io": 1
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "6f0ca1500de6b29534ecaaa1c029d79927020cc2ab152c88893fbdbe1ed1369d"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/aggregate/r4/layout-4.yaml": "d9f42a3347772c4d2db2c89a53543e68e322095a5ca452e897da5432ebae39bf",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 4.0,
+                  "within_candidate_minimum_proven": true
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "6f0ca1500de6b29534ecaaa1c029d79927020cc2ab152c88893fbdbe1ed1369d"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/aggregate/r4/layout-8.yaml": "18ceea0a93cd7049314c837137286511f7f389a8691620b73fad28ae29c44afa",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 4,
+                "stripe_io": 1
+              },
+              "minimum_cost_proven": true,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "4",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 4.0
+            }
+          }
+        },
+        "exit_code": 0
+      },
+      "8": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 4
+              },
+              "stripe_io": {
+                "recommended_replicas": 1
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "configuration": {
+                    "cpu": 4,
+                    "stripe_io": 1
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "24167f04f0e3acfd7eb82864c287a790d499fe2842fd1819b539174d4417250c"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/aggregate/r8/layout-4.yaml": "d4e473cb95697880ae9b4e99cde3683345f97578b4d768d0555c7108eb13aed3",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 4.0,
+                  "within_candidate_minimum_proven": true
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "24167f04f0e3acfd7eb82864c287a790d499fe2842fd1819b539174d4417250c"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/aggregate/r8/layout-8.yaml": "1fd60dd8e5c71408ada045752d9a0a09cf4cace030580833f10f0ee67d7ff688",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 4,
+                "stripe_io": 1
+              },
+              "minimum_cost_proven": true,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "4",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 4.0
+            }
+          }
+        },
+        "exit_code": 0
+      },
+      "12": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 8
+              },
+              "stripe_io": {
+                "recommended_replicas": 2
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "4a73043ba815ec124a0a0216431ccb3e1f0f978f1c52ae229c59ee5ac402d1ee"
+                  ],
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "reason": "No reliably feasible configuration exists in the reachable replica space.",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/aggregate/r12/layout-4.yaml": "d35aab486e66dc3487d8085073c10dd4366ddd8675408876e8f4167debbefb07",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "UNRESOLVED"
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "4a73043ba815ec124a0a0216431ccb3e1f0f978f1c52ae229c59ee5ac402d1ee"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/aggregate/r12/layout-8.yaml": "9b8e9c1db0e4d5906556d3e9c4e838fe8f17d4e77bd54a54362d2e129649ba34",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 8,
+                "stripe_io": 2
+              },
+              "minimum_cost_proven": false,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "8",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 8.0
+            }
+          }
+        },
+        "exit_code": 0
+      }
+    },
+    "fragment": {
+      "4": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 4
+              },
+              "stripe_io": {
+                "recommended_replicas": 1
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "configuration": {
+                    "cpu": 4,
+                    "stripe_io": 1
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "dfad27b45aa86bfa35b03c7cd45de9b83fea18106f31ba522e61653a27e1d422"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/fragment/r4/layout-4.yaml": "e89a6438173909c0d1146eb8b4257e24a6ee0cbc5c221d44f0ebdf5e3b7182b3",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/profile-fragment.json": "737dcbf5332cad15eaf8cbfe6da74e057ca3dd1778180aef92cc0fd6fb3abfc2",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 4.0,
+                  "within_candidate_minimum_proven": true
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "dfad27b45aa86bfa35b03c7cd45de9b83fea18106f31ba522e61653a27e1d422"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/fragment/r4/layout-8.yaml": "5650787bab1de8581bc5ac73200b15115c1d3fabbe586c72f7832a1a5a8d9ec8",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/profile-fragment.json": "737dcbf5332cad15eaf8cbfe6da74e057ca3dd1778180aef92cc0fd6fb3abfc2",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 4,
+                "stripe_io": 1
+              },
+              "minimum_cost_proven": true,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "4",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 4.0
+            }
+          }
+        },
+        "exit_code": 0
+      },
+      "8": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "ok": true,
+          "result": {
+            "services": {
+              "cpu": {
+                "recommended_replicas": 8
+              },
+              "stripe_io": {
+                "recommended_replicas": 2
+              }
+            },
+            "stateful_planning": {
+              "candidates": [
+                {
+                  "fingerprints": [
+                    "f0dc66762f272825fdcd08733f82407f50abd941dcedbd8c7d4eddbcdd61460d",
+                    "f1b056e382a58babd9eb821f56c10016b47fe9cb75733f1cbc35d9d25686963e"
+                  ],
+                  "mechanism": "one pool with 1 four-drive EC:2 sets",
+                  "name": "4",
+                  "reason": "No two consecutive adequate pilot horizons produced W estimates within the horizon-sensitivity tolerance.",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/fragment/r8/layout-4.yaml": "24c62dbc24df2d39ccd280780e9ff5d85cdfb7dd8728aa68e7c76f8b72907276",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/profile-fragment.json": "737dcbf5332cad15eaf8cbfe6da74e057ca3dd1778180aef92cc0fd6fb3abfc2",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "UNRESOLVED"
+                },
+                {
+                  "configuration": {
+                    "cpu": 8,
+                    "stripe_io": 2
+                  },
+                  "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                  "fingerprints": [
+                    "a0620d333a0e02c78005b1667a024ad1dafd154d0057fbcf4bea77d4dc6a7e94",
+                    "f1b056e382a58babd9eb821f56c10016b47fe9cb75733f1cbc35d9d25686963e"
+                  ],
+                  "mean_latency_lower_bounds": {},
+                  "mean_latency_upper_bounds": {},
+                  "mechanism": "one pool with 2 four-drive EC:2 sets",
+                  "name": "8",
+                  "sources": {
+                    "/home/experiment/experiments/mis1-r4/models/fragment/r8/layout-8.yaml": "df67e84a48029f2ffb05e19816738a63766ce07deadebcb1beefdaac1d8ff92e",
+                    "/home/experiment/experiments/mis1-r4/profile-aggregate.json": "0ac2a89c34683d8bcf5e867f6d3238d4637d2833a0922db11c3256d3a00ff144",
+                    "/home/experiment/experiments/mis1-r4/profile-fragment.json": "737dcbf5332cad15eaf8cbfe6da74e057ca3dd1778180aef92cc0fd6fb3abfc2",
+                    "/home/experiment/experiments/mis1-r4/protocol.json": "aad1e996c25492f77a8c3a8ebdc20d2f2296f27fd06a3bd4506409ca6a88c159"
+                  },
+                  "status": "MODEL_ACCEPTED",
+                  "total_cost": 8.0,
+                  "within_candidate_minimum_proven": true
+                }
+              ],
+              "configuration": {
+                "cpu": 8,
+                "stripe_io": 2
+              },
+              "minimum_cost_proven": false,
+              "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+              "selected": "8",
+              "status": "MODEL_ACCEPTED",
+              "total_cost": 8.0
+            }
+          }
+        },
+        "exit_code": 0
+      },
+      "12": {
+        "response": {
+          "cli_version": "0.6.0",
+          "command": "kubesizer",
+          "error": {
+            "message": "No stateful topology candidate was accepted: 4: No two consecutive adequate pilot horizons produced W estimates within the horizon-sensitivity tolerance.; 8: No reliably feasible configuration exists in the reachable replica space.",
+            "type": "RuntimeError"
+          },
+          "ok": false
+        },
+        "exit_code": 1
+      }
+    }
+  }
+}

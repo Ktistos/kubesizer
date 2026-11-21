@@ -1,0 +1,61 @@
+request_classes:
+  GET:
+    concurrency_weight: 0.5
+    calls:
+      cpu:
+        stripe_io: 1
+    call_execution: sequential
+    latency_boundary: external_client
+    latency_components:
+      unmodeled_residual:
+        distribution: deterministic
+        mean: 0.004760525596562077
+    end_to_end_latency_slos:
+      mean_seconds: 0.25
+  PUT:
+    concurrency_weight: 0.5
+    calls:
+      cpu:
+        stripe_io: 1
+    call_execution: sequential
+    latency_boundary: external_client
+    latency_components:
+      unmodeled_residual:
+        distribution: deterministic
+        mean: 0.08519049306411364
+    end_to_end_latency_slos:
+      mean_seconds: 0.4
+replica_constraints:
+  cpu:
+    fixed: 8
+  stripe_io:
+    fixed: 1
+traffic_model:
+  entry_services:
+    GET:
+      cpu:
+        distribution: exponential
+        rate: 16.0
+    PUT:
+      cpu:
+        distribution: exponential
+        rate: 16.0
+  service_times:
+    cpu:
+      execution_model: processor_sharing
+      replica_queue_model: independent_random
+      GET:
+        distribution: deterministic
+        mean: 0.03653173277344722
+      PUT:
+        distribution: deterministic
+        mean: 0.10317364964005286
+    stripe_io:
+      processing_slots_per_replica: 1
+      replica_queue_model: independent_random
+      GET:
+        distribution: deterministic
+        mean: 0.0003025519732607778
+      PUT:
+        distribution: deterministic
+        mean: 0.06856129740737932

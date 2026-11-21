@@ -1,0 +1,176 @@
+[
+  {
+    "run_id": "one-pair0",
+    "mode": "async",
+    "rate_rps": 36.87397775624534,
+    "seed": 26112033,
+    "started_epoch": 1795083323.8148148,
+    "warmup_seconds": 30,
+    "measurement_seconds": 90,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 2500,
+        "completed": 2500,
+        "failures": 0,
+        "mean_seconds": 2.5914529611201957,
+        "maximum_scheduling_delay_seconds": 0.0026996522210538387
+      },
+      "write": {
+        "count": 814,
+        "completed": 814,
+        "failures": 0,
+        "mean_seconds": 0.37191999638544654,
+        "maximum_scheduling_delay_seconds": 0.0026555582880973816
+      }
+    },
+    "snapshot_errors": 0,
+    "layout": "one",
+    "pair": 0
+  },
+  {
+    "run_id": "two-pair0",
+    "mode": "async",
+    "rate_rps": 36.87397775624534,
+    "seed": 26112033,
+    "started_epoch": 1795083560.0859308,
+    "warmup_seconds": 30,
+    "measurement_seconds": 90,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 2500,
+        "completed": 2500,
+        "failures": 0,
+        "mean_seconds": 0.30669293716661633,
+        "maximum_scheduling_delay_seconds": 0.34260416217148304
+      },
+      "write": {
+        "count": 814,
+        "completed": 814,
+        "failures": 0,
+        "mean_seconds": 0.16979792628080312,
+        "maximum_scheduling_delay_seconds": 0.29789468506351113
+      }
+    },
+    "snapshot_errors": 0,
+    "layout": "two",
+    "pair": 0
+  },
+  {
+    "run_id": "two-pair1",
+    "mode": "async",
+    "rate_rps": 36.87397775624534,
+    "seed": 26112034,
+    "started_epoch": 1795083740.3253212,
+    "warmup_seconds": 30,
+    "measurement_seconds": 90,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 2523,
+        "completed": 2523,
+        "failures": 0,
+        "mean_seconds": 0.20320050611415028,
+        "maximum_scheduling_delay_seconds": 0.00408710865303874
+      },
+      "write": {
+        "count": 832,
+        "completed": 832,
+        "failures": 0,
+        "mean_seconds": 0.1700682201559315,
+        "maximum_scheduling_delay_seconds": 0.002658768091350794
+      }
+    },
+    "snapshot_errors": 0,
+    "layout": "two",
+    "pair": 1
+  },
+  {
+    "run_id": "one-pair1",
+    "mode": "async",
+    "rate_rps": 36.87397775624534,
+    "seed": 26112034,
+    "started_epoch": 1795083923.1045666,
+    "warmup_seconds": 30,
+    "measurement_seconds": 90,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 2523,
+        "completed": 2523,
+        "failures": 0,
+        "mean_seconds": 1.1836710299907478,
+        "maximum_scheduling_delay_seconds": 0.00429711677134037
+      },
+      "write": {
+        "count": 832,
+        "completed": 832,
+        "failures": 0,
+        "mean_seconds": 0.1699195058989482,
+        "maximum_scheduling_delay_seconds": 0.002071772236377001
+      }
+    },
+    "snapshot_errors": 0,
+    "layout": "one",
+    "pair": 1
+  },
+  {
+    "run_id": "one-pair2",
+    "mode": "async",
+    "rate_rps": 36.87397775624534,
+    "seed": 26112035,
+    "started_epoch": 1795084102.221821,
+    "warmup_seconds": 30,
+    "measurement_seconds": 90,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 2517,
+        "completed": 2517,
+        "failures": 0,
+        "mean_seconds": 2.3188247125152532,
+        "maximum_scheduling_delay_seconds": 0.1499552079476416
+      },
+      "write": {
+        "count": 847,
+        "completed": 847,
+        "failures": 0,
+        "mean_seconds": 0.17024157367154094,
+        "maximum_scheduling_delay_seconds": 0.18222051998600364
+      }
+    },
+    "snapshot_errors": 0,
+    "layout": "one",
+    "pair": 2
+  },
+  {
+    "run_id": "two-pair2",
+    "mode": "async",
+    "rate_rps": 36.87397775624534,
+    "seed": 26112035,
+    "started_epoch": 1795084310.6799076,
+    "warmup_seconds": 30,
+    "measurement_seconds": 90,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 2517,
+        "completed": 2496,
+        "failures": 21,
+        "mean_seconds": 0.21112217381689846,
+        "maximum_scheduling_delay_seconds": 0.0025505046360194683
+      },
+      "write": {
+        "count": 847,
+        "completed": 847,
+        "failures": 0,
+        "mean_seconds": 0.16788790075420681,
+        "maximum_scheduling_delay_seconds": 0.0034703603014349937
+      }
+    },
+    "snapshot_errors": 0,
+    "layout": "two",
+    "pair": 2
+  }
+]

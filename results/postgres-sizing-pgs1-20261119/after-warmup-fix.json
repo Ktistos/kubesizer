@@ -1,0 +1,9 @@
+{
+  "cli_version": "0.6.0",
+  "command": "kubesizer",
+  "error": {
+    "message": "No stateful topology candidate was accepted: one: No reliably feasible configuration exists in the reachable replica space.; two: No reliably feasible configuration exists in the reachable replica space.",
+    "type": "RuntimeError"
+  },
+  "ok": false
+}

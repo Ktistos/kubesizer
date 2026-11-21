@@ -1,0 +1,272 @@
+[
+  {
+    "per_class_rps": 4.0,
+    "layouts": {
+      "4": {
+        "observed": "FEASIBLE_IN_PILOT",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 54.92266341815242,
+            "upper_ms": 56.75987568971939,
+            "lower_ms": 53.08545114658545,
+            "run_means_ms": [
+              55.25252413559321,
+              54.07555364242425,
+              55.439912476439794
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 196.54835480675092,
+            "upper_ms": 206.7930082020605,
+            "lower_ms": 186.30370141144135,
+            "run_means_ms": [
+              201.12439137435896,
+              193.1190549347826,
+              195.40161811111113
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "FEASIBLE_IN_PILOT",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 56.25666914640217,
+            "upper_ms": 63.22608610272074,
+            "lower_ms": 49.28725219008359,
+            "run_means_ms": [
+              58.60723228813559,
+              53.15075276363636,
+              57.012022387434556
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 210.21721422182063,
+            "upper_ms": 230.87438797186755,
+            "lower_ms": 189.5600404717737,
+            "run_means_ms": [
+              218.93332885641027,
+              209.3479584347826,
+              202.370355374269
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": "4",
+    "decisions": {
+      "aggregate": {
+        "selected": "4",
+        "observed": "FEASIBLE_IN_PILOT"
+      },
+      "fragment": {
+        "selected": "4",
+        "observed": "FEASIBLE_IN_PILOT"
+      }
+    }
+  },
+  {
+    "per_class_rps": 8.0,
+    "layouts": {
+      "4": {
+        "observed": "FEASIBLE_IN_PILOT",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 69.53524465828865,
+            "upper_ms": 77.73445635130142,
+            "lower_ms": 61.33603296527588,
+            "run_means_ms": [
+              65.878496875,
+              70.43341184986596,
+              72.29382525
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 240.94539682147092,
+            "upper_ms": 268.6879581602267,
+            "lower_ms": 213.2028354827152,
+            "run_means_ms": [
+              253.70896318356168,
+              232.96982597500002,
+              236.15740130585107
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "FEASIBLE_IN_PILOT",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 76.3665055066037,
+            "upper_ms": 91.06064210954852,
+            "lower_ms": 61.672368903658885,
+            "run_means_ms": [
+              71.81984726453489,
+              74.22561335120643,
+              83.05405590406977
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 262.85437789175677,
+            "upper_ms": 293.48428618752206,
+            "lower_ms": 232.22446959599148,
+            "run_means_ms": [
+              253.72422838904112,
+              257.95826641388885,
+              276.88063887234046
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": "4",
+    "decisions": {
+      "aggregate": {
+        "selected": "4",
+        "observed": "FEASIBLE_IN_PILOT"
+      },
+      "fragment": {
+        "selected": "8",
+        "observed": "FEASIBLE_IN_PILOT"
+      }
+    }
+  },
+  {
+    "per_class_rps": 12.0,
+    "layouts": {
+      "4": {
+        "observed": "FEASIBLE_IN_PILOT",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 86.00328910578317,
+            "upper_ms": 92.78750672393818,
+            "lower_ms": 79.21907148762816,
+            "run_means_ms": [
+              88.83550616843972,
+              83.38620039344262,
+              85.78816075546719
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 304.2183402098749,
+            "upper_ms": 345.99042219819665,
+            "lower_ms": 262.44625822155314,
+            "run_means_ms": [
+              322.95412667741937,
+              290.43573976459146,
+              299.26515418761386
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "FEASIBLE_IN_PILOT",
+            "mean_ms": 108.09074488000941,
+            "upper_ms": 133.5354071791003,
+            "lower_ms": 82.6460825809185,
+            "run_means_ms": [
+              110.35932775177305,
+              96.9037808306011,
+              117.00912605765409
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": 393.707230439408,
+            "upper_ms": 525.1902985976492,
+            "lower_ms": 262.2241622811668,
+            "run_means_ms": [
+              447.39012796057347,
+              341.5656822957198,
+              392.1658810619308
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": "4",
+    "decisions": {
+      "aggregate": {
+        "selected": "8",
+        "observed": "INCONCLUSIVE"
+      },
+      "fragment": {
+        "selected": null,
+        "observed": "ABSTAINED"
+      }
+    }
+  }
+]

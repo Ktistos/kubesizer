@@ -1,0 +1,32 @@
+[
+  {
+    "layout": "one",
+    "pair": 0,
+    "seed": 26112033
+  },
+  {
+    "layout": "two",
+    "pair": 0,
+    "seed": 26112033
+  },
+  {
+    "layout": "two",
+    "pair": 1,
+    "seed": 26112034
+  },
+  {
+    "layout": "one",
+    "pair": 1,
+    "seed": 26112034
+  },
+  {
+    "layout": "one",
+    "pair": 2,
+    "seed": 26112035
+  },
+  {
+    "layout": "two",
+    "pair": 2,
+    "seed": 26112035
+  }
+]

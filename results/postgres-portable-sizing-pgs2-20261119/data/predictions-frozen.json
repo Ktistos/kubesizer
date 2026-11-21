@@ -1,0 +1,500 @@
+{
+  "frozen_at": "2026-11-19T13:05:02.356741+00:00",
+  "target_outcomes_used": false,
+  "arms": {
+    "aggregate": {
+      "status": "HAS_PROFILE",
+      "rates": {
+        "20": {
+          "exit_code": 0,
+          "response": {
+            "cli_version": "0.6.0",
+            "command": "kubesizer",
+            "ok": true,
+            "result": {
+              "services": {
+                "primary": {
+                  "recommended_replicas": 1
+                },
+                "router": {
+                  "recommended_replicas": 1
+                },
+                "standby1": {
+                  "recommended_replicas": 1
+                }
+              },
+              "stateful_planning": {
+                "candidates": [
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "08ad5b16581b7ba9343565a206a44fedfed18561f8a6d480e5b3ea7be7adce57",
+                      "48d2417edb96790948f39432c2f9e377a4276141ca52026dfae07c7b2d3c6973"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "1 read-serving standbys with local commits",
+                    "name": "one",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/aggregate/r20/workload-one.yaml": "5bcfe23d9f0a5cdf476b3c6e91772cbb90426b58ad8d9e2754210b2c1e506dda",
+                      "/home/experiment/experiments/pgs2/profile-aggregate.json": "f5e4364e97504c85d1be25eb4831a6f89e275e02360e2bf467e685c8b7ae7bc0",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 2.0,
+                    "within_candidate_minimum_proven": true
+                  },
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1,
+                      "standby2": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "dbfa2a56e228bb24809a0490b5050875662809d9e8ac441805d6b1951b87b75d",
+                      "68ce0c7bce028aeadf824c123e54f5f912abd8cfe32ef8339ad5b6b31ae8efe0"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "2 read-serving standbys with local commits",
+                    "name": "two",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/aggregate/r20/workload-two.yaml": "85f6e75766dd89dbeda2c58df0f66282e2cceffdec455aec1b5f062c42ac36a2",
+                      "/home/experiment/experiments/pgs2/profile-aggregate.json": "f5e4364e97504c85d1be25eb4831a6f89e275e02360e2bf467e685c8b7ae7bc0",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 3.0,
+                    "within_candidate_minimum_proven": true
+                  }
+                ],
+                "configuration": {
+                  "primary": 1,
+                  "router": 1,
+                  "standby1": 1
+                },
+                "minimum_cost_proven": true,
+                "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+                "selected": "one",
+                "status": "MODEL_ACCEPTED",
+                "total_cost": 2.0
+              }
+            }
+          }
+        },
+        "28": {
+          "exit_code": 0,
+          "response": {
+            "cli_version": "0.6.0",
+            "command": "kubesizer",
+            "ok": true,
+            "result": {
+              "services": {
+                "primary": {
+                  "recommended_replicas": 1
+                },
+                "router": {
+                  "recommended_replicas": 1
+                },
+                "standby1": {
+                  "recommended_replicas": 1
+                },
+                "standby2": {
+                  "recommended_replicas": 1
+                }
+              },
+              "stateful_planning": {
+                "candidates": [
+                  {
+                    "fingerprints": [
+                      "08ad5b16581b7ba9343565a206a44fedfed18561f8a6d480e5b3ea7be7adce57",
+                      "40523cd2b7de7c5e405c1897cfe8db8af0c60406845e1a9a3ba6a0611283a6d2"
+                    ],
+                    "mechanism": "1 read-serving standbys with local commits",
+                    "name": "one",
+                    "reason": "No reliably feasible configuration exists in the reachable replica space.",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/aggregate/r28/workload-one.yaml": "d22e71297de806afac0d5260396a73bb04c024ae6d2fe590166df40d1d3fbf95",
+                      "/home/experiment/experiments/pgs2/profile-aggregate.json": "f5e4364e97504c85d1be25eb4831a6f89e275e02360e2bf467e685c8b7ae7bc0",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "UNRESOLVED"
+                  },
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1,
+                      "standby2": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "dbfa2a56e228bb24809a0490b5050875662809d9e8ac441805d6b1951b87b75d",
+                      "078d405e735bf21bfa4735ff09731b258bb2f1b58e006dcf5575e17ccfb375e3"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "2 read-serving standbys with local commits",
+                    "name": "two",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/aggregate/r28/workload-two.yaml": "6e4900d6a3e062781514ead2301a443d963b3b8ae1e93cf618f1830cdfc2d415",
+                      "/home/experiment/experiments/pgs2/profile-aggregate.json": "f5e4364e97504c85d1be25eb4831a6f89e275e02360e2bf467e685c8b7ae7bc0",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 3.0,
+                    "within_candidate_minimum_proven": true
+                  }
+                ],
+                "configuration": {
+                  "primary": 1,
+                  "router": 1,
+                  "standby1": 1,
+                  "standby2": 1
+                },
+                "minimum_cost_proven": false,
+                "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+                "selected": "two",
+                "status": "MODEL_ACCEPTED",
+                "total_cost": 3.0
+              }
+            }
+          }
+        },
+        "34": {
+          "exit_code": 0,
+          "response": {
+            "cli_version": "0.6.0",
+            "command": "kubesizer",
+            "ok": true,
+            "result": {
+              "services": {
+                "primary": {
+                  "recommended_replicas": 1
+                },
+                "router": {
+                  "recommended_replicas": 1
+                },
+                "standby1": {
+                  "recommended_replicas": 1
+                },
+                "standby2": {
+                  "recommended_replicas": 1
+                }
+              },
+              "stateful_planning": {
+                "candidates": [
+                  {
+                    "fingerprints": [
+                      "08ad5b16581b7ba9343565a206a44fedfed18561f8a6d480e5b3ea7be7adce57",
+                      "668b16877e5dd6a9a86b0b7a94d6a9320bc10780a46712d581402a5819972aaf"
+                    ],
+                    "mechanism": "1 read-serving standbys with local commits",
+                    "name": "one",
+                    "reason": "No reliably feasible configuration exists in the reachable replica space.",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/aggregate/r34/workload-one.yaml": "564e63972c1e073bba31a259f44450b580bf54c4a65cb5c99cd46e09825c06f3",
+                      "/home/experiment/experiments/pgs2/profile-aggregate.json": "f5e4364e97504c85d1be25eb4831a6f89e275e02360e2bf467e685c8b7ae7bc0",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "UNRESOLVED"
+                  },
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1,
+                      "standby2": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "dbfa2a56e228bb24809a0490b5050875662809d9e8ac441805d6b1951b87b75d",
+                      "e9858f81a29828bad2b70e0c732167cdcced29a5b662df70a46be55f6e3f03a8"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "2 read-serving standbys with local commits",
+                    "name": "two",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/aggregate/r34/workload-two.yaml": "f264829f5d45f32ff6ec2142e8f8166aa5adde6f62b6f3b3bf8c0943de691121",
+                      "/home/experiment/experiments/pgs2/profile-aggregate.json": "f5e4364e97504c85d1be25eb4831a6f89e275e02360e2bf467e685c8b7ae7bc0",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 3.0,
+                    "within_candidate_minimum_proven": true
+                  }
+                ],
+                "configuration": {
+                  "primary": 1,
+                  "router": 1,
+                  "standby1": 1,
+                  "standby2": 1
+                },
+                "minimum_cost_proven": false,
+                "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+                "selected": "two",
+                "status": "MODEL_ACCEPTED",
+                "total_cost": 3.0
+              }
+            }
+          }
+        }
+      }
+    },
+    "process": {
+      "status": "HAS_PROFILE",
+      "rates": {
+        "20": {
+          "exit_code": 0,
+          "response": {
+            "cli_version": "0.6.0",
+            "command": "kubesizer",
+            "ok": true,
+            "result": {
+              "services": {
+                "primary": {
+                  "recommended_replicas": 1
+                },
+                "router": {
+                  "recommended_replicas": 1
+                },
+                "standby1": {
+                  "recommended_replicas": 1
+                }
+              },
+              "stateful_planning": {
+                "candidates": [
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "08ad5b16581b7ba9343565a206a44fedfed18561f8a6d480e5b3ea7be7adce57",
+                      "e1bfa62aa8771532fcbeda55fc36f4dec0785b95c0b7c12a097ba01ae16e3ec1"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "1 read-serving standbys with local commits",
+                    "name": "one",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/process/r20/workload-one.yaml": "dce2c197d02c6f9773fb1395ff8c4ee48d5be9f65f61457cfa6a12c4ece3c8b3",
+                      "/home/experiment/experiments/pgs2/profile-process.json": "7ff4c330b12d69c99e1010a2c9e9272374f4e794fb7ff775bcef75fc70adb949",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 2.0,
+                    "within_candidate_minimum_proven": true
+                  },
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1,
+                      "standby2": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "dbfa2a56e228bb24809a0490b5050875662809d9e8ac441805d6b1951b87b75d",
+                      "3bda0fcb05f8a7ff79522998a0a4b1bde5a4b273944bb540f20ef8d46b4c92ce"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "2 read-serving standbys with local commits",
+                    "name": "two",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/process/r20/workload-two.yaml": "b4719036dd04cdb238c6c6180e229c3a7b2a62e0b2663c435d7bb054e7f982e6",
+                      "/home/experiment/experiments/pgs2/profile-process.json": "7ff4c330b12d69c99e1010a2c9e9272374f4e794fb7ff775bcef75fc70adb949",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 3.0,
+                    "within_candidate_minimum_proven": true
+                  }
+                ],
+                "configuration": {
+                  "primary": 1,
+                  "router": 1,
+                  "standby1": 1
+                },
+                "minimum_cost_proven": true,
+                "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+                "selected": "one",
+                "status": "MODEL_ACCEPTED",
+                "total_cost": 2.0
+              }
+            }
+          }
+        },
+        "28": {
+          "exit_code": 0,
+          "response": {
+            "cli_version": "0.6.0",
+            "command": "kubesizer",
+            "ok": true,
+            "result": {
+              "services": {
+                "primary": {
+                  "recommended_replicas": 1
+                },
+                "router": {
+                  "recommended_replicas": 1
+                },
+                "standby1": {
+                  "recommended_replicas": 1
+                },
+                "standby2": {
+                  "recommended_replicas": 1
+                }
+              },
+              "stateful_planning": {
+                "candidates": [
+                  {
+                    "fingerprints": [
+                      "08ad5b16581b7ba9343565a206a44fedfed18561f8a6d480e5b3ea7be7adce57",
+                      "ed314e7931081eb0051dea83b086705009d07cc175adb5f23d8dcede217ab46a"
+                    ],
+                    "mechanism": "1 read-serving standbys with local commits",
+                    "name": "one",
+                    "reason": "No reliably feasible configuration exists in the reachable replica space.",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/process/r28/workload-one.yaml": "bb05c4ad3511b61d3a0fbcecb529257f167cdce8aca7ec085216c0a642f23b8c",
+                      "/home/experiment/experiments/pgs2/profile-process.json": "7ff4c330b12d69c99e1010a2c9e9272374f4e794fb7ff775bcef75fc70adb949",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "UNRESOLVED"
+                  },
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1,
+                      "standby2": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "dbfa2a56e228bb24809a0490b5050875662809d9e8ac441805d6b1951b87b75d",
+                      "2ba9511bac06cd248bd0cbe215cf6570ce13ae4aaa70a12c86ca670d786ef06f"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "2 read-serving standbys with local commits",
+                    "name": "two",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/process/r28/workload-two.yaml": "901cbbcb1811a75add49a9937c8e602cbbcf86fa504d1eaff4817520ccfa122a",
+                      "/home/experiment/experiments/pgs2/profile-process.json": "7ff4c330b12d69c99e1010a2c9e9272374f4e794fb7ff775bcef75fc70adb949",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 3.0,
+                    "within_candidate_minimum_proven": true
+                  }
+                ],
+                "configuration": {
+                  "primary": 1,
+                  "router": 1,
+                  "standby1": 1,
+                  "standby2": 1
+                },
+                "minimum_cost_proven": false,
+                "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+                "selected": "two",
+                "status": "MODEL_ACCEPTED",
+                "total_cost": 3.0
+              }
+            }
+          }
+        },
+        "34": {
+          "exit_code": 0,
+          "response": {
+            "cli_version": "0.6.0",
+            "command": "kubesizer",
+            "ok": true,
+            "result": {
+              "services": {
+                "primary": {
+                  "recommended_replicas": 1
+                },
+                "router": {
+                  "recommended_replicas": 1
+                },
+                "standby1": {
+                  "recommended_replicas": 1
+                },
+                "standby2": {
+                  "recommended_replicas": 1
+                }
+              },
+              "stateful_planning": {
+                "candidates": [
+                  {
+                    "fingerprints": [
+                      "08ad5b16581b7ba9343565a206a44fedfed18561f8a6d480e5b3ea7be7adce57",
+                      "0e77bd838e64ed503439cc398d0cf02efd6295b0cceeec6c1b02329463a0bf2d"
+                    ],
+                    "mechanism": "1 read-serving standbys with local commits",
+                    "name": "one",
+                    "reason": "No reliably feasible configuration exists in the reachable replica space.",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/process/r34/workload-one.yaml": "89ec20ef669fbd8a141ed24e1d731da7a229c4499330822d0c07c7e74f9af35d",
+                      "/home/experiment/experiments/pgs2/profile-process.json": "7ff4c330b12d69c99e1010a2c9e9272374f4e794fb7ff775bcef75fc70adb949",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "UNRESOLVED"
+                  },
+                  {
+                    "configuration": {
+                      "primary": 1,
+                      "router": 1,
+                      "standby1": 1,
+                      "standby2": 1
+                    },
+                    "evaluation_basis": "CALIBRATED_SIMULATION_WITH_FINAL_VALIDATION",
+                    "fingerprints": [
+                      "dbfa2a56e228bb24809a0490b5050875662809d9e8ac441805d6b1951b87b75d",
+                      "ba27cfe3920f903995cccdb2c4ad29f11454b11070c35410f23010a12e6ad4b1"
+                    ],
+                    "mean_latency_lower_bounds": {},
+                    "mean_latency_upper_bounds": {},
+                    "mechanism": "2 read-serving standbys with local commits",
+                    "name": "two",
+                    "sources": {
+                      "/home/experiment/experiments/pgs2/candidate-models/process/r34/workload-two.yaml": "f1f066493b2d2b3e442fd1ba844ec3ec73feaac8663967da54b693cab576d64a",
+                      "/home/experiment/experiments/pgs2/profile-process.json": "7ff4c330b12d69c99e1010a2c9e9272374f4e794fb7ff775bcef75fc70adb949",
+                      "/home/experiment/experiments/pgs2/protocol.json": "dd621adf8aa978f6663fba7518ce17fd1fbcbe264a181c0016beb307ab2be558"
+                    },
+                    "status": "MODEL_ACCEPTED",
+                    "total_cost": 3.0,
+                    "within_candidate_minimum_proven": true
+                  }
+                ],
+                "configuration": {
+                  "primary": 1,
+                  "router": 1,
+                  "standby1": 1,
+                  "standby2": 1
+                },
+                "minimum_cost_proven": false,
+                "scope": "declared topology candidates and supplied performance models; not empirical deployment certification",
+                "selected": "two",
+                "status": "MODEL_ACCEPTED",
+                "total_cost": 3.0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

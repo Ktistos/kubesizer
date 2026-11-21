@@ -1,0 +1,432 @@
+{
+  "scope": "retrospective finite-window latency diagnostic, not used for the frozen suitability decision",
+  "timestamp": "2026-11-19T10:27:00.863763+00:00",
+  "bindings": {
+    "calibration/warmup_parameters.py": "91c58faf5b8a4e6058f450fca9418b7802ba18e1835b9199b7ae7da8920dbe36",
+    "performance_models/system.py": "4fbec32972972b0795c2a9714ebbcecb1aca6e6b1d31049d43c4b6eee1384aee"
+  },
+  "native_sha256": "e3e10744eb759c41addc8eb912698c1168f7ec090df52a7a7ed3b17f14d0f8a6",
+  "frozen_input_receipt_sha256": "73c581bc7c91d46d3eb9ae3418764d958a196068c26dbb5e1ebbdf8daa65f849",
+  "modeled_runs": {
+    "workload-one": {
+      "processing_utilization_at_minimum": {
+        "router": 2.7655483317184008e-08,
+        "standby1": 0.9,
+        "primary": 0.012892734185789958,
+        "standby1_ack": 0.0011760559498135027
+      },
+      "effective_capacity_slack_rps": {
+        "router": 999999972.3445165,
+        "standby1": 4.097108639582814,
+        "primary": 705.7962034689839,
+        "standby1_ack": 7829.26439451124
+      },
+      "replications": [
+        {
+          "seed": 10400500,
+          "measured": {
+            "read": 2520,
+            "write": 827
+          },
+          "completed": {
+            "read": 2520,
+            "write": 827
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.4808055926008638,
+            "write": 0.2557176113824989
+          }
+        },
+        {
+          "seed": 10400501,
+          "measured": {
+            "read": 2538,
+            "write": 764
+          },
+          "completed": {
+            "read": 2538,
+            "write": 764
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.5197538622420991,
+            "write": 0.26685838684284896
+          }
+        },
+        {
+          "seed": 10400502,
+          "measured": {
+            "read": 2421,
+            "write": 817
+          },
+          "completed": {
+            "read": 2421,
+            "write": 817
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.40975878060652227,
+            "write": 0.25754414238976797
+          }
+        },
+        {
+          "seed": 10400503,
+          "measured": {
+            "read": 2472,
+            "write": 806
+          },
+          "completed": {
+            "read": 2472,
+            "write": 806
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.4495589023863865,
+            "write": 0.2532760757000172
+          }
+        },
+        {
+          "seed": 10400504,
+          "measured": {
+            "read": 2466,
+            "write": 807
+          },
+          "completed": {
+            "read": 2466,
+            "write": 807
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.42010398709864905,
+            "write": 0.26235242768253586
+          }
+        },
+        {
+          "seed": 10400505,
+          "measured": {
+            "read": 2498,
+            "write": 828
+          },
+          "completed": {
+            "read": 2498,
+            "write": 828
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.4737453724085497,
+            "write": 0.26141890332806844
+          }
+        },
+        {
+          "seed": 10400506,
+          "measured": {
+            "read": 2478,
+            "write": 848
+          },
+          "completed": {
+            "read": 2478,
+            "write": 848
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.3994214872663571,
+            "write": 0.2590061290914579
+          }
+        },
+        {
+          "seed": 10400507,
+          "measured": {
+            "read": 2581,
+            "write": 837
+          },
+          "completed": {
+            "read": 2581,
+            "write": 837
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.4989094613837229,
+            "write": 0.2573940136591587
+          }
+        },
+        {
+          "seed": 10400508,
+          "measured": {
+            "read": 2493,
+            "write": 803
+          },
+          "completed": {
+            "read": 2493,
+            "write": 803
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.4858726289348552,
+            "write": 0.26425025300495264
+          }
+        },
+        {
+          "seed": 10400509,
+          "measured": {
+            "read": 2503,
+            "write": 849
+          },
+          "completed": {
+            "read": 2503,
+            "write": 849
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.482600160537821,
+            "write": 0.2663910646214241
+          }
+        },
+        {
+          "seed": 10400510,
+          "measured": {
+            "read": 2515,
+            "write": 818
+          },
+          "completed": {
+            "read": 2515,
+            "write": 818
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.49750152022801236,
+            "write": 0.25830079091382874
+          }
+        },
+        {
+          "seed": 10400511,
+          "measured": {
+            "read": 2482,
+            "write": 861
+          },
+          "completed": {
+            "read": 2482,
+            "write": 861
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.45581684241735515,
+            "write": 0.25384923554326155
+          }
+        }
+      ]
+    },
+    "workload-two": {
+      "processing_utilization_at_minimum": {
+        "router": 2.7655483317184008e-08,
+        "standby1": 0.4507815339310659,
+        "standby2": 0.4507815339310659,
+        "primary": 0.012892734185789958,
+        "standby1_ack": 0.0011760559498135027,
+        "standby2_ack": 0.0011760559498135027
+      },
+      "effective_capacity_slack_rps": {
+        "router": 999999972.3445165,
+        "standby1": 28.078830842594478,
+        "standby2": 28.078830842594478,
+        "primary": 705.7962034689839,
+        "standby1_ack": 7829.26439451124,
+        "standby2_ack": 7829.26439451124
+      },
+      "replications": [
+        {
+          "seed": 10400500,
+          "measured": {
+            "read": 2491,
+            "write": 842
+          },
+          "completed": {
+            "read": 2491,
+            "write": 842
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.22578205858582828,
+            "write": 0.2559573294254385
+          }
+        },
+        {
+          "seed": 10400501,
+          "measured": {
+            "read": 2469,
+            "write": 800
+          },
+          "completed": {
+            "read": 2469,
+            "write": 800
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.2230127970573697,
+            "write": 0.26210794350042393
+          }
+        },
+        {
+          "seed": 10400502,
+          "measured": {
+            "read": 2449,
+            "write": 823
+          },
+          "completed": {
+            "read": 2449,
+            "write": 823
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.22532675390014725,
+            "write": 0.2562903196365549
+          }
+        },
+        {
+          "seed": 10400503,
+          "measured": {
+            "read": 2496,
+            "write": 783
+          },
+          "completed": {
+            "read": 2496,
+            "write": 783
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.22327413699718712,
+            "write": 0.26410425066783416
+          }
+        },
+        {
+          "seed": 10400504,
+          "measured": {
+            "read": 2458,
+            "write": 878
+          },
+          "completed": {
+            "read": 2458,
+            "write": 878
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.2259622390202232,
+            "write": 0.2685677361227985
+          }
+        },
+        {
+          "seed": 10400505,
+          "measured": {
+            "read": 2409,
+            "write": 815
+          },
+          "completed": {
+            "read": 2409,
+            "write": 815
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.2224945831962128,
+            "write": 0.26095575620691613
+          }
+        },
+        {
+          "seed": 10400506,
+          "measured": {
+            "read": 2515,
+            "write": 799
+          },
+          "completed": {
+            "read": 2515,
+            "write": 799
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.2247316212068638,
+            "write": 0.26519171679849146
+          }
+        },
+        {
+          "seed": 10400507,
+          "measured": {
+            "read": 2540,
+            "write": 830
+          },
+          "completed": {
+            "read": 2540,
+            "write": 830
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.22407523897929232,
+            "write": 0.2698036884609022
+          }
+        },
+        {
+          "seed": 10400508,
+          "measured": {
+            "read": 2517,
+            "write": 864
+          },
+          "completed": {
+            "read": 2517,
+            "write": 864
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.227125533740487,
+            "write": 0.25959562507999834
+          }
+        },
+        {
+          "seed": 10400509,
+          "measured": {
+            "read": 2501,
+            "write": 866
+          },
+          "completed": {
+            "read": 2501,
+            "write": 866
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.2255568834305988,
+            "write": 0.26154808959731307
+          }
+        },
+        {
+          "seed": 10400510,
+          "measured": {
+            "read": 2612,
+            "write": 869
+          },
+          "completed": {
+            "read": 2612,
+            "write": 869
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.22635879068442474,
+            "write": 0.26586461204578365
+          }
+        },
+        {
+          "seed": 10400511,
+          "measured": {
+            "read": 2511,
+            "write": 840
+          },
+          "completed": {
+            "read": 2511,
+            "write": 840
+          },
+          "tagged_in_flight": 0,
+          "mean_seconds": {
+            "read": 0.22496511614051537,
+            "write": 0.2549265120280193
+          }
+        }
+      ]
+    }
+  }
+}

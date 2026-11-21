@@ -1,0 +1,29 @@
+{
+  "backend": {
+    "backendType": "Erasure",
+    "onlineDisks": 4,
+    "offlineDisks": 0,
+    "standardSCParity": 2,
+    "rrSCParity": 1,
+    "totalSets": [
+      1
+    ],
+    "totalDrivesPerSet": [
+      4
+    ]
+  },
+  "members_by_set": {
+    "0": [
+      "ms4m2",
+      "ms4m3",
+      "ms4m4",
+      "ms4m1"
+    ]
+  },
+  "placement": {
+    "ms4m1": "skube06",
+    "ms4m2": "skube07",
+    "ms4m3": "skube08",
+    "ms4m4": "skube09"
+  }
+}

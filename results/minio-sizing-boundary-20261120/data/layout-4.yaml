@@ -1,0 +1,479 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms4m1
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m1
+    kubesizer.layout: '4'
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: *id001
+  ports:
+  - name: s3
+    port: 9000
+  - name: evidence
+    port: 9092
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ms4m1
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m1
+    kubesizer.layout: '4'
+spec:
+  serviceName: ms4m1
+  replicas: 0
+  selector:
+    matchLabels: *id001
+  template:
+    metadata:
+      labels: *id001
+    spec:
+      shareProcessNamespace: true
+      nodeSelector:
+        kubernetes.io/hostname: skube06
+      containers:
+      - name: minio
+        image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+        args:
+        - server
+        - --address
+        - :9000
+        - http://ms4m{1...4}:9000/data
+        env:
+        - name: MINIO_STORAGE_CLASS_STANDARD
+          value: EC:2
+        - name: MINIO_ERASURE_SET_DRIVE_COUNT
+          value: '4'
+        - name: MINIO_PROMETHEUS_AUTH_TYPE
+          value: public
+        - name: MINIO_BROWSER
+          value: 'off'
+        - name: GOMEMLIMIT
+          value: 640MiB
+        - name: MINIO_ROOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: access_key
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: secret_key
+        ports:
+        - name: s3
+          containerPort: 9000
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: '1'
+            memory: 512Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      - name: observer
+        image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+        command:
+        - python
+        - /experiment/observer.py
+        volumeMounts:
+        - name: source
+          mountPath: /experiment
+          readOnly: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 96Mi
+      volumes:
+      - name: source
+        configMap:
+          name: observer-source
+      automountServiceAccountToken: false
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: longhorn
+      resources:
+        requests:
+          storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms4m2
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m2
+    kubesizer.layout: '4'
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: *id001
+  ports:
+  - name: s3
+    port: 9000
+  - name: evidence
+    port: 9092
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ms4m2
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m2
+    kubesizer.layout: '4'
+spec:
+  serviceName: ms4m2
+  replicas: 0
+  selector:
+    matchLabels: *id001
+  template:
+    metadata:
+      labels: *id001
+    spec:
+      shareProcessNamespace: true
+      nodeSelector:
+        kubernetes.io/hostname: skube07
+      containers:
+      - name: minio
+        image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+        args:
+        - server
+        - --address
+        - :9000
+        - http://ms4m{1...4}:9000/data
+        env:
+        - name: MINIO_STORAGE_CLASS_STANDARD
+          value: EC:2
+        - name: MINIO_ERASURE_SET_DRIVE_COUNT
+          value: '4'
+        - name: MINIO_PROMETHEUS_AUTH_TYPE
+          value: public
+        - name: MINIO_BROWSER
+          value: 'off'
+        - name: GOMEMLIMIT
+          value: 640MiB
+        - name: MINIO_ROOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: access_key
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: secret_key
+        ports:
+        - name: s3
+          containerPort: 9000
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: '1'
+            memory: 512Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      - name: observer
+        image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+        command:
+        - python
+        - /experiment/observer.py
+        volumeMounts:
+        - name: source
+          mountPath: /experiment
+          readOnly: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 96Mi
+      volumes:
+      - name: source
+        configMap:
+          name: observer-source
+      automountServiceAccountToken: false
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: longhorn
+      resources:
+        requests:
+          storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms4m3
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m3
+    kubesizer.layout: '4'
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: *id001
+  ports:
+  - name: s3
+    port: 9000
+  - name: evidence
+    port: 9092
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ms4m3
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m3
+    kubesizer.layout: '4'
+spec:
+  serviceName: ms4m3
+  replicas: 0
+  selector:
+    matchLabels: *id001
+  template:
+    metadata:
+      labels: *id001
+    spec:
+      shareProcessNamespace: true
+      nodeSelector:
+        kubernetes.io/hostname: skube08
+      containers:
+      - name: minio
+        image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+        args:
+        - server
+        - --address
+        - :9000
+        - http://ms4m{1...4}:9000/data
+        env:
+        - name: MINIO_STORAGE_CLASS_STANDARD
+          value: EC:2
+        - name: MINIO_ERASURE_SET_DRIVE_COUNT
+          value: '4'
+        - name: MINIO_PROMETHEUS_AUTH_TYPE
+          value: public
+        - name: MINIO_BROWSER
+          value: 'off'
+        - name: GOMEMLIMIT
+          value: 640MiB
+        - name: MINIO_ROOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: access_key
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: secret_key
+        ports:
+        - name: s3
+          containerPort: 9000
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: '1'
+            memory: 512Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      - name: observer
+        image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+        command:
+        - python
+        - /experiment/observer.py
+        volumeMounts:
+        - name: source
+          mountPath: /experiment
+          readOnly: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 96Mi
+      volumes:
+      - name: source
+        configMap:
+          name: observer-source
+      automountServiceAccountToken: false
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: longhorn
+      resources:
+        requests:
+          storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms4m4
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m4
+    kubesizer.layout: '4'
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: *id001
+  ports:
+  - name: s3
+    port: 9000
+  - name: evidence
+    port: 9092
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ms4m4
+  namespace: kubesizer-minio-pilot-mio1
+  labels: &id001
+    kubesizer.campaign: mis1
+    app: ms4m4
+    kubesizer.layout: '4'
+spec:
+  serviceName: ms4m4
+  replicas: 0
+  selector:
+    matchLabels: *id001
+  template:
+    metadata:
+      labels: *id001
+    spec:
+      shareProcessNamespace: true
+      nodeSelector:
+        kubernetes.io/hostname: skube09
+      containers:
+      - name: minio
+        image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+        args:
+        - server
+        - --address
+        - :9000
+        - http://ms4m{1...4}:9000/data
+        env:
+        - name: MINIO_STORAGE_CLASS_STANDARD
+          value: EC:2
+        - name: MINIO_ERASURE_SET_DRIVE_COUNT
+          value: '4'
+        - name: MINIO_PROMETHEUS_AUTH_TYPE
+          value: public
+        - name: MINIO_BROWSER
+          value: 'off'
+        - name: GOMEMLIMIT
+          value: 640MiB
+        - name: MINIO_ROOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: access_key
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: object-store-credentials
+              key: secret_key
+        ports:
+        - name: s3
+          containerPort: 9000
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: '1'
+            memory: 512Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      - name: observer
+        image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+        command:
+        - python
+        - /experiment/observer.py
+        volumeMounts:
+        - name: source
+          mountPath: /experiment
+          readOnly: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: 500m
+            memory: 192Mi
+      volumes:
+      - name: source
+        configMap:
+          name: observer-source
+      automountServiceAccountToken: false
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: longhorn
+      resources:
+        requests:
+          storage: 2Gi

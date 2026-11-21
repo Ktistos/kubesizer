@@ -1,0 +1,11 @@
+{
+  "protocol.json": "c6e5dec6c43e8e3e4f6f04ec3dc0f8b394386a6012fd3cf5039b26f66bea0675",
+  "source-receipt.json": "136ebe533d584eee4b2d60e7a6f1e4afddeb2eecc4855cd2b8a8e7ca373e6542",
+  "characterization.json": "1db3da01dbb586c908d7f8062538aab105edbcd93bc7ffa21abb2d1aab72faa0",
+  "transferred-characterization.json": "ccd2936a15895fe00632cde2c1c81694f53b8fa3437d6cd4771cb25513062c9c",
+  "candidates.json": "b7ca031611b06ba2993689e484c36a8dcaa770132ee80dc33c3bc343a3fa510b",
+  "target-order.json": "81a1f33e9d7dd8f4f4f66a5c4fe27442a8838f223213e6659fe57493db54593f",
+  "workload-one.yaml": "e64091f45a00f238de9c67c7dacb4dea0502272f72682163c0577432309b3611",
+  "workload-two.yaml": "74a34a836373387f48475ada3323f51e976ce7264a7aae350e4b29a168aa30f8",
+  "predictions-frozen.json": "d4c130409db6d59b8215b3edf6916bbd427df35fb43dfac3a20dc1b726eddada"
+}

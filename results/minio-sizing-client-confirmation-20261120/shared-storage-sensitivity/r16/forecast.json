@@ -1,0 +1,13 @@
+{
+  "response": {
+    "cli_version": "0.6.0",
+    "command": "kubesizer",
+    "error": {
+      "message": "No stateful topology candidate was accepted: 4: Fixed or bounded component 'stripe_io' cannot satisfy the necessary stability floor; change the declared topology.; 8: Fixed or bounded component 'stripe_io' cannot satisfy the necessary stability floor; change the declared topology.",
+      "type": "RuntimeError"
+    },
+    "ok": false
+  },
+  "exit_code": 1,
+  "scored_at_utc": "2026-11-20T01:01:41.408562+00:00"
+}

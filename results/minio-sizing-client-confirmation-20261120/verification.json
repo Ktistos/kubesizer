@@ -1,0 +1,64 @@
+{
+  "frozen_at": "2026-11-20T00:12:42.387115+00:00",
+  "first_holdout_at": "2026-11-20T01:06:18.056721+00:00",
+  "verified_windows": 16,
+  "valid_windows": 12,
+  "verified_schedule_matched_pairs": 8,
+  "fully_valid_pairs": [
+    {
+      "total_rps": 30.0,
+      "pair": 0,
+      "layout_4_put_ms": 421.78202399564077,
+      "layout_8_put_ms": 819.3588318561465,
+      "put_increase_ms": 397.5768078605057
+    },
+    {
+      "total_rps": 30.0,
+      "pair": 1,
+      "layout_4_put_ms": 363.7414996743567,
+      "layout_8_put_ms": 613.9201564951197,
+      "put_increase_ms": 250.17865682076302
+    },
+    {
+      "total_rps": 30.0,
+      "pair": 3,
+      "layout_4_put_ms": 362.63726372115383,
+      "layout_8_put_ms": 619.364868451923,
+      "put_increase_ms": 256.7276047307692
+    },
+    {
+      "total_rps": 32.0,
+      "pair": 0,
+      "layout_4_put_ms": 391.15076240429187,
+      "layout_8_put_ms": 608.043001806867,
+      "put_increase_ms": 216.89223940257511
+    },
+    {
+      "total_rps": 32.0,
+      "pair": 1,
+      "layout_4_put_ms": 424.5693075355102,
+      "layout_8_put_ms": 974.6056253771428,
+      "put_increase_ms": 550.0363178416326
+    },
+    {
+      "total_rps": 32.0,
+      "pair": 2,
+      "layout_4_put_ms": 365.1224404189896,
+      "layout_8_put_ms": 603.0968639590593,
+      "put_increase_ms": 237.97442354006972
+    }
+  ],
+  "requests_scheduled_in_measured_cohorts": {
+    "GET": 18524,
+    "PUT": 18650
+  },
+  "failures_in_measured_cohorts": {
+    "client_capacity_rejected": 1934,
+    "concurrent_key_rejected": 210,
+    "ProtocolError": 11,
+    "ReadTimeoutError": 92
+  },
+  "maximum_in_flight": 128,
+  "missing_starts": 2144,
+  "valid_max_schedule_p95_ms": 1.825258694589138
+}

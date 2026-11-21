@@ -1,0 +1,45 @@
+{
+  "campaign": "mis1",
+  "candidate_active_members_and_drives": [
+    4,
+    8
+  ],
+  "erasure_set_drives": 4,
+  "storage_class_parity": 2,
+  "pods_per_worker_and_layout": {
+    "4": 1,
+    "8": 2
+  },
+  "entry_selection": "key suffix modulo active members, independent of MinIO placement",
+  "object_bytes": 1048576,
+  "get_keys": 48,
+  "put_keys": 128,
+  "warmup_seconds": 15,
+  "measurement_seconds": 75,
+  "idle_seconds": 45,
+  "characterization_class_rate": 3.0,
+  "characterization_pairs": 2,
+  "target_equal_per_class_rates": [
+    14.0,
+    15.0,
+    16.0
+  ],
+  "target_pairs": 4,
+  "seed": 26112081,
+  "mean_slo_seconds": {
+    "GET": 0.25,
+    "PUT": 0.4
+  },
+  "failure_rate_limit": 0.01,
+  "schedule_p95_limit_ms": 20,
+  "max_cohort_drain_seconds": 30,
+  "minimum_fragment_group_coverage": 0.8,
+  "input_arms": {
+    "aggregate": "idle-corrected CPU and per-drive block busy-time, with measured client latency",
+    "fragment": "same inputs with a receiver write-and-flush phase distribution in place of aggregate PUT I/O"
+  },
+  "model": "CPU sharing per member then an effective per-erasure-set storage queue, with measured low-load latency residual",
+  "transfer": "retain one-operation demand and latency residual, balance work equally across equivalent sets",
+  "capacity_scope": "fixed CPU/drive provisioning and a balanced 1 MiB GET/PUT workload",
+  "storage_headroom_wait_seconds": 360
+}

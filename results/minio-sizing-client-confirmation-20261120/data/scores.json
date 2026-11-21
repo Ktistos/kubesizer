@@ -1,0 +1,190 @@
+[
+  {
+    "per_class_rps": 15.0,
+    "layouts": {
+      "4": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              105.97743982270742,
+              97.8768995872743,
+              727.36557016,
+              102.55092222907862
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.1192411924119241,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              421.78202399564077,
+              363.7414996743567,
+              3757.6277583586957,
+              362.63726372115383
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.18942731277533043,
+              0.0
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              168.36227930131005,
+              159.3071998727429,
+              196.16220301900452,
+              162.0426797438715
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0018066847335139746,
+              0.0
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              819.3588318561465,
+              613.9201564951197,
+              1378.1908763758865,
+              619.364868451923
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.006167400881057272,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": null,
+    "decisions": {
+      "aggregate": {
+        "selected": "8",
+        "observed": "INCONCLUSIVE"
+      }
+    }
+  },
+  {
+    "per_class_rps": 16.0,
+    "layouts": {
+      "4": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              101.31348986572439,
+              106.70418090825689,
+              93.06628519667832,
+              4106.272579250836
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.4970563498738436
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              391.15076240429187,
+              424.5693075355102,
+              365.1224404189896,
+              8933.94270312848
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.6215559157212318
+            ]
+          }
+        }
+      },
+      "8": {
+        "observed": "INCONCLUSIVE",
+        "classes": {
+          "GET": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              148.8316937358657,
+              197.78903128023353,
+              145.69132605594405,
+              1098.7338507589852
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.2043734230445753
+            ]
+          },
+          "PUT": {
+            "observed": "INCONCLUSIVE",
+            "mean_ms": null,
+            "upper_ms": null,
+            "lower_ms": null,
+            "run_means_ms": [
+              608.043001806867,
+              974.6056253771428,
+              603.0968639590593,
+              3023.1916743008474
+            ],
+            "failure_rates": [
+              0.0,
+              0.0,
+              0.0,
+              0.23500810372771475
+            ]
+          }
+        }
+      }
+    },
+    "lowest_observed_feasible_layout": null,
+    "decisions": {
+      "aggregate": {
+        "selected": "8",
+        "observed": "INCONCLUSIVE"
+      }
+    }
+  }
+]

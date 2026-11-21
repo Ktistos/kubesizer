@@ -1,0 +1,6 @@
+{
+  "source": "/home/experiment/experiments/mis1-boundary-v1",
+  "prediction_receipt_sha256": "fb783c6d5d8a9ade8254baaad0889578a816ccb11554c9f013aa0270b22489de",
+  "predictions_sha256": "2b540169700a8fcee0019de8b8bcc40cff653a6ce5184a2548fd842768fc33b0",
+  "frozen_at": "2026-11-20T00:12:42.387115+00:00"
+}

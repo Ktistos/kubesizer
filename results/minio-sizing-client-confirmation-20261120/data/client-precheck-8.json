@@ -1,0 +1,37 @@
+{
+  "summary": {
+    "id": "precheck-layout8",
+    "layout": 8,
+    "rate": 16.0,
+    "mode": "mixed",
+    "seed": 26113010,
+    "classes": {
+      "PUT": {
+        "offered": 699,
+        "successes": 699,
+        "errors": {},
+        "mean_ms": 634.7786790715307
+      },
+      "GET": {
+        "offered": 688,
+        "successes": 688,
+        "errors": {},
+        "mean_ms": 151.75607350581393
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3674505520612001,
+    "pending_at_stop": 23,
+    "target_started_ns": 1795136714651769011,
+    "drain_seconds": 0.3441613979999971,
+    "client_valid": true
+  },
+  "delivery": {
+    "id": "precheck-layout8",
+    "scheduled": 1871,
+    "started": 1871,
+    "measured_scheduled": 1387,
+    "measured_started": 1387,
+    "peak_in_flight": 45
+  }
+}

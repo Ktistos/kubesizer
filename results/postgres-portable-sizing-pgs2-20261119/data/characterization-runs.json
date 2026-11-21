@@ -1,0 +1,110 @@
+[
+  {
+    "run_id": "read-only",
+    "mode": "async",
+    "rate_rps": 12.0,
+    "seed": 26111961,
+    "started_epoch": 1795092965.2095091,
+    "warmup_seconds": 25,
+    "measurement_seconds": 95,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 1161,
+        "completed": 1161,
+        "failures": 0,
+        "mean_seconds": 0.198043740515314,
+        "maximum_scheduling_delay_seconds": 0.0036757378838956356
+      },
+      "write": {
+        "count": 0,
+        "completed": 0,
+        "failures": 0,
+        "mean_seconds": null,
+        "maximum_scheduling_delay_seconds": 0
+      }
+    },
+    "snapshot_errors": 0
+  },
+  {
+    "run_id": "write-only",
+    "mode": "async",
+    "rate_rps": 20.0,
+    "seed": 26111962,
+    "started_epoch": 1795093088.6180217,
+    "warmup_seconds": 25,
+    "measurement_seconds": 95,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 0,
+        "completed": 0,
+        "failures": 0,
+        "mean_seconds": null,
+        "maximum_scheduling_delay_seconds": 0
+      },
+      "write": {
+        "count": 1859,
+        "completed": 1859,
+        "failures": 0,
+        "mean_seconds": 0.26304064754115125,
+        "maximum_scheduling_delay_seconds": 0.0031616371124982834
+      }
+    },
+    "snapshot_errors": 0
+  },
+  {
+    "run_id": "mixed-0",
+    "mode": "async",
+    "rate_rps": 12.0,
+    "seed": 26111963,
+    "started_epoch": 1795093212.3170245,
+    "warmup_seconds": 25,
+    "measurement_seconds": 95,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 898,
+        "completed": 898,
+        "failures": 0,
+        "mean_seconds": 0.19751152122509408,
+        "maximum_scheduling_delay_seconds": 0.0026934463530778885
+      },
+      "write": {
+        "count": 305,
+        "completed": 305,
+        "failures": 0,
+        "mean_seconds": 0.19588903166720126,
+        "maximum_scheduling_delay_seconds": 0.0016104672104120255
+      }
+    },
+    "snapshot_errors": 0
+  },
+  {
+    "run_id": "mixed-1",
+    "mode": "async",
+    "rate_rps": 12.0,
+    "seed": 26111964,
+    "started_epoch": 1795093335.7877443,
+    "warmup_seconds": 25,
+    "measurement_seconds": 95,
+    "timed_out": false,
+    "classes": {
+      "read": {
+        "count": 855,
+        "completed": 855,
+        "failures": 0,
+        "mean_seconds": 0.19646294611827497,
+        "maximum_scheduling_delay_seconds": 0.0023380075581371784
+      },
+      "write": {
+        "count": 301,
+        "completed": 301,
+        "failures": 0,
+        "mean_seconds": 0.18972259135824007,
+        "maximum_scheduling_delay_seconds": 0.002732636872678995
+      }
+    },
+    "snapshot_errors": 0
+  }
+]

@@ -1,0 +1,506 @@
+[
+  {
+    "id": "r8-layout4-pair0",
+    "layout": 4,
+    "rate": 8.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112091,
+    "classes": {
+      "PUT": {
+        "offered": 365,
+        "successes": 365,
+        "errors": {},
+        "mean_ms": 253.70896318356168
+      },
+      "GET": {
+        "offered": 344,
+        "successes": 344,
+        "errors": {},
+        "mean_ms": 65.878496875
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.8448675274848938,
+    "pending_at_stop": 10,
+    "target_started_ns": 1795101278989143033,
+    "drain_seconds": 0.1586516340000017,
+    "client_valid": true
+  },
+  {
+    "id": "r8-layout8-pair0",
+    "layout": 8,
+    "rate": 8.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112091,
+    "classes": {
+      "PUT": {
+        "offered": 365,
+        "successes": 365,
+        "errors": {},
+        "mean_ms": 253.72422838904112
+      },
+      "GET": {
+        "offered": 344,
+        "successes": 344,
+        "errors": {},
+        "mean_ms": 71.81984726453489
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.7538799196481705,
+    "pending_at_stop": 10,
+    "target_started_ns": 1795101339754653779,
+    "drain_seconds": 0.26833992400000284,
+    "client_valid": true
+  },
+  {
+    "id": "r12-layout8-pair0",
+    "layout": 8,
+    "rate": 12.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112092,
+    "classes": {
+      "PUT": {
+        "offered": 558,
+        "successes": 558,
+        "errors": {},
+        "mean_ms": 447.39012796057347
+      },
+      "GET": {
+        "offered": 564,
+        "successes": 564,
+        "errors": {},
+        "mean_ms": 110.35932775177305
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.4999978709965944,
+    "pending_at_stop": 25,
+    "target_started_ns": 1795101402084399363,
+    "drain_seconds": 0.3552815429999967,
+    "client_valid": true
+  },
+  {
+    "id": "r12-layout4-pair0",
+    "layout": 4,
+    "rate": 12.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112092,
+    "classes": {
+      "PUT": {
+        "offered": 558,
+        "successes": 558,
+        "errors": {},
+        "mean_ms": 322.95412667741937
+      },
+      "GET": {
+        "offered": 564,
+        "successes": 564,
+        "errors": {},
+        "mean_ms": 88.83550616843972
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.3273421209305525,
+    "pending_at_stop": 15,
+    "target_started_ns": 1795101467966018610,
+    "drain_seconds": 0.11617028399999896,
+    "client_valid": true
+  },
+  {
+    "id": "r4-layout4-pair0",
+    "layout": 4,
+    "rate": 4.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112093,
+    "classes": {
+      "PUT": {
+        "offered": 195,
+        "successes": 195,
+        "errors": {},
+        "mean_ms": 201.12439137435896
+      },
+      "GET": {
+        "offered": 177,
+        "successes": 177,
+        "errors": {},
+        "mean_ms": 55.25252413559321
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.7607498671859503,
+    "pending_at_stop": 1,
+    "target_started_ns": 1795101528813900673,
+    "drain_seconds": 0.007137772999996628,
+    "client_valid": true
+  },
+  {
+    "id": "r4-layout8-pair0",
+    "layout": 8,
+    "rate": 4.0,
+    "pair": 0,
+    "mode": "mixed",
+    "seed": 26112093,
+    "classes": {
+      "PUT": {
+        "offered": 195,
+        "successes": 195,
+        "errors": {},
+        "mean_ms": 218.93332885641027
+      },
+      "GET": {
+        "offered": 177,
+        "successes": 177,
+        "errors": {},
+        "mean_ms": 58.60723228813559
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.7515110773965716,
+    "pending_at_stop": 1,
+    "target_started_ns": 1795101589719244337,
+    "drain_seconds": 0.01886933499999799,
+    "client_valid": true
+  },
+  {
+    "id": "r12-layout8-pair1",
+    "layout": 8,
+    "rate": 12.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112101,
+    "classes": {
+      "PUT": {
+        "offered": 514,
+        "successes": 514,
+        "errors": {},
+        "mean_ms": 341.5656822957198
+      },
+      "GET": {
+        "offered": 549,
+        "successes": 549,
+        "errors": {},
+        "mean_ms": 96.9037808306011
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.0985447093844414,
+    "pending_at_stop": 6,
+    "target_started_ns": 1795101655152350277,
+    "drain_seconds": 0.20438320600000282,
+    "client_valid": true
+  },
+  {
+    "id": "r12-layout4-pair1",
+    "layout": 4,
+    "rate": 12.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112101,
+    "classes": {
+      "PUT": {
+        "offered": 514,
+        "successes": 514,
+        "errors": {},
+        "mean_ms": 290.43573976459146
+      },
+      "GET": {
+        "offered": 549,
+        "successes": 549,
+        "errors": {},
+        "mean_ms": 83.38620039344262
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.2856666930019855,
+    "pending_at_stop": 5,
+    "target_started_ns": 1795101716367777980,
+    "drain_seconds": 0.16865826899999803,
+    "client_valid": true
+  },
+  {
+    "id": "r8-layout4-pair1",
+    "layout": 4,
+    "rate": 8.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112102,
+    "classes": {
+      "PUT": {
+        "offered": 360,
+        "successes": 360,
+        "errors": {},
+        "mean_ms": 232.96982597500002
+      },
+      "GET": {
+        "offered": 373,
+        "successes": 373,
+        "errors": {},
+        "mean_ms": 70.43341184986596
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.1467961594462395,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795101776367265422,
+    "drain_seconds": 0.08437968599999834,
+    "client_valid": true
+  },
+  {
+    "id": "r8-layout8-pair1",
+    "layout": 8,
+    "rate": 8.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112102,
+    "classes": {
+      "PUT": {
+        "offered": 360,
+        "successes": 360,
+        "errors": {},
+        "mean_ms": 257.95826641388885
+      },
+      "GET": {
+        "offered": 373,
+        "successes": 373,
+        "errors": {},
+        "mean_ms": 74.22561335120643
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.0580133646726608,
+    "pending_at_stop": 4,
+    "target_started_ns": 1795101844975788251,
+    "drain_seconds": 0.08125479299999938,
+    "client_valid": true
+  },
+  {
+    "id": "r4-layout8-pair1",
+    "layout": 8,
+    "rate": 4.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112103,
+    "classes": {
+      "PUT": {
+        "offered": 184,
+        "successes": 184,
+        "errors": {},
+        "mean_ms": 209.3479584347826
+      },
+      "GET": {
+        "offered": 165,
+        "successes": 165,
+        "errors": {},
+        "mean_ms": 53.15075276363636
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.5614513531327248,
+    "pending_at_stop": 1,
+    "target_started_ns": 1795101910680969477,
+    "drain_seconds": 0.0870458670000005,
+    "client_valid": true
+  },
+  {
+    "id": "r4-layout4-pair1",
+    "layout": 4,
+    "rate": 4.0,
+    "pair": 1,
+    "mode": "mixed",
+    "seed": 26112103,
+    "classes": {
+      "PUT": {
+        "offered": 184,
+        "successes": 184,
+        "errors": {},
+        "mean_ms": 193.1190549347826
+      },
+      "GET": {
+        "offered": 165,
+        "successes": 165,
+        "errors": {},
+        "mean_ms": 54.07555364242425
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.6309743039309978,
+    "pending_at_stop": 1,
+    "target_started_ns": 1795101970821080696,
+    "drain_seconds": 0.09638565099999852,
+    "client_valid": true
+  },
+  {
+    "id": "r4-layout4-pair2",
+    "layout": 4,
+    "rate": 4.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112111,
+    "classes": {
+      "PUT": {
+        "offered": 171,
+        "successes": 171,
+        "errors": {},
+        "mean_ms": 195.40161811111113
+      },
+      "GET": {
+        "offered": 191,
+        "successes": 191,
+        "errors": {},
+        "mean_ms": 55.439912476439794
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.6736125331372023,
+    "pending_at_stop": 0,
+    "target_started_ns": 1795102032954488513,
+    "drain_seconds": 0.0028865379999984953,
+    "client_valid": true
+  },
+  {
+    "id": "r4-layout8-pair2",
+    "layout": 8,
+    "rate": 4.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112111,
+    "classes": {
+      "PUT": {
+        "offered": 171,
+        "successes": 171,
+        "errors": {},
+        "mean_ms": 202.370355374269
+      },
+      "GET": {
+        "offered": 191,
+        "successes": 191,
+        "errors": {},
+        "mean_ms": 57.012022387434556
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.6100852740928531,
+    "pending_at_stop": 0,
+    "target_started_ns": 1795102093324678785,
+    "drain_seconds": 0.0028185939999971765,
+    "client_valid": true
+  },
+  {
+    "id": "r8-layout8-pair2",
+    "layout": 8,
+    "rate": 8.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112112,
+    "classes": {
+      "PUT": {
+        "offered": 376,
+        "successes": 376,
+        "errors": {},
+        "mean_ms": 276.88063887234046
+      },
+      "GET": {
+        "offered": 344,
+        "successes": 344,
+        "errors": {},
+        "mean_ms": 83.05405590406977
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.31663226056844,
+    "pending_at_stop": 3,
+    "target_started_ns": 1795102154577383095,
+    "drain_seconds": 0.11453564100000335,
+    "client_valid": true
+  },
+  {
+    "id": "r8-layout4-pair2",
+    "layout": 4,
+    "rate": 8.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112112,
+    "classes": {
+      "PUT": {
+        "offered": 376,
+        "successes": 376,
+        "errors": {},
+        "mean_ms": 236.15740130585107
+      },
+      "GET": {
+        "offered": 344,
+        "successes": 344,
+        "errors": {},
+        "mean_ms": 72.29382525
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 0.9040354052558541,
+    "pending_at_stop": 4,
+    "target_started_ns": 1795102223680752548,
+    "drain_seconds": 0.1353009130000018,
+    "client_valid": true
+  },
+  {
+    "id": "r12-layout4-pair2",
+    "layout": 4,
+    "rate": 12.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112113,
+    "classes": {
+      "PUT": {
+        "offered": 549,
+        "successes": 549,
+        "errors": {},
+        "mean_ms": 299.26515418761386
+      },
+      "GET": {
+        "offered": 503,
+        "successes": 503,
+        "errors": {},
+        "mean_ms": 85.78816075546719
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.2131682829931378,
+    "pending_at_stop": 9,
+    "target_started_ns": 1795102284561515200,
+    "drain_seconds": 0.19635333299999758,
+    "client_valid": true
+  },
+  {
+    "id": "r12-layout8-pair2",
+    "layout": 8,
+    "rate": 12.0,
+    "pair": 2,
+    "mode": "mixed",
+    "seed": 26112113,
+    "classes": {
+      "PUT": {
+        "offered": 549,
+        "successes": 549,
+        "errors": {},
+        "mean_ms": 392.1658810619308
+      },
+      "GET": {
+        "offered": 503,
+        "successes": 503,
+        "errors": {},
+        "mean_ms": 117.00912605765409
+      }
+    },
+    "total_failures": 0,
+    "scheduling_delay_p95_ms": 1.229853625409305,
+    "pending_at_stop": 8,
+    "target_started_ns": 1795102345089121182,
+    "drain_seconds": 0.2587296479999992,
+    "client_valid": true
+  }
+]

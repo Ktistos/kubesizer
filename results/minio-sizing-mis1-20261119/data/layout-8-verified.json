@@ -1,0 +1,39 @@
+{
+  "backend": {
+    "backendType": "Erasure",
+    "onlineDisks": 8,
+    "offlineDisks": 0,
+    "standardSCParity": 2,
+    "rrSCParity": 1,
+    "totalSets": [
+      2
+    ],
+    "totalDrivesPerSet": [
+      4
+    ]
+  },
+  "members_by_set": {
+    "0": [
+      "ms8m2",
+      "ms8m3",
+      "ms8m4",
+      "ms8m1"
+    ],
+    "1": [
+      "ms8m5",
+      "ms8m6",
+      "ms8m7",
+      "ms8m8"
+    ]
+  },
+  "placement": {
+    "ms8m1": "skube06",
+    "ms8m2": "skube07",
+    "ms8m3": "skube08",
+    "ms8m4": "skube09",
+    "ms8m5": "skube06",
+    "ms8m6": "skube07",
+    "ms8m7": "skube08",
+    "ms8m8": "skube09"
+  }
+}

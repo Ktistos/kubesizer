@@ -1,0 +1,13 @@
+{
+  "status": "COMPLETED",
+  "started_at": "2026-11-20T01:00:37.590993+00:00",
+  "completed": 16,
+  "updated_at": "2026-11-20T01:33:56.576228+00:00",
+  "target_total_rates": [
+    30,
+    32
+  ],
+  "current": null,
+  "total": 16,
+  "completed_at": "2026-11-20T01:33:56.576204+00:00"
+}

@@ -1,0 +1,7 @@
+{
+  "pod": "ms8m4-0",
+  "limits": {
+    "cpu": "1",
+    "memory": "384Mi"
+  }
+}

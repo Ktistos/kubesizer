@@ -1,0 +1,10 @@
+{
+  "status": "COMPLETED",
+  "started_at": "2026-11-19T12:53:16.118924+00:00",
+  "stage_started_at": "2026-11-19T13:38:32.659505+00:00",
+  "characterization_run": "mixed-1",
+  "current": "r20-two-pair2",
+  "completed": 18,
+  "total": 18,
+  "completed_at": "2026-11-19T13:40:06.745207+00:00"
+}
